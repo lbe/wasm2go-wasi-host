@@ -81,13 +81,9 @@ func parseConfig(args []string, stdout io.Writer) (Config, error) {
 	cfg.WasmArgs = remaining[1:]
 	if len(env) > 0 {
 		cfg.Env = env
-	} else {
-		cfg.Env = nil
 	}
 	if len(dirs) > 0 {
 		cfg.Dirs = dirs
-	} else {
-		cfg.Dirs = nil
 	}
 	if len(cfg.WasmArgs) == 0 {
 		cfg.WasmArgs = nil
