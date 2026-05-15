@@ -6,18 +6,15 @@ import (
 	"strings"
 )
 
+var newFuncRegexp = regexp.MustCompile(`func New\(([^)]+)\) \*Module`)
+
 func parseImports(src string) ([]string, error) {
-	re := regexp.MustCompile(`func New\(([^)]+)\) \*Module`)
-	match := re.FindStringSubmatch(src)
+	match := newFuncRegexp.FindStringSubmatch(src)
 	if match == nil {
 		return nil, fmt.Errorf("New function not found")
 	}
 
 	params := match[1]
-	if params == "" {
-		return []string{}, nil
-	}
-
 	var imports []string
 	parts := strings.Split(params, ",")
 	for _, part := range parts {
