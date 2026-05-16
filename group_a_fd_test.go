@@ -284,7 +284,8 @@ func TestFdRead(t *testing.T) {
 	})
 }
 
-// TestFdWrite covers stdout, stderr, nil-stdout, osFile WriteAt, and EBADF.
+// TestFdWrite covers stdout, stderr, nil-stdout, osFile WriteAt, EBADF,
+// and error/partial write reporting.
 func TestFdWrite(t *testing.T) {
 	t.Parallel()
 	const (
@@ -310,6 +311,27 @@ func TestFdWrite(t *testing.T) {
 		}
 		if n := binary.LittleEndian.Uint32(buf[nwrittenOff : nwrittenOff+4]); n != 5 {
 			t.Errorf("nwritten = %d, want 5", n)
+		}
+	})
+
+	t.Run("reports partial write before error", func(t *testing.T) {
+		buf := make([]byte, 65536)
+		// errorWriter will return n=2 then error
+		ew := &errorWriter{err: fmt.Errorf("disk full"), n: 2}
+		s := New(func() []byte { return buf }, WithStdout(ew))
+
+		copy(buf[dataBuf:], "hello") // 5 bytes
+		binary.LittleEndian.PutUint32(buf[iovsOff:], uint32(dataBuf))
+		binary.LittleEndian.PutUint32(buf[iovsOff+4:], 5)
+
+		errno := s.Xfd_write(1, iovsOff, 1, nwrittenOff)
+		if errno != wasiEIo {
+			t.Errorf("errno = %d, want EIO (%d)", errno, wasiEIo)
+		}
+
+		nwritten := binary.LittleEndian.Uint32(buf[nwrittenOff : nwrittenOff+4])
+		if nwritten != 2 {
+			t.Errorf("nwritten = %d, want 2", nwritten)
 		}
 	})
 

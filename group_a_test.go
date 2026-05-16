@@ -15,6 +15,21 @@ func (stubFSFile) Read(_ []byte) (int, error) { return 0, io.EOF }
 func (stubFSFile) Stat() (fs.FileInfo, error)  { return nil, nil }
 func (stubFSFile) Close() error                { return nil }
 
+type errorWriter struct {
+	err error
+	n   int
+}
+
+func (w *errorWriter) Write(p []byte) (n int, err error) {
+	if w.n > 0 {
+		n = w.n
+		if n > len(p) {
+			n = len(p)
+		}
+	}
+	return n, w.err
+}
+
 func newTestState(opts ...Option) (*State, []byte) {
 	buf := make([]byte, 65536)
 	s := New(func() []byte { return buf }, opts...)
