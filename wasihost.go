@@ -60,6 +60,7 @@ const (
 	wasiENoSys    int32 = 52
 	wasiENotDir   int32 = 54
 	wasiENotEmpty int32 = 55
+	wasiENotSup   int32 = 56
 	wasiEPerm     int32 = 63
 	wasiEROFS     int32 = 66
 	wasiEXdev     int32 = 75
@@ -1438,7 +1439,8 @@ func (s *State) Xfd_pread(fd, iovsPtr, iovsCount int32, offset int64, nreadPtr i
 			ReadAt([]byte, int64) (int, error)
 		})
 		if !ok {
-			break
+			binary.LittleEndian.PutUint32(mem[nreadPtr:], total)
+			return wasiENotSup
 		}
 		n, err = ra.ReadAt(mem[bufPtr:bufPtr+bufLen], curOff)
 		total += uint32(n)
@@ -1481,7 +1483,8 @@ func (s *State) Xfd_pwrite(fd, iovsPtr, iovsCount int32, offset int64, nwrittenP
 			WriteAt([]byte, int64) (int, error)
 		})
 		if !ok {
-			break
+			binary.LittleEndian.PutUint32(mem[nwrittenPtr:], total)
+			return wasiENotSup
 		}
 		n, err := wa.WriteAt(mem[bufPtr:bufPtr+bufLen], curOff)
 		total += uint32(n)
