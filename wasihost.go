@@ -1023,36 +1023,39 @@ func (s *State) Xfd_readdir(fd int32, bufPtr int32, bufLen int32, cookie int64, 
 		return wasiEBadf
 	}
 	entry := &s.fds[fd]
-	if entry.preopen {
-		if entry.mount < 0 || entry.mount >= len(s.mounts) {
-			return wasiEBadf
-		}
-		if entry.file == nil {
-			if d, ok := s.mounts[entry.mount].root.(fs.ReadDirFS); ok {
-				entries, err := d.ReadDir(".")
-				if err != nil {
-					return wasiEIo
+	mem := s.mem()
+	// Cache listing on first call for preopens or any directory fd.
+	if entry.dirFile == nil {
+		if entry.preopen {
+			if entry.mount < 0 || entry.mount >= len(s.mounts) {
+				return wasiEBadf
+			}
+			if entry.file == nil {
+				if d, ok := s.mounts[entry.mount].root.(fs.ReadDirFS); ok {
+					entries, err := d.ReadDir(".")
+					if err != nil {
+						return wasiEIo
+					}
+					entry.file = &DirEntriesFile{Entries: entries}
 				}
-				entry.file = &DirEntriesFile{Entries: entries}
 			}
 		}
-	}
-	if entry.file == nil {
-		return wasiEBadf
-	}
-	if entry.dirFile == nil {
+		if entry.file == nil {
+			return wasiEBadf
+		}
 		df, ok := entry.file.(fs.ReadDirFile)
 		if !ok {
 			return wasiENotDir
 		}
 		entry.dirFile = df
 	}
-	mem := s.mem()
+
 	entries, err := entry.dirFile.ReadDir(-1)
 	if err != nil && err != io.EOF {
 		return wasiEIo
 	}
-	// Restore entries to the file so they can be read again if cookie is used.
+	// Restore entries to the file if it's our own DirEntriesFile adapter,
+	// so that subsequent calls with cookies can still access them.
 	if de, ok := entry.file.(*DirEntriesFile); ok {
 		de.idx = 0
 	}
