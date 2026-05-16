@@ -226,8 +226,8 @@ func TestGroupEPositionedIO(t *testing.T) {
         t.Run("Xfd_pread returns ENOTSUP", func(t *testing.T) {
             binary.LittleEndian.PutUint32(buf[nresOff:], 999) // poison
             errno := s.Xfd_pread(5, iovPtrOff, 1, 0, nresOff)
-            if errno == wasiESuccess {
-                t.Error("Xfd_pread on unsupported ReadAt returned ESUCCESS, want error (ENOTSUP)")
+            if errno != wasiENotSup {
+                t.Errorf("got errno %d, want ENOTSUP (%d)", errno, wasiENotSup)
             }
             nread := binary.LittleEndian.Uint32(buf[nresOff : nresOff+4])
             if nread != 0 {
@@ -238,8 +238,8 @@ func TestGroupEPositionedIO(t *testing.T) {
         t.Run("Xfd_pwrite returns ENOTSUP", func(t *testing.T) {
             binary.LittleEndian.PutUint32(buf[nresOff:], 999) // poison
             errno := s.Xfd_pwrite(5, iovPtrOff, 1, 0, nresOff)
-            if errno == wasiESuccess {
-                t.Error("Xfd_pwrite on unsupported WriteAt returned ESUCCESS, want error (ENOTSUP)")
+            if errno != wasiENotSup {
+                t.Errorf("got errno %d, want ENOTSUP (%d)", errno, wasiENotSup)
             }
             nwritten := binary.LittleEndian.Uint32(buf[nresOff : nresOff+4])
             if nwritten != 0 {
