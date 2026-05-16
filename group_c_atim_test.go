@@ -74,8 +74,8 @@ func TestFdFilestatSetTimesAtimPreservesExistingTests(t *testing.T) {
 			t.Errorf("mtime = %v, want within 2s of %v (diff=%v)", fi.ModTime(), targetMtim, diff)
 		}
 	})
-    
-    t.Run("Xfd_filestat_set_times fstFlags=MTIM_NOW updates mtime to current", func(t *testing.T) {
+
+	t.Run("Xfd_filestat_set_times fstFlags=MTIM_NOW updates mtime to current", func(t *testing.T) {
 		s, _ := newTestState()
 		filePath := setupOsFileFd(t, s, 5, []byte("data"))
 
