@@ -1644,14 +1644,22 @@ func (s *State) Xfd_filestat_set_times(fd int32, atim, mtim int64, fstFlags int3
 // a no-op. Resolves the path and calls os.Chtimes. Returns ESUCCESS
 // without mutation for read-only mounts.
 func (s *State) Xpath_filestat_set_times(dirfd, flags, pathPtr, pathLen int32, atim, mtim int64, fstFlags int32) int32 {
-	if fstFlags&fstMtim == 0 {
+	if fstFlags&(fstMtim|fstMtimNow) == 0 {
 		return wasiESuccess
 	}
 	primary := s.resolvePrimary(dirfd, pathPtr, pathLen)
 	if primary == "" {
 		return wasiEROFS
 	}
-	return applyMtim(primary, mtim)
+
+	targetMtim := int64(0)
+	if fstFlags&fstMtimNow != 0 {
+		targetMtim = time.Now().UnixNano()
+	} else {
+		targetMtim = mtim
+	}
+
+	return applyMtim(primary, targetMtim)
 }
 
 // applyMtim calls os.Chtimes to set the mtime of the file at path to the
