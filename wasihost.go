@@ -946,16 +946,21 @@ func (s *State) Xfd_write(fd int32, iovsPtr int32, iovsCount int32, nwrittenPtr 
 			bufLen := int32(binary.LittleEndian.Uint32(mem[off+4:]))
 			data := mem[bufPtr : bufPtr+bufLen]
 			var n int
+			var err error
 			if fd == 1 {
 				if s.stdout != nil {
-					n, _ = s.stdout.Write(data)
+					n, err = s.stdout.Write(data)
 				}
 			} else {
 				if s.stderr != nil {
-					n, _ = s.stderr.Write(data)
+					n, err = s.stderr.Write(data)
 				}
 			}
 			total += uint32(n)
+			if err != nil {
+				binary.LittleEndian.PutUint32(mem[nwrittenPtr:], total)
+				return wasiEIo
+			}
 		}
 		binary.LittleEndian.PutUint32(mem[nwrittenPtr:], total)
 		return wasiESuccess
@@ -972,13 +977,22 @@ func (s *State) Xfd_write(fd int32, iovsPtr int32, iovsCount int32, nwrittenPtr 
 		off := iovsPtr + i*8
 		bufPtr := int32(binary.LittleEndian.Uint32(mem[off:]))
 		bufLen := int32(binary.LittleEndian.Uint32(mem[off+4:]))
-		f, ok := entry.file.(interface {
+		if bufLen == 0 {
+			continue
+		}
+		wa, ok := entry.file.(interface {
 			WriteAt([]byte, int64) (int, error)
 		})
-		if ok {
-			n, _ := f.WriteAt(mem[bufPtr:bufPtr+bufLen], entry.offset)
-			entry.offset += int64(n)
-			total += uint32(n)
+		if !ok {
+			break
+		}
+		n, err := wa.WriteAt(mem[bufPtr:bufPtr+bufLen], entry.offset)
+		entry.offset += int64(n)
+		total += uint32(n)
+		if err != nil {
+			s.fds[fd] = entry
+			binary.LittleEndian.PutUint32(mem[nwrittenPtr:], total)
+			return wasiEIo
 		}
 	}
 	s.fds[fd] = entry
