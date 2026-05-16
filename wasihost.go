@@ -582,14 +582,14 @@ func (s *State) resolvePath(guestPath string) (*mountEntry, string) {
 		if clean == "." {
 			clean = "/"
 		}
-		// Special case for writable mounts: if the path starts with the mount
-		// prefix but contains ".." that would escape the mount, we still
-		// want to match the mount but keep the ".." in rel.
-		// resolvePath's use of path.Clean above collapses ".." before prefix
+		// Special case: if the path starts with the mount prefix but contains
+		// ".." that would escape the mount, we still want to match the mount
+		// but keep the ".." in rel.
+		// resolvePath's use of path.Clean below collapses ".." before prefix
 		// matching, which we bypass here if we find a raw prefix match.
 		rawGuest := "/" + strings.TrimPrefix(guestPath, "/")
 		rawMp := "/" + strings.TrimPrefix(m.guestPath, "/")
-		if strings.HasPrefix(rawGuest, rawMp) {
+		if rawGuest == rawMp || strings.HasPrefix(rawGuest, rawMp+"/") {
 			rel := strings.TrimPrefix(rawGuest, rawMp)
 			rel = strings.TrimPrefix(rel, "/")
 			if len(rawMp) > bestLen {
