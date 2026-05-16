@@ -94,6 +94,9 @@ var (
 	oflagDir   uint32 = 1 << 1 // O_DIRECTORY: fail if not a directory
 	oflagExcl  uint32 = 1 << 2 // O_EXCL: fail if file already exists
 	oflagTrunc uint32 = 1 << 3 // O_TRUNC: truncate file to zero length on open
+
+	// schedYield is a seam for testing sched_yield.
+	schedYield func() = runtime.Gosched
 )
 
 // State is a WASI snapshot-preview1 host for a single wasm2go Module

@@ -148,10 +148,19 @@ func TestGroupEPositionedIO(t *testing.T) {
 		})
 	})
 
-	t.Run("Xsched_yield returns ESUCCESS", func(t *testing.T) {
+	t.Run("Xsched_yield calls sched_yield seam and returns ESUCCESS", func(t *testing.T) {
 		s, _ := newTestState()
-		if s.Xsched_yield() != wasiESuccess {
-			t.Error("Xsched_yield returned non-zero")
+		var yieldCount int
+		// schedYield is a package-level seam: var schedYield func() = runtime.Gosched
+		oldYield := schedYield
+		defer func() { schedYield = oldYield }()
+		schedYield = func() { yieldCount++ }
+
+		if errno := s.Xsched_yield(); errno != wasiESuccess {
+			t.Errorf("Xsched_yield returned %d, want ESUCCESS", errno)
+		}
+		if yieldCount != 1 {
+			t.Errorf("yieldCount = %d, want 1", yieldCount)
 		}
 	})
 
