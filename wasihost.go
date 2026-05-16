@@ -1052,6 +1052,15 @@ func (s *State) Xfd_readdir(fd int32, bufPtr int32, bufLen int32, cookie int64, 
 	if err != nil && err != io.EOF {
 		return wasiEIo
 	}
+	// Restore entries to the file so they can be read again if cookie is used.
+	if de, ok := entry.file.(*DirEntriesFile); ok {
+		de.idx = 0
+	}
+
+	if cookie > 0 && int(cookie) >= len(entries) {
+		binary.LittleEndian.PutUint32(mem[bufUsedPtr:], 0)
+		return wasiESuccess
+	}
 	if len(entries) == 0 {
 		binary.LittleEndian.PutUint32(mem[bufUsedPtr:], 0)
 		return wasiESuccess
