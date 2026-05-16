@@ -1,6 +1,9 @@
 package main
 
 import (
+	"go/ast"
+	"go/parser"
+	"go/token"
 	"reflect"
 	"strings"
 	"testing"
@@ -72,6 +75,41 @@ func TestTranspile(t *testing.T) {
 		_, err := transpile(wasmPath)
 		if err == nil {
 			t.Error("expected error when wasm2go is not on PATH, got nil")
+		}
+	})
+
+	t.Run("deduplicates duplicate import methods", func(t *testing.T) {
+		wasmPath := testdata("../../wasi-testsuite/tests/assemblyscript/testsuite/wasm32-wasip1/fd_write-to-stdout.wasm")
+		src, err := transpile(wasmPath)
+		if err != nil {
+			t.Fatalf("transpile failed: %v", err)
+		}
+		fset := token.NewFileSet()
+		f, parseErr := parser.ParseFile(fset, "", src, 0)
+		if parseErr != nil {
+			t.Fatalf("transpile() returned unparseable Go: %v", parseErr)
+		}
+
+		// parser.ParseFile does NOT detect duplicate methods in an interface block.
+		// We must manually inspect the AST.
+		for _, decl := range f.Decls {
+			if gen, ok := decl.(*ast.GenDecl); ok {
+				for _, spec := range gen.Specs {
+					if typeSpec, ok := spec.(*ast.TypeSpec); ok {
+						if itface, ok := typeSpec.Type.(*ast.InterfaceType); ok {
+							methods := make(map[string]bool)
+							for _, field := range itface.Methods.List {
+								for _, name := range field.Names {
+									if methods[name.Name] {
+										t.Errorf("transpile() returned invalid Go: duplicate method %q found in interface %q", name.Name, typeSpec.Name.Name)
+									}
+									methods[name.Name] = true
+								}
+							}
+						}
+					}
+				}
+			}
 		}
 	})
 }
