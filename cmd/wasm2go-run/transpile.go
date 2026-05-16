@@ -17,8 +17,7 @@ func parseImports(src string) ([]string, error) {
 
 	params := match[1]
 	var imports []string
-	parts := strings.Split(params, ",")
-	for _, part := range parts {
+	for _, part := range strings.Split(params, ",") {
 		fields := strings.Fields(part)
 		if len(fields) >= 2 {
 			imports = append(imports, fields[1])
