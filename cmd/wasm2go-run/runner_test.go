@@ -54,6 +54,7 @@ func TestStdoutAndEnv(t *testing.T) {
 	})
 }
 
+
 func TestProcExit(t *testing.T) {
 	tests := []struct {
 		name         string
@@ -92,4 +93,49 @@ func TestProcExit(t *testing.T) {
 			}
 		})
 	}
+}
+
+
+func TestDirMount(t *testing.T) {
+	wasmFile := "../../wasi-testsuite/tests/c/testsuite/wasm32-wasip1/fopen-with-access.wasm"
+	wasmPath := testdata(wasmFile)
+	hostDir := testdata("../../wasi-testsuite/tests/c/testsuite/wasm32-wasip1/fs-tests.dir")
+
+	t.Run("with-dir-mount", func(t *testing.T) {
+		cfg := Config{
+			Dirs: []DirMount{{Host: hostDir, Guest: "fs-tests.dir"}},
+		}
+
+		tmpDir, binaryPath, err := compile(wasmPath, cfg)
+		if err != nil {
+			t.Fatalf("compile failed: %v", err)
+		}
+
+		exitCode, err := execute(binaryPath, tmpDir, io.Discard, io.Discard)
+		if err != nil {
+			t.Fatalf("execute failed: %v", err)
+		}
+
+		if exitCode != 0 {
+			t.Errorf("got exit code %d, want 0", exitCode)
+		}
+	})
+
+	t.Run("without-dir-mount", func(t *testing.T) {
+		cfg := Config{}
+
+		tmpDir, binaryPath, err := compile(wasmPath, cfg)
+		if err != nil {
+			t.Fatalf("compile failed: %v", err)
+		}
+
+		exitCode, err := execute(binaryPath, tmpDir, io.Discard, io.Discard)
+		if err != nil {
+			t.Fatalf("execute failed: %v", err)
+		}
+
+		if exitCode == 0 {
+			t.Error("got exit code 0, want non-zero (preopen is required)")
+		}
+	})
 }
