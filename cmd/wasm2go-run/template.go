@@ -21,9 +21,13 @@ import (
 func main() {
 	state := wasihost.NewState(
 		wasihost.WithArgs({{.WasmArgs}}),
-		{{range .Env}}wasihost.WithEnv({{.}}),
-		{{end}}{{range .Dirs}}wasihost.WithMount({{.Host}}, {{.Guest}}),
-		{{end}}wasihost.WithStdin(os.Stdin),
+{{- range .Env}}
+		wasihost.WithEnv({{.}}),
+{{- end}}
+{{- range .Dirs}}
+		wasihost.WithMount({{.Host}}, {{.Guest}}),
+{{- end}}
+		wasihost.WithStdin(os.Stdin),
 		wasihost.WithStdout(os.Stdout),
 		wasihost.WithStderr(os.Stderr),
 	)
