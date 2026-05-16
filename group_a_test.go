@@ -4,6 +4,8 @@ import (
 	"encoding/binary"
 	"io"
 	"io/fs"
+	"os"
+	"path/filepath"
 	"testing"
 )
 
@@ -261,5 +263,46 @@ func TestGroupAFoundation(t *testing.T) {
 		if rel != "subdir/child.txt" {
 			t.Errorf("rel = %q, want subdir/child.txt", rel)
 		}
+	})
+
+	t.Run("writable mount allows parent directory escape", func(t *testing.T) {
+		tmp := t.TempDir()
+		hostRoot := filepath.Join(tmp, "root")
+		if err := os.Mkdir(hostRoot, 0755); err != nil {
+			t.Fatal(err)
+		}
+		outsideFile := filepath.Join(tmp, "outside.txt")
+
+		s, _ := newTestState(WithWritableMount("/ffi", hostRoot, os.DirFS(hostRoot)))
+
+		// In a sandbox, "../outside.txt" would be rejected or jailed.
+		// For FFI use cases, we intentionally allow it to resolve to the parent of hostRoot.
+		m, rel := s.resolvePath("/ffi/../outside.txt")
+		if m == nil {
+			t.Fatal("expected mount /ffi to be resolved")
+		}
+		primary, _ := mountHostPaths(m, rel)
+
+		expected := filepath.Clean(outsideFile)
+		if filepath.Clean(primary) != expected {
+			t.Errorf("got primary path %q, want %q", primary, expected)
+		}
+
+		// Verify that path_open actually creates it outside hostRoot
+		buf := make([]byte, 65536)
+		s.mem = func() []byte { return buf }
+		copy(buf[1000:], "../outside.txt")
+		var fd int32
+		// oflagCreat=1, rightFDWrite=2
+		errno := s.Xpath_open(3, 0, 1000, 14, 1, 2, 0, 0, 2000)
+		if errno != 0 {
+			t.Fatalf("expected path_open success, got errno %d", errno)
+		}
+		fd = int32(binary.LittleEndian.Uint32(buf[2000:2004]))
+
+		if _, err := os.Stat(outsideFile); os.IsNotExist(err) {
+			t.Error("expected file to be created outside hostRoot")
+		}
+		s.Xfd_close(fd)
 	})
 }
