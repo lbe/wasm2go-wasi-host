@@ -2,6 +2,7 @@ package main
 
 import (
 	"fmt"
+	"os/exec"
 	"regexp"
 	"strings"
 )
@@ -28,5 +29,10 @@ func parseImports(src string) ([]string, error) {
 }
 
 func transpile(wasmPath string) (string, error) {
-	return "", nil
+	cmd := exec.Command("wasm2go", wasmPath)
+	out, err := cmd.Output()
+	if err != nil {
+		return "", err
+	}
+	return string(out), nil
 }
