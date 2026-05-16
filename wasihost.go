@@ -1595,8 +1595,8 @@ func (s *State) Xfd_filestat_set_size(fd int32, size int64) int32 {
 
 // Xfd_filestat_set_times implements fd_filestat_set_times.
 //
-// For osFile-backed fds, calls os.Chtimes with the specified mtim
-// nanosecond value or the current time if MTIM_NOW is set. For
+// For osFile-backed fds, calls os.Chtimes with the specified nanosecond
+// values. Honors ATIM, MTIM, ATIM_NOW, and MTIM_NOW flags. For
 // fs.FS-backed fds, returns ESUCCESS without mutation.
 func (s *State) Xfd_filestat_set_times(fd int32, atim, mtim int64, fstFlags int32) int32 {
 	if fstFlags&(fstAtim|fstMtim|fstAtimNow|fstMtimNow) == 0 {
