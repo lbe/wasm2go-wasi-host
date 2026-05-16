@@ -1599,7 +1599,7 @@ func (s *State) Xfd_filestat_set_size(fd int32, size int64) int32 {
 // nanosecond value or the current time if MTIM_NOW is set. For
 // fs.FS-backed fds, returns ESUCCESS without mutation.
 func (s *State) Xfd_filestat_set_times(fd int32, atim, mtim int64, fstFlags int32) int32 {
-	if fstFlags&(fstAtim|fstMtim|fstMtimNow) == 0 {
+	if fstFlags&(fstAtim|fstMtim|fstAtimNow|fstMtimNow) == 0 {
 		return wasiESuccess
 	}
 	if fd < 0 || int(fd) >= len(s.fds) {
@@ -1620,7 +1620,9 @@ func (s *State) Xfd_filestat_set_times(fd int32, atim, mtim int64, fstFlags int3
 	}
 
 	targetAtim := getAtimeFromStat(fi)
-	if fstFlags&fstAtim != 0 {
+	if fstFlags&fstAtimNow != 0 {
+		targetAtim = time.Now()
+	} else if fstFlags&fstAtim != 0 {
 		targetAtim = time.Unix(0, atim)
 	}
 
