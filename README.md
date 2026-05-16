@@ -90,6 +90,44 @@ See the [`wasm2go-run` documentation](./cmd/wasm2go-run/README.md).
 - **Single-owner**: The `State` is not safe for concurrent use. Each `wasm2go` Module instance must have its own `State`, and both must be used from a single goroutine.
 - **Goroutine Assertion**: You can enable `WithOwnerAssertion()` to panic if the host is accessed from multiple goroutines, helping catch concurrency bugs early.
 
+## Development
+
+### Prerequisites
+
+- **Go**: 1.26.3 or later.
+- **wasm2go**: Must be installed and available in your `PATH`.
+- **Python 3**: Required for running the `wasi-testsuite` adapters and quality gate tests.
+- **golangci-lint**: Required for linting.
+
+### Getting Started
+
+1.  **Clone the repository and initialize submodules**:
+    The repository uses a git submodule for the `wasi-testsuite`.
+    ```bash
+    git clone https://github.com/lbe/wasm2go-wasi-host.git
+    cd wasm2go-wasi-host
+    git submodule update --init --recursive
+    ```
+
+2.  **Using the Makefile**:
+    Common development tasks are automated via the `Makefile`:
+    - `make build`: Compiles `wasm2go-run` to `./bin`.
+    - `make test`: Runs all tests with coverage.
+    - `make lint`: Runs `golangci-lint`.
+    - `make format`: Formats the code.
+
+3.  **Run the Quality Gate**:
+    The project includes a comprehensive quality gate test that runs linting, Python adapter tests, and E2E AssemblyScript tests. It requires a clean git status to pass.
+    ```bash
+    go test -v -run TestQualityGate
+    ```
+
+4.  **Formatting**:
+    Ensure code is formatted before committing:
+    ```bash
+    gofmt -w .
+    ```
+
 ## License
 
 MIT

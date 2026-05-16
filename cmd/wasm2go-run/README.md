@@ -38,3 +38,33 @@ wasm2go-run -dir ./data:/data -env KEY=VALUE my-app.wasm -- --app-arg1
 2. **Compile**: It generates a `main.go` that wires the transpiled module to the `wasihost` implementation and compiles it using `go build`.
 3. **Execute**: It runs the resulting binary with the specified mounts, environment variables, and arguments.
 4. **Cleanup**: Temporary files are removed after execution.
+
+## Development
+
+### Prerequisites
+
+- **Go**: 1.26.3 or later.
+- **wasm2go**: Required for the transpilation step.
+
+### Testing the Runner
+
+The runner depends on the `wasi-testsuite` submodule being populated. If you haven't already:
+```bash
+git submodule update --init --recursive
+```
+
+You can run the tests for the runner package:
+```bash
+go test ./...
+```
+
+To verify the runner against the `wasi-testsuite` AssemblyScript samples, use the provided E2E script from the repository root:
+```bash
+./scripts/e2e-assemblyscript.sh
+```
+
+### Building
+
+```bash
+go build -o wasm2go-run .
+```
