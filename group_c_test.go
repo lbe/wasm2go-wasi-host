@@ -238,4 +238,37 @@ func TestFilestatMutations(t *testing.T) {
 			t.Error("applyMtim on missing path returned ESUCCESS, want error")
 		}
 	})
+
+	t.Run("Xpath_filestat_set_times fstFlags=MTIM_NOW updates mtime to current", func(t *testing.T) {
+		s, buf := newTestState()
+		hostDir := setupWritableMount(t, s, buf)
+		fname := "now.txt"
+		hostPath := filepath.Join(hostDir, fname)
+		if err := os.WriteFile(hostPath, []byte("x"), 0644); err != nil {
+			t.Fatal(err)
+		}
+
+		// Set to a past time first to ensure NOW change is visible
+		past := time.Now().Add(-1 * time.Hour)
+		if err := os.Chtimes(hostPath, past, past); err != nil {
+			t.Fatal(err)
+		}
+
+		pathOff, pathLen := writePath(buf, 500, fname)
+
+		// 8 is MTIM_NOW
+		errno := s.Xpath_filestat_set_times(3, 0, pathOff, pathLen, 0, 0, 8)
+		if errno != wasiESuccess {
+			t.Fatalf("Xpath_filestat_set_times fstFlags=8 returned %d, want ESUCCESS", errno)
+		}
+
+		fi, err := os.Stat(hostPath)
+		if err != nil {
+			t.Fatal(err)
+		}
+		// mtime should be within a few seconds of "now"
+		if time.Since(fi.ModTime()) > 5*time.Second {
+			t.Errorf("mtime = %v, not close to now", fi.ModTime())
+		}
+	})
 }
