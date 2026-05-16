@@ -50,6 +50,7 @@ import (
 // the specification exactly.
 const (
 	wasiESuccess  int32 = 0
+	wasiEAcces    int32 = 2
 	wasiEBadf     int32 = 8
 	wasiEExist    int32 = 20
 	wasiEInval    int32 = 28
@@ -59,7 +60,9 @@ const (
 	wasiENoSys    int32 = 52
 	wasiENotDir   int32 = 54
 	wasiENotEmpty int32 = 55
+	wasiEPerm     int32 = 63
 	wasiEROFS     int32 = 66
+	wasiEXdev     int32 = 75
 
 	// WASI file descriptor type tags, written into fdstat and filestat structs.
 	fdCharDev byte = 2 // character device (stdin, stdout, stderr, /dev/null)
@@ -1611,14 +1614,35 @@ func applyMtim(path string, mtim int64) int32 {
 // ENOTEMPTY→ENOTEMPTY(55). All other errors map to EIO(29).
 func mapOSError(err error) uint32 {
 	if errors.Is(err, os.ErrNotExist) {
-		return 44
+		return uint32(wasiENoEnt)
 	}
 	if errors.Is(err, syscall.ENOTEMPTY) {
-		return 55
+		return uint32(wasiENotEmpty)
 	}
 	if errors.Is(err, os.ErrExist) {
-		return 20
+		return uint32(wasiEExist)
 	}
-	return 29
+	if errors.Is(err, syscall.ENOTDIR) {
+		return uint32(wasiENotDir)
+	}
+	if errors.Is(err, syscall.EISDIR) {
+		return uint32(wasiEIsdir)
+	}
+	if errors.Is(err, syscall.EACCES) {
+		return uint32(wasiEAcces)
+	}
+	if errors.Is(err, syscall.EPERM) {
+		return uint32(wasiEPerm)
+	}
+	if errors.Is(err, syscall.EROFS) {
+		return uint32(wasiEROFS)
+	}
+	if errors.Is(err, syscall.EXDEV) {
+		return uint32(wasiEXdev)
+	}
+	if errors.Is(err, syscall.EINVAL) {
+		return uint32(wasiEInval)
+	}
+	return uint32(wasiEIo)
 }
 
