@@ -75,3 +75,36 @@ func TestTranspile(t *testing.T) {
 		}
 	})
 }
+
+func TestDeduplicateInterfaceMethods(t *testing.T) {
+	t.Run("deduplicates duplicate method in interface block", func(t *testing.T) {
+		input := `type Xwasi_snapshot_preview1 interface {
+	Xfd_write(v0 uint32, v1 uint32, v2 uint32, v3 uint32) uint32
+	Xfd_write(v0 uint32, v1 uint32, v2 uint32, v3 uint32) uint32
+	Xfd_close(v0 uint32) uint32
+}`
+		want := `type Xwasi_snapshot_preview1 interface {
+	Xfd_write(v0 uint32, v1 uint32, v2 uint32, v3 uint32) uint32
+	Xfd_close(v0 uint32) uint32
+}`
+		got := deduplicateInterfaceMethods(input)
+		if got != want {
+			t.Errorf("\ngot:\n%s\nwant:\n%s", got, want)
+		}
+	})
+
+	t.Run("preserves source with no duplicates", func(t *testing.T) {
+		input := `type Xwasi_snapshot_preview1 interface {
+	Xfd_write(v0 uint32, v1 uint32, v2 uint32, v3 uint32) uint32
+	Xfd_close(v0 uint32) uint32
+}
+type Xenv interface {
+	Xmalloc(v0 uint32) uint32
+}`
+		want := input
+		got := deduplicateInterfaceMethods(input)
+		if got != want {
+			t.Errorf("expected output to equal input when no duplicates exist")
+		}
+	})
+}

@@ -35,3 +35,7 @@ func transpile(wasmPath string) (string, error) {
 	}
 	return string(out), nil
 }
+
+func deduplicateInterfaceMethods(src string) string {
+	return src
+}
