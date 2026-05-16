@@ -11,7 +11,6 @@ func generateMain(cfg Config, imports []string, moduleName string) (string, erro
 	const mainTmpl = `package main
 
 import (
-	"fmt"
 	"os"
 
 	"github.com/lbe/wasm2go-wasi-host"
@@ -19,7 +18,9 @@ import (
 )
 
 func main() {
-	state := wasihost.NewState(
+	var mod *wasm.Module
+	state := wasihost.New(
+		func() []byte { return *mod.Xmemory().Slice() },
 		wasihost.WithArgs({{.WasmArgs}}),
 {{- range .Env}}
 		wasihost.WithEnv({{.}}),
@@ -32,15 +33,11 @@ func main() {
 		wasihost.WithStderr(os.Stderr),
 	)
 
-	mod, err := wasm.New({{.Imports}})
-	if err != nil {
-		fmt.Fprintf(os.Stderr, "failed to instantiate module: %v\n", err)
-		os.Exit(1)
-	}
+	mod = wasm.New({{.Imports}})
 
 	defer func() {
 		if r := recover(); r != nil {
-			if e, ok := r.(*wasihost.ExitError); ok {
+			if e, ok := r.(wasihost.ExitError); ok {
 				os.Exit(int(e.Code))
 			}
 			panic(r)
