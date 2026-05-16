@@ -4,6 +4,7 @@ import (
 	"encoding/binary"
 	"errors"
 	"os"
+	"syscall"
 	"testing"
 )
 
@@ -23,6 +24,17 @@ type writeAtStub struct {
 
 func (w *writeAtStub) WriteAt(p []byte, off int64) (int, error) {
 	return w.writeAt(p, off)
+}
+
+type syncStub struct {
+	fsFile
+	syncCalled int
+	syncErr    error
+}
+
+func (s *syncStub) Sync() error {
+	s.syncCalled++
+	return s.syncErr
 }
 
 // setupOsFileFd creates a real OS-backed file fd entry at the given fd slot.
@@ -144,6 +156,48 @@ func TestGroupEPositionedIO(t *testing.T) {
 			errno := s.Xfd_datasync(99)
 			if errno != wasiEBadf {
 				t.Errorf("got %d, want EBADF (%d)", errno, wasiEBadf)
+			}
+		})
+	})
+
+	t.Run("Xfd_datasync invokes host Sync for sync-capable fds and maps errors", func(t *testing.T) {
+		s, _ := newTestState()
+
+		t.Run("returns ESUCCESS and calls Sync once for sync-capable file", func(t *testing.T) {
+			stub := &syncStub{}
+			s.fds = append(s.fds, fdEntry{fdType: fdFile, file: stub})
+			fd := int32(len(s.fds) - 1)
+
+			if errno := s.Xfd_datasync(fd); errno != wasiESuccess {
+				t.Errorf("got %d, want ESUCCESS", errno)
+			}
+			if stub.syncCalled != 1 {
+				t.Errorf("syncCalled = %d, want 1", stub.syncCalled)
+			}
+		})
+
+		t.Run("returns mapped WASI errno when Sync fails (EINVAL -> EINVAL)", func(t *testing.T) {
+			stub := &syncStub{syncErr: syscall.EINVAL}
+			s.fds = append(s.fds, fdEntry{fdType: fdFile, file: stub})
+			fd := int32(len(s.fds) - 1)
+
+			if errno := s.Xfd_datasync(fd); errno != wasiEInval {
+				t.Errorf("got %d, want EINVAL (%d)", errno, wasiEInval)
+			}
+		})
+
+		t.Run("returns ESUCCESS for FSFileWrap (not sync-capable) without error", func(t *testing.T) {
+			dir := t.TempDir()
+			_ = os.WriteFile(dir+"/f.txt", []byte("x"), 0644)
+			fsys := os.DirFS(dir)
+			f, _ := fsys.Open("f.txt")
+			t.Cleanup(func() { f.Close() })
+
+			s.fds = append(s.fds, fdEntry{fdType: fdFile, file: &FSFileWrap{File: f}})
+			fd := int32(len(s.fds) - 1)
+
+			if errno := s.Xfd_datasync(fd); errno != wasiESuccess {
+				t.Errorf("got %d, want ESUCCESS", errno)
 			}
 		})
 	})
