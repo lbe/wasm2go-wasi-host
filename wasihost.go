@@ -1661,8 +1661,9 @@ func computeTargetTimes(fi fs.FileInfo, atim, mtim int64, fstFlags int32) (time.
 // Xpath_filestat_set_times implements path_filestat_set_times.
 //
 // ATIM (bit 0), MTIM (bit 1), ATIM_NOW (bit 2), and MTIM_NOW (bit 3) flags
-// are acted upon. Resolves the path and calls os.Chtimes. Returns
-// ESUCCESS without mutation for read-only mounts.
+// are acted upon. Resolves writable host paths and calls os.Chtimes.
+// Returns EROFS when the path is read-only or cannot be resolved to a
+// writable host path.
 func (s *State) Xpath_filestat_set_times(dirfd, flags, pathPtr, pathLen int32, atim, mtim int64, fstFlags int32) int32 {
 	if fstFlags&(fstAtim|fstMtim|fstAtimNow|fstMtimNow) == 0 {
 		return wasiESuccess

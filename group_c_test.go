@@ -68,11 +68,11 @@ func TestFilestatMutations(t *testing.T) {
 		}
 	})
 
-	t.Run("Xfd_filestat_set_times fstFlags=2 updates mtime on osFile", func(t *testing.T) {
+	t.Run("Xfd_filestat_set_times fstMtim updates mtime on osFile", func(t *testing.T) {
 		s, _ := newTestState()
 		filePath := setupOsFileFd(t, s, 5, []byte("data"))
 
-		errno := s.Xfd_filestat_set_times(5, 0, targetMtimNs, 2)
+		errno := s.Xfd_filestat_set_times(5, 0, targetMtimNs, fstMtim)
 		if errno != wasiESuccess {
 			t.Fatalf("filestat_set_times returned %d, want ESUCCESS", errno)
 		}
@@ -112,7 +112,7 @@ func TestFilestatMutations(t *testing.T) {
 		}
 	})
 
-	t.Run("Xpath_filestat_set_times fstFlags=2 updates mtime by path", func(t *testing.T) {
+	t.Run("Xpath_filestat_set_times fstMtim updates mtime by path", func(t *testing.T) {
 		s, buf := newTestState()
 		hostDir := setupWritableMount(t, s, buf)
 		fname := "testfile.txt"
@@ -121,7 +121,7 @@ func TestFilestatMutations(t *testing.T) {
 		}
 		pathOff, pathLen := writePath(buf, 500, fname)
 
-		errno := s.Xpath_filestat_set_times(3, 0, pathOff, pathLen, 0, targetMtimNs, 2)
+		errno := s.Xpath_filestat_set_times(3, 0, pathOff, pathLen, 0, targetMtimNs, fstMtim)
 		if errno != wasiESuccess {
 			t.Fatalf("xpath_filestat_set_times returned %d, want ESUCCESS", errno)
 		}
@@ -165,7 +165,7 @@ func TestFilestatMutations(t *testing.T) {
 		}
 	})
 
-	t.Run("Xfd_filestat_set_times fstFlags=MTIM_NOW updates mtime to current", func(t *testing.T) {
+	t.Run("Xfd_filestat_set_times fstMtimNow updates mtime to current", func(t *testing.T) {
 		s, _ := newTestState()
 		filePath := setupOsFileFd(t, s, 5, []byte("data"))
 
@@ -175,8 +175,7 @@ func TestFilestatMutations(t *testing.T) {
 			t.Fatal(err)
 		}
 
-		// 8 is MTIM_NOW
-		errno := s.Xfd_filestat_set_times(5, 0, 0, 8)
+		errno := s.Xfd_filestat_set_times(5, 0, 0, fstMtimNow)
 		if errno != wasiESuccess {
 			t.Fatalf("filestat_set_times returned %d, want ESUCCESS", errno)
 		}
@@ -191,7 +190,7 @@ func TestFilestatMutations(t *testing.T) {
 		}
 	})
 
-	t.Run("Xfd_filestat_set_times fstFlags=ATIM_NOW updates atime but not mtime", func(t *testing.T) {
+	t.Run("Xfd_filestat_set_times fstAtimNow updates atime but not mtime", func(t *testing.T) {
 		s, _ := newTestState()
 		filePath := setupOsFileFd(t, s, 5, []byte("data"))
 
@@ -207,8 +206,7 @@ func TestFilestatMutations(t *testing.T) {
 		}
 		mtimeBefore := fi0.ModTime()
 
-		// 4 is ATIM_NOW
-		errno := s.Xfd_filestat_set_times(5, 0, 0, 4)
+		errno := s.Xfd_filestat_set_times(5, 0, 0, fstAtimNow)
 		if errno != wasiESuccess {
 			t.Fatalf("filestat_set_times returned %d, want ESUCCESS", errno)
 		}
@@ -236,14 +234,13 @@ func TestFilestatMutations(t *testing.T) {
 		s, buf := newTestState()
 		_ = setupWritableMount(t, s, buf)
 		pathOff, pathLen := writePath(buf, 500, "/nonexistent/path/deleted.txt")
-		// fstMtim = 2
-		errno := s.Xpath_filestat_set_times(3, 0, pathOff, pathLen, 0, targetMtimNs, 2)
+		errno := s.Xpath_filestat_set_times(3, 0, pathOff, pathLen, 0, targetMtimNs, fstMtim)
 		if errno == wasiESuccess {
 			t.Error("Xpath_filestat_set_times on missing path returned ESUCCESS, want error")
 		}
 	})
 
-	t.Run("Xpath_filestat_set_times fstFlags=MTIM_NOW updates mtime to current", func(t *testing.T) {
+	t.Run("Xpath_filestat_set_times fstMtimNow updates mtime to current", func(t *testing.T) {
 		s, buf := newTestState()
 		hostDir := setupWritableMount(t, s, buf)
 		fname := "now.txt"
@@ -260,10 +257,9 @@ func TestFilestatMutations(t *testing.T) {
 
 		pathOff, pathLen := writePath(buf, 500, fname)
 
-		// 8 is MTIM_NOW
-		errno := s.Xpath_filestat_set_times(3, 0, pathOff, pathLen, 0, 0, 8)
+		errno := s.Xpath_filestat_set_times(3, 0, pathOff, pathLen, 0, 0, fstMtimNow)
 		if errno != wasiESuccess {
-			t.Fatalf("Xpath_filestat_set_times fstFlags=8 returned %d, want ESUCCESS", errno)
+			t.Fatalf("Xpath_filestat_set_times fstMtimNow returned %d, want ESUCCESS", errno)
 		}
 
 		fi, err := os.Stat(hostPath)
@@ -276,7 +272,7 @@ func TestFilestatMutations(t *testing.T) {
 		}
 	})
 
-	t.Run("Xpath_filestat_set_times fstFlags=ATIM updates atime by path", func(t *testing.T) {
+	t.Run("Xpath_filestat_set_times fstAtim updates atime by path", func(t *testing.T) {
 		s, buf := newTestState()
 		hostDir := setupWritableMount(t, s, buf)
 		fname := "atim.txt"
@@ -296,10 +292,9 @@ func TestFilestatMutations(t *testing.T) {
 
 		pathOff, pathLen := writePath(buf, 500, fname)
 
-		// 1 is ATIM
-		errno := s.Xpath_filestat_set_times(3, 0, pathOff, pathLen, int64(targetAtimNs), 0, 1)
+		errno := s.Xpath_filestat_set_times(3, 0, pathOff, pathLen, int64(targetAtimNs), 0, fstAtim)
 		if errno != wasiESuccess {
-			t.Fatalf("Xpath_filestat_set_times fstFlags=1 returned %d, want ESUCCESS", errno)
+			t.Fatalf("Xpath_filestat_set_times fstAtim returned %d, want ESUCCESS", errno)
 		}
 
 		fi, err := os.Stat(hostPath)
@@ -325,7 +320,7 @@ func TestFilestatMutations(t *testing.T) {
 		}
 	})
 
-	t.Run("Xpath_filestat_set_times fstFlags=ATIM_NOW updates atime but not mtime", func(t *testing.T) {
+	t.Run("Xpath_filestat_set_times fstAtimNow updates atime but not mtime", func(t *testing.T) {
 		s, buf := newTestState()
 		hostDir := setupWritableMount(t, s, buf)
 		fname := "atim_now.txt"
@@ -348,10 +343,9 @@ func TestFilestatMutations(t *testing.T) {
 
 		pathOff, pathLen := writePath(buf, 500, fname)
 
-		// 4 is ATIM_NOW
-		errno := s.Xpath_filestat_set_times(3, 0, pathOff, pathLen, 0, 0, 4)
+		errno := s.Xpath_filestat_set_times(3, 0, pathOff, pathLen, 0, 0, fstAtimNow)
 		if errno != wasiESuccess {
-			t.Fatalf("Xpath_filestat_set_times fstFlags=4 returned %d, want ESUCCESS", errno)
+			t.Fatalf("Xpath_filestat_set_times fstAtimNow returned %d, want ESUCCESS", errno)
 		}
 
 		fi1, err := os.Stat(hostPath)

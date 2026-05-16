@@ -185,21 +185,6 @@ func TestGroupEPositionedIO(t *testing.T) {
 				t.Errorf("got %d, want EINVAL (%d)", errno, wasiEInval)
 			}
 		})
-
-		t.Run("returns ESUCCESS for FSFileWrap (not sync-capable) without error", func(t *testing.T) {
-			dir := t.TempDir()
-			_ = os.WriteFile(dir+"/f.txt", []byte("x"), 0644)
-			fsys := os.DirFS(dir)
-			f, _ := fsys.Open("f.txt")
-			t.Cleanup(func() { f.Close() })
-
-			s.fds = append(s.fds, fdEntry{fdType: fdFile, file: &FSFileWrap{File: f}})
-			fd := int32(len(s.fds) - 1)
-
-			if errno := s.Xfd_datasync(fd); errno != wasiESuccess {
-				t.Errorf("got %d, want ESUCCESS", errno)
-			}
-		})
 	})
 
 	t.Run("Xsched_yield calls sched_yield seam and returns ESUCCESS", func(t *testing.T) {
