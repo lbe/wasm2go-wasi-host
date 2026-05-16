@@ -683,8 +683,39 @@ func mountHostPaths(m *mountEntry, rel string) (primary, fallback string) {
 // a read-only or unmounted location.
 func (s *State) resolvePrimary(dirfd, pathPtr, pathLen int32) string {
 	m, rel := s.resolveDirfdPath(dirfd, pathPtr, pathLen)
+	if m == nil {
+		return ""
+	}
 	primary, _ := mountHostPaths(m, rel)
+	if primary == "" && !m.writable {
+		return ""
+	}
 	return primary
+}
+
+// resolveWritable resolves a (dirfd, path) pair to a host path, choosing
+// between primary and fallback based on existence. This is used for
+// mutation operations where relative paths on a root writable mount
+// should fall back to the hostRoot.
+func (s *State) resolveWritable(dirfd, pathPtr, pathLen int32) (string, int32) {
+	m, rel := s.resolveDirfdPath(dirfd, pathPtr, pathLen)
+	if m == nil {
+		if dirfd < 0 || int(dirfd) >= len(s.fds) {
+			return "", wasiEBadf
+		}
+		// Existing behavior from TestWASIStubs/TestXpathRename
+		return "", wasiEROFS
+	}
+	primary, fallback := mountHostPaths(m, rel)
+	if primary == "" {
+		return "", wasiEROFS
+	}
+	if fallback != "" {
+		if _, err := os.Stat(primary); err != nil {
+			return fallback, wasiESuccess
+		}
+	}
+	return primary, wasiESuccess
 }
 
 // Xpath_create_directory implements path_create_directory. Creates a
@@ -692,11 +723,11 @@ func (s *State) resolvePrimary(dirfd, pathPtr, pathLen int32) string {
 // mount is read-only, EEXIST if the directory already exists, ENOENT if
 // the parent does not exist.
 func (s *State) Xpath_create_directory(dirfd, pathPtr, pathLen int32) int32 {
-	primary := s.resolvePrimary(dirfd, pathPtr, pathLen)
-	if primary == "" {
-		return wasiEROFS
+	path, errno := s.resolveWritable(dirfd, pathPtr, pathLen)
+	if errno != wasiESuccess {
+		return errno
 	}
-	if err := os.Mkdir(primary, 0755); err != nil {
+	if err := os.Mkdir(path, 0755); err != nil {
 		return int32(mapOSError(err))
 	}
 	return wasiESuccess
@@ -707,18 +738,18 @@ func (s *State) Xpath_create_directory(dirfd, pathPtr, pathLen int32) int32 {
 // is read-only, ENOTDIR if the target is a file, ENOTEMPTY if the
 // directory is not empty.
 func (s *State) Xpath_remove_directory(dirfd, pathPtr, pathLen int32) int32 {
-	primary := s.resolvePrimary(dirfd, pathPtr, pathLen)
-	if primary == "" {
-		return wasiEROFS
+	path, errno := s.resolveWritable(dirfd, pathPtr, pathLen)
+	if errno != wasiESuccess {
+		return errno
 	}
-	fi, err := os.Lstat(primary)
+	fi, err := os.Lstat(path)
 	if err != nil {
 		return int32(mapOSError(err))
 	}
 	if !fi.IsDir() {
 		return wasiENotDir
 	}
-	if err := os.Remove(primary); err != nil {
+	if err := os.Remove(path); err != nil {
 		return int32(mapOSError(err))
 	}
 	return wasiESuccess
@@ -728,18 +759,18 @@ func (s *State) Xpath_remove_directory(dirfd, pathPtr, pathLen int32) int32 {
 // resolved host path. Returns EROFS if the mount is read-only, EISDIR if
 // the target is a directory, ENOENT if the file does not exist.
 func (s *State) Xpath_unlink_file(dirfd, pathPtr, pathLen int32) int32 {
-	primary := s.resolvePrimary(dirfd, pathPtr, pathLen)
-	if primary == "" {
-		return wasiEROFS
+	path, errno := s.resolveWritable(dirfd, pathPtr, pathLen)
+	if errno != wasiESuccess {
+		return errno
 	}
-	fi, err := os.Lstat(primary)
+	fi, err := os.Lstat(path)
 	if err != nil {
 		return int32(mapOSError(err))
 	}
 	if fi.IsDir() {
 		return wasiEIsdir
 	}
-	if err := os.Remove(primary); err != nil {
+	if err := os.Remove(path); err != nil {
 		return int32(mapOSError(err))
 	}
 	return wasiESuccess
@@ -750,11 +781,11 @@ func (s *State) Xpath_unlink_file(dirfd, pathPtr, pathLen int32) int32 {
 // bufLen bytes, and writes the actual byte count to nreadPtr. Returns
 // EROFS if the mount is read-only (embedded fs.FS mounts have no symlinks).
 func (s *State) Xpath_readlink(dirfd, pathPtr, pathLen, bufPtr, bufLen, nreadPtr int32) int32 {
-	primary := s.resolvePrimary(dirfd, pathPtr, pathLen)
-	if primary == "" {
-		return wasiEROFS
+	path, errno := s.resolveWritable(dirfd, pathPtr, pathLen)
+	if errno != wasiESuccess {
+		return errno
 	}
-	target, err := os.Readlink(primary)
+	target, err := os.Readlink(path)
 	if err != nil {
 		return int32(mapOSError(err))
 	}
@@ -770,11 +801,11 @@ func (s *State) Xpath_readlink(dirfd, pathPtr, pathLen, bufPtr, bufLen, nreadPtr
 // exists.
 func (s *State) Xpath_symlink(oldPathPtr, oldPathLen, dirfd, newPathPtr, newPathLen int32) int32 {
 	target := string(s.readBytes(oldPathPtr, oldPathLen))
-	primary := s.resolvePrimary(dirfd, newPathPtr, newPathLen)
-	if primary == "" {
-		return wasiEROFS
+	path, errno := s.resolveWritable(dirfd, newPathPtr, newPathLen)
+	if errno != wasiESuccess {
+		return errno
 	}
-	if err := os.Symlink(target, primary); err != nil {
+	if err := os.Symlink(target, path); err != nil {
 		return int32(mapOSError(err))
 	}
 	return wasiESuccess
@@ -784,14 +815,15 @@ func (s *State) Xpath_symlink(oldPathPtr, oldPathLen, dirfd, newPathPtr, newPath
 // old path to the resolved new path via os.Link. Returns EROFS if either
 // mount is read-only.
 func (s *State) Xpath_link(oldDirfd, oldFlags, oldPathPtr, oldPathLen, newDirfd, newPathPtr, newPathLen int32) int32 {
-	oldMount, oldRel := s.resolveDirfdPath(oldDirfd, oldPathPtr, oldPathLen)
-	newMount, newRel := s.resolveDirfdPath(newDirfd, newPathPtr, newPathLen)
-	oldPrimary, _ := mountHostPaths(oldMount, oldRel)
-	newPrimary, _ := mountHostPaths(newMount, newRel)
-	if oldPrimary == "" || newPrimary == "" {
-		return wasiEROFS
+	oldPath, oldErr := s.resolveWritable(oldDirfd, oldPathPtr, oldPathLen)
+	if oldErr != wasiESuccess {
+		return oldErr
 	}
-	if err := os.Link(oldPrimary, newPrimary); err != nil {
+	newPath, newErr := s.resolveWritable(newDirfd, newPathPtr, newPathLen)
+	if newErr != wasiESuccess {
+		return newErr
+	}
+	if err := os.Link(oldPath, newPath); err != nil {
 		return int32(mapOSError(err))
 	}
 	return wasiESuccess
