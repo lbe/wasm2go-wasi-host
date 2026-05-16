@@ -165,6 +165,32 @@ func TestFilestatMutations(t *testing.T) {
 		}
 	})
 
+	t.Run("Xfd_filestat_set_times fstFlags=MTIM_NOW updates mtime to current", func(t *testing.T) {
+		s, _ := newTestState()
+		filePath := setupOsFileFd(t, s, 5, []byte("data"))
+
+		// Set to a past time first to ensure NOW change is visible
+		past := time.Now().Add(-1 * time.Hour)
+		if err := os.Chtimes(filePath, past, past); err != nil {
+			t.Fatal(err)
+		}
+
+		// 8 is MTIM_NOW
+		errno := s.Xfd_filestat_set_times(5, 0, 0, 8)
+		if errno != wasiESuccess {
+			t.Fatalf("filestat_set_times returned %d, want ESUCCESS", errno)
+		}
+
+		fi, err := os.Stat(filePath)
+		if err != nil {
+			t.Fatal(err)
+		}
+		// mtime should be within a few seconds of "now"
+		if time.Since(fi.ModTime()) > 5*time.Second {
+			t.Errorf("mtime = %v, not close to now", fi.ModTime())
+		}
+	})
+
 	t.Run("applyMtim error on nonexistent path", func(t *testing.T) {
 		errno := applyMtim("/nonexistent/path/deleted.txt", targetMtimNs)
 		if errno == wasiESuccess {
