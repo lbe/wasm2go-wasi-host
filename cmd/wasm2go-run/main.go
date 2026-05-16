@@ -21,7 +21,7 @@ func main() {
 		os.Exit(1)
 	}
 
-	exitCode, err := execute(binaryPath, buildDir, os.Stdout, os.Stderr)
+	exitCode, err := execute(binaryPath, buildDir, os.Stdin, os.Stdout, os.Stderr)
 	if err != nil {
 		fmt.Fprintf(os.Stderr, "error: %v\n", err)
 		os.Exit(1)

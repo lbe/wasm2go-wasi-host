@@ -7,11 +7,11 @@ import (
 	"os/exec"
 )
 
-func execute(binaryPath, buildDir string, stdout, stderr io.Writer) (int, error) {
+func execute(binaryPath, buildDir string, stdin io.Reader, stdout, stderr io.Writer) (int, error) {
 	defer os.RemoveAll(buildDir)
 
 	cmd := exec.Command(binaryPath)
-	cmd.Stdin = os.Stdin
+	cmd.Stdin = stdin
 	cmd.Stdout = stdout
 	cmd.Stderr = stderr
 

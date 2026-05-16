@@ -18,7 +18,7 @@ func TestStdoutAndEnv(t *testing.T) {
 		}
 
 		var stdout bytes.Buffer
-		exitCode, err := execute(binaryPath, tmpDir, &stdout, io.Discard)
+		exitCode, err := execute(binaryPath, tmpDir, nil, &stdout, io.Discard)
 		if err != nil {
 			t.Fatalf("execute failed: %v", err)
 		}
@@ -43,7 +43,7 @@ func TestStdoutAndEnv(t *testing.T) {
 			t.Fatalf("compile failed: %v", err)
 		}
 
-		exitCode, err := execute(binaryPath, tmpDir, io.Discard, io.Discard)
+		exitCode, err := execute(binaryPath, tmpDir, nil, io.Discard, io.Discard)
 		if err != nil {
 			t.Fatalf("execute failed: %v", err)
 		}
@@ -83,7 +83,7 @@ func TestProcExit(t *testing.T) {
 				t.Fatalf("compile failed: %v", err)
 			}
 
-			exitCode, err := execute(binaryPath, tmpDir, io.Discard, io.Discard)
+			exitCode, err := execute(binaryPath, tmpDir, nil, io.Discard, io.Discard)
 			if err != nil {
 				t.Fatalf("execute failed: %v", err)
 			}
@@ -111,7 +111,7 @@ func TestDirMount(t *testing.T) {
 			t.Fatalf("compile failed: %v", err)
 		}
 
-		exitCode, err := execute(binaryPath, tmpDir, io.Discard, io.Discard)
+		exitCode, err := execute(binaryPath, tmpDir, nil, io.Discard, io.Discard)
 		if err != nil {
 			t.Fatalf("execute failed: %v", err)
 		}
@@ -129,7 +129,7 @@ func TestDirMount(t *testing.T) {
 			t.Fatalf("compile failed: %v", err)
 		}
 
-		exitCode, err := execute(binaryPath, tmpDir, io.Discard, io.Discard)
+		exitCode, err := execute(binaryPath, tmpDir, nil, io.Discard, io.Discard)
 		if err != nil {
 			t.Fatalf("execute failed: %v", err)
 		}

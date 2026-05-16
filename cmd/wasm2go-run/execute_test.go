@@ -21,7 +21,7 @@ func TestExecute(t *testing.T) {
 		stderr := &bytes.Buffer{}
 
 		// /bin/true should exist on most Unix-like systems and exit 0
-		exitCode, err := execute("/usr/bin/true", tempDir, stdout, stderr)
+		exitCode, err := execute("/usr/bin/true", tempDir, nil, stdout, stderr)
 		if err != nil {
 			t.Errorf("expected no error, got %v", err)
 		}
@@ -45,7 +45,7 @@ func TestExecute(t *testing.T) {
 		stderr := &bytes.Buffer{}
 
 		// /bin/false should exist and exit 1
-		exitCode, err := execute("/usr/bin/false", tempDir, stdout, stderr)
+		exitCode, err := execute("/usr/bin/false", tempDir, nil, stdout, stderr)
 		if err != nil {
 			t.Errorf("expected no error, got %v", err)
 		}
@@ -71,7 +71,7 @@ func TestExecute(t *testing.T) {
 		stdout := &bytes.Buffer{}
 		stderr := &bytes.Buffer{}
 
-		exitCode, err := execute(nonExistentPath, buildDir, stdout, stderr)
+		exitCode, err := execute(nonExistentPath, buildDir, nil, stdout, stderr)
 		if err == nil {
 			t.Error("expected error for non-existent binary, got nil")
 		}
@@ -104,7 +104,7 @@ func TestExecute(t *testing.T) {
 		stdout := &bytes.Buffer{}
 		stderr := &bytes.Buffer{}
 
-		exitCode, err := execute(scriptPath, buildDir, stdout, stderr)
+		exitCode, err := execute(scriptPath, buildDir, nil, stdout, stderr)
 		if err != nil {
 			t.Errorf("expected no error, got %v", err)
 		}
@@ -148,16 +148,12 @@ func TestExecute(t *testing.T) {
 			t.Fatalf("failed to create pipe: %v", err)
 		}
 
-		oldStdin := os.Stdin
-		defer func() { os.Stdin = oldStdin }()
-		os.Stdin = r
-
 		go func() {
 			w.Write([]byte(input + "\n"))
 			w.Close()
 		}()
 
-		exitCode, err := execute(scriptPath, buildDir, stdout, stderr)
+		exitCode, err := execute(scriptPath, buildDir, r, stdout, stderr)
 		if err != nil {
 			t.Errorf("expected no error, got %v", err)
 		}
