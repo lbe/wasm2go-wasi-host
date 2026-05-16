@@ -232,10 +232,14 @@ func TestFilestatMutations(t *testing.T) {
 		}
 	})
 
-	t.Run("applyMtim error on nonexistent path", func(t *testing.T) {
-		errno := applyMtim("/nonexistent/path/deleted.txt", targetMtimNs)
+	t.Run("Xpath_filestat_set_times error on nonexistent path", func(t *testing.T) {
+		s, buf := newTestState()
+		_ = setupWritableMount(t, s, buf)
+		pathOff, pathLen := writePath(buf, 500, "/nonexistent/path/deleted.txt")
+		// fstMtim = 2
+		errno := s.Xpath_filestat_set_times(3, 0, pathOff, pathLen, 0, targetMtimNs, 2)
 		if errno == wasiESuccess {
-			t.Error("applyMtim on missing path returned ESUCCESS, want error")
+			t.Error("Xpath_filestat_set_times on missing path returned ESUCCESS, want error")
 		}
 	})
 

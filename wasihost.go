@@ -1676,18 +1676,6 @@ func (s *State) Xpath_filestat_set_times(dirfd, flags, pathPtr, pathLen int32, a
 	return wasiESuccess
 }
 
-// applyMtim calls os.Chtimes to set the mtime of the file at path to the
-// given nanosecond timestamp. atime is set to the current wall time as a
-// neutral value. Returns the mapped WASI errno on failure.
-func applyMtim(path string, mtim int64) int32 {
-	mtime := time.Unix(0, mtim)
-	atime := time.Now()
-	if err := os.Chtimes(path, atime, mtime); err != nil {
-		return mapOSError(err)
-	}
-	return wasiESuccess
-}
-
 // mapOSError converts a host OS error to the closest WASI errno value.
 // Canonical mappings: ErrNotExist→ENOENT(44), ErrExist→EEXIST(20),
 // ENOTEMPTY→ENOTEMPTY(55). All other errors map to EIO(29).
