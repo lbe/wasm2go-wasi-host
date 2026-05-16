@@ -53,15 +53,15 @@ func compile(wasmPath string, cfg Config) (string, string, error) {
 	}
 
 	moduleDir := filepath.Join(tmpDir, "module")
-	if err := os.Mkdir(moduleDir, 0755); err != nil {
+	if err = os.Mkdir(moduleDir, 0755); err != nil {
 		return "", "", fmt.Errorf("failed to create module directory: %w", err)
 	}
-	if err := os.WriteFile(filepath.Join(moduleDir, "module.go"), []byte(transpiled), 0644); err != nil {
+	if err = os.WriteFile(filepath.Join(moduleDir, "module.go"), []byte(transpiled), 0644); err != nil {
 		return "", "", fmt.Errorf("failed to write module.go: %w", err)
 	}
 
 	goMod := generateGoMod("tmprunner", wasiHostPath())
-	if err := os.WriteFile(filepath.Join(tmpDir, "go.mod"), []byte(goMod), 0644); err != nil {
+	if err = os.WriteFile(filepath.Join(tmpDir, "go.mod"), []byte(goMod), 0644); err != nil {
 		return "", "", fmt.Errorf("failed to write go.mod: %w", err)
 	}
 

@@ -146,7 +146,6 @@ type fdEntry struct {
 	mount   int
 	preopen bool
 	dirFile fs.ReadDirFile
-	dirOff  int64
 }
 
 // mountEntry maps a guest path prefix to a host filesystem. If writable
@@ -603,7 +602,8 @@ func (s *State) resolvePath(guestPath string) (*mountEntry, string) {
 		// matching, which we bypass here if we find a raw prefix match.
 		rawGuest := "/" + strings.TrimPrefix(guestPath, "/")
 		rawMp := "/" + strings.TrimPrefix(m.guestPath, "/")
-		if rawGuest == rawMp || strings.HasPrefix(rawGuest, rawMp+"/") {
+		switch {
+		case rawGuest == rawMp || strings.HasPrefix(rawGuest, rawMp+"/"):
 			rel := strings.TrimPrefix(rawGuest, rawMp)
 			rel = strings.TrimPrefix(rel, "/")
 			if len(rawMp) > bestLen {
@@ -612,25 +612,14 @@ func (s *State) resolvePath(guestPath string) (*mountEntry, string) {
 				bestRel = rel
 			}
 			continue
-		}
-
-		match := false
-		if clean == mp {
-			match = true
-		} else if mp == "/" {
-			match = true
-		} else if strings.HasPrefix(clean, mp+"/") {
-			match = true
-		}
-		if !match {
-			continue
-		}
-		rel := strings.TrimPrefix(clean, mp)
-		rel = strings.TrimPrefix(rel, "/")
-		if len(mp) > bestLen {
-			best = m
-			bestLen = len(mp)
-			bestRel = rel
+		case clean == mp, mp == "/", strings.HasPrefix(clean, mp+"/"):
+			rel := strings.TrimPrefix(clean, mp)
+			rel = strings.TrimPrefix(rel, "/")
+			if len(mp) > bestLen {
+				best = m
+				bestLen = len(mp)
+				bestRel = rel
+			}
 		}
 	}
 	return best, bestRel
