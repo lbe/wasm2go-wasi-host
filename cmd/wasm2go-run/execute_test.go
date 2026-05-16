@@ -123,4 +123,55 @@ func TestExecute(t *testing.T) {
 			t.Errorf("expected buildDir %s to be removed, but it still exists", buildDir)
 		}
 	})
+
+	t.Run("wires stdin to child process", func(t *testing.T) {
+		scriptDir := t.TempDir()
+		scriptPath := filepath.Join(scriptDir, "test-stdin.sh")
+		scriptContent := "#!/bin/sh\nread input\necho \"got $input\"\n"
+		if err := os.WriteFile(scriptPath, []byte(scriptContent), 0755); err != nil {
+			t.Fatalf("failed to write test script: %v", err)
+		}
+
+		buildDir, err := os.MkdirTemp("", "execute-stdin-test-*")
+		if err != nil {
+			t.Fatalf("failed to create buildDir: %v", err)
+		}
+		defer os.RemoveAll(buildDir)
+
+		stdout := &bytes.Buffer{}
+		stderr := &bytes.Buffer{}
+
+		// Mock os.Stdin by piping from a reader
+		input := "hello stdin"
+		r, w, err := os.Pipe()
+		if err != nil {
+			t.Fatalf("failed to create pipe: %v", err)
+		}
+
+		oldStdin := os.Stdin
+		defer func() { os.Stdin = oldStdin }()
+		os.Stdin = r
+
+		go func() {
+			w.Write([]byte(input + "\n"))
+			w.Close()
+		}()
+
+		exitCode, err := execute(scriptPath, buildDir, stdout, stderr)
+		if err != nil {
+			t.Errorf("expected no error, got %v", err)
+		}
+		if exitCode != 0 {
+			t.Errorf("expected exit code 0, got %d", exitCode)
+		}
+
+		expected := "got hello stdin\n"
+		if stdout.String() != expected {
+			t.Errorf("expected %q, got %q", expected, stdout.String())
+		}
+
+		if _, err := os.Stat(buildDir); !errors.Is(err, fs.ErrNotExist) {
+			t.Errorf("expected buildDir %s to be removed, but it still exists", buildDir)
+		}
+	})
 }
