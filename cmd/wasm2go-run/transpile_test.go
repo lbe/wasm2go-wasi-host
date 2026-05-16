@@ -104,7 +104,7 @@ type Xenv interface {
 		want := input
 		got := deduplicateInterfaceMethods(input)
 		if got != want {
-			t.Errorf("expected output to equal input when no duplicates exist")
+			t.Errorf("\ngot:\n%s\nwant:\n%s", got, want)
 		}
 	})
 }
