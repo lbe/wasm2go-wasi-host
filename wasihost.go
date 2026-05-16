@@ -1432,8 +1432,6 @@ func (s *State) Xfd_pread(fd, iovsPtr, iovsCount int32, offset int64, nreadPtr i
 		if bufLen == 0 {
 			continue
 		}
-		var n int
-		var err error
 		ra, ok := entry.file.(interface {
 			ReadAt([]byte, int64) (int, error)
 		})
@@ -1441,7 +1439,7 @@ func (s *State) Xfd_pread(fd, iovsPtr, iovsCount int32, offset int64, nreadPtr i
 			binary.LittleEndian.PutUint32(mem[nreadPtr:], total)
 			return wasiENotSup
 		}
-		n, err = ra.ReadAt(mem[bufPtr:bufPtr+bufLen], curOff)
+		n, err := ra.ReadAt(mem[bufPtr:bufPtr+bufLen], curOff)
 		total += uint32(n)
 		curOff += int64(n)
 		if err != nil {
