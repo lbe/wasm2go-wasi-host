@@ -1457,8 +1457,10 @@ func (s *State) Xfd_pread(fd, iovsPtr, iovsCount int32, offset int64, nreadPtr i
 // Xfd_pwrite implements fd_pwrite. Writes to fd at the given offset
 // without updating the fd's WASI-level offset (entry.offset). Requires
 // the underlying file to implement WriteAt; if it does not, no bytes are
-// written. Returns EINVAL for fds 0–2 (positioned writes on stdio are
-// not defined by WASI).
+// written and ENOTSUP is returned. If WriteAt returns an error, fd_pwrite
+// returns EIO and preserves the partial byte count in guest memory.
+// Returns EINVAL for fds 0–2 (positioned writes on stdio are not
+// defined by WASI).
 func (s *State) Xfd_pwrite(fd, iovsPtr, iovsCount int32, offset int64, nwrittenPtr int32) int32 {
 	if fd <= 2 {
 		return wasiEInval
@@ -1470,6 +1472,7 @@ func (s *State) Xfd_pwrite(fd, iovsPtr, iovsCount int32, offset int64, nwrittenP
 	if entry.file == nil {
 		return wasiEBadf
 	}
+
 	mem := s.mem()
 	var total uint32
 	curOff := offset
@@ -1487,6 +1490,7 @@ func (s *State) Xfd_pwrite(fd, iovsPtr, iovsCount int32, offset int64, nwrittenP
 			binary.LittleEndian.PutUint32(mem[nwrittenPtr:], total)
 			return wasiENotSup
 		}
+
 		n, err := wa.WriteAt(mem[bufPtr:bufPtr+bufLen], curOff)
 		total += uint32(n)
 		curOff += int64(n)
