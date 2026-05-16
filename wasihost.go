@@ -1641,11 +1641,11 @@ func (s *State) Xfd_filestat_set_times(fd int32, atim, mtim int64, fstFlags int3
 
 // Xpath_filestat_set_times implements path_filestat_set_times.
 //
-// ATIM (bit 0), MTIM (bit 1), and MTIM_NOW (bit 3) flags are acted upon.
-// Resolves the path and calls os.Chtimes. Returns ESUCCESS without
-// mutation for read-only mounts.
+// ATIM (bit 0), MTIM (bit 1), ATIM_NOW (bit 2), and MTIM_NOW (bit 3) flags
+// are acted upon. Resolves the path and calls os.Chtimes. Returns
+// ESUCCESS without mutation for read-only mounts.
 func (s *State) Xpath_filestat_set_times(dirfd, flags, pathPtr, pathLen int32, atim, mtim int64, fstFlags int32) int32 {
-	if fstFlags&(fstAtim|fstMtim|fstMtimNow) == 0 {
+	if fstFlags&(fstAtim|fstMtim|fstAtimNow|fstMtimNow) == 0 {
 		return wasiESuccess
 	}
 	primary := s.resolvePrimary(dirfd, pathPtr, pathLen)
@@ -1659,7 +1659,9 @@ func (s *State) Xpath_filestat_set_times(dirfd, flags, pathPtr, pathLen int32, a
 	}
 
 	targetAtim := getAtimeFromStat(fi)
-	if fstFlags&fstAtim != 0 {
+	if fstFlags&fstAtimNow != 0 {
+		targetAtim = time.Now()
+	} else if fstFlags&fstAtim != 0 {
 		targetAtim = time.Unix(0, atim)
 	}
 
