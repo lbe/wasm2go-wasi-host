@@ -12,7 +12,7 @@ def get_name() -> str:
 def get_version() -> str:
     """Return the version of the wasm2go-run binary."""
     return subprocess.run(
-        WASM2GO_RUN[0:1] + ["--version"],
+        WASM2GO_RUN + ["--version"],
         capture_output=True,
         text=True,
         check=True
