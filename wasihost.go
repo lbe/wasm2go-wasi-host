@@ -1491,7 +1491,8 @@ func (s *State) Xfd_pwrite(fd, iovsPtr, iovsCount int32, offset int64, nwrittenP
 		total += uint32(n)
 		curOff += int64(n)
 		if err != nil {
-			break
+			binary.LittleEndian.PutUint32(mem[nwrittenPtr:], total)
+			return wasiEIo
 		}
 	}
 	binary.LittleEndian.PutUint32(mem[nwrittenPtr:], total)
