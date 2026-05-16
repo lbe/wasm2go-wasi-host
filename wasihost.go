@@ -1445,7 +1445,11 @@ func (s *State) Xfd_pread(fd, iovsPtr, iovsCount int32, offset int64, nreadPtr i
 		total += uint32(n)
 		curOff += int64(n)
 		if err != nil {
-			break
+			if err == io.EOF {
+				break
+			}
+			binary.LittleEndian.PutUint32(mem[nreadPtr:], total)
+			return wasiEIo
 		}
 	}
 	binary.LittleEndian.PutUint32(mem[nreadPtr:], total)
