@@ -32,45 +32,45 @@ func wasiHostPath() string {
 func compile(wasmPath string, cfg Config) (string, string, error) {
 	tmpDir, err := os.MkdirTemp("", "wasm2go-run-*")
 	if err != nil {
-		return "", "", err
+		return "", "", fmt.Errorf("failed to create temp directory: %w", err)
 	}
 
 	success := false
 	defer func() {
 		if !success {
-			os.RemoveAll(tmpDir)
+			_ = os.RemoveAll(tmpDir)
 		}
 	}()
 
 	transpiled, err := transpile(wasmPath)
 	if err != nil {
-		return "", "", err
+		return "", "", fmt.Errorf("transpilation failed: %w", err)
 	}
 
 	imports, err := parseImports(transpiled)
 	if err != nil {
-		return "", "", err
+		return "", "", fmt.Errorf("failed to parse imports: %w", err)
 	}
 
 	moduleDir := filepath.Join(tmpDir, "module")
 	if err := os.Mkdir(moduleDir, 0755); err != nil {
-		return "", "", err
+		return "", "", fmt.Errorf("failed to create module directory: %w", err)
 	}
 	if err := os.WriteFile(filepath.Join(moduleDir, "module.go"), []byte(transpiled), 0644); err != nil {
-		return "", "", err
+		return "", "", fmt.Errorf("failed to write module.go: %w", err)
 	}
 
 	goMod := generateGoMod("tmprunner", wasiHostPath())
 	if err := os.WriteFile(filepath.Join(tmpDir, "go.mod"), []byte(goMod), 0644); err != nil {
-		return "", "", err
+		return "", "", fmt.Errorf("failed to write go.mod: %w", err)
 	}
 
 	mainGo, err := generateMain(cfg, imports, "tmprunner")
 	if err != nil {
-		return "", "", err
+		return "", "", fmt.Errorf("failed to generate main.go: %w", err)
 	}
 	if err := os.WriteFile(filepath.Join(tmpDir, "main.go"), []byte(mainGo), 0644); err != nil {
-		return "", "", err
+		return "", "", fmt.Errorf("failed to write main.go: %w", err)
 	}
 
 	tidyCmd := exec.Command("go", "mod", "tidy")
