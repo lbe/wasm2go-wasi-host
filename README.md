@@ -7,9 +7,11 @@
 [![CI](https://github.com/lbe/wasm2go-wasi-host/actions/workflows/ci.yml/badge.svg)](https://github.com/lbe/wasm2go-wasi-host/actions/workflows/ci.yml)
 [![Release](https://img.shields.io/github/v/release/lbe/wasm2go-wasi-host)](https://github.com/lbe/wasm2go-wasi-host/releases)
 
-A standalone, general-purpose **WASI snapshot-preview1** host for Go, specifically designed for modules transpiled by [wasm2go](https://github.com/mpx/wasm2go).
+A specialized **WASI snapshot-preview1** host for Go, designed to run the [WebAssembly/wasi-testsuite](https://github.com/WebAssembly/wasi-testsuite) against code transpiled by [wasm2go](https://github.com/ncruces/wasm2go).
 
-It implements all 40 WASI preview1 functions plus the `env.call_host_function` stub required by zeroperl-style modules. Unlike `wazero` or other heavy runtimes, this host is designed to work directly with the generated code from `wasm2go`, providing a lightweight, standard-library-only integration for running WebAssembly binaries as native Go.
+The primary goal of this project is to provide a reference implementation to confirm compliance with the [WASI preview 1](https://github.com/WebAssembly/WASI/blob/wasi-0.1/preview1/docs.md) specification when using `wasm2go`. It implements all 40 WASI preview1 functions plus the `env.call_host_function` stub required by certain modules.
+
+While it can be used as a general-purpose runner for `wasm2go` modules, it is intentionally lightweight and standard-library-only. For production-grade performance, advanced sandboxing, or more complex host integrations, more mature runtimes like `wasmtime` or `wazero` are recommended.
 
 ## Features
 
