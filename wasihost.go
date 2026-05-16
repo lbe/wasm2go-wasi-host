@@ -1633,10 +1633,7 @@ func (s *State) Xfd_filestat_set_times(fd int32, atim, mtim int64, fstFlags int3
 		return mapOSError(err)
 	}
 
-	targetAtim, targetMtim, errno := s.computeTargetTimes(fi, atim, mtim, fstFlags)
-	if errno != wasiESuccess {
-		return errno
-	}
+	targetAtim, targetMtim := computeTargetTimes(fi, atim, mtim, fstFlags)
 
 	if err := os.Chtimes(of.Name(), targetAtim, targetMtim); err != nil {
 		return mapOSError(err)
@@ -1644,7 +1641,7 @@ func (s *State) Xfd_filestat_set_times(fd int32, atim, mtim int64, fstFlags int3
 	return wasiESuccess
 }
 
-func (s *State) computeTargetTimes(fi fs.FileInfo, atim, mtim int64, fstFlags int32) (time.Time, time.Time, int32) {
+func computeTargetTimes(fi fs.FileInfo, atim, mtim int64, fstFlags int32) (time.Time, time.Time) {
 	targetAtim := getAtimeFromStat(fi)
 	if fstFlags&fstAtimNow != 0 {
 		targetAtim = time.Now()
@@ -1658,7 +1655,7 @@ func (s *State) computeTargetTimes(fi fs.FileInfo, atim, mtim int64, fstFlags in
 	} else if fstFlags&fstMtim != 0 {
 		targetMtim = time.Unix(0, mtim)
 	}
-	return targetAtim, targetMtim, wasiESuccess
+	return targetAtim, targetMtim
 }
 
 // Xpath_filestat_set_times implements path_filestat_set_times.
@@ -1680,10 +1677,7 @@ func (s *State) Xpath_filestat_set_times(dirfd, flags, pathPtr, pathLen int32, a
 		return mapOSError(err)
 	}
 
-	targetAtim, targetMtim, errno := s.computeTargetTimes(fi, atim, mtim, fstFlags)
-	if errno != wasiESuccess {
-		return errno
-	}
+	targetAtim, targetMtim := computeTargetTimes(fi, atim, mtim, fstFlags)
 
 	if err := os.Chtimes(primary, targetAtim, targetMtim); err != nil {
 		return mapOSError(err)
