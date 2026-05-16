@@ -16,6 +16,15 @@ func (r *readAtStub) ReadAt(p []byte, off int64) (int, error) {
 	return r.readAt(p, off)
 }
 
+type writeAtStub struct {
+	fsFile
+	writeAt func([]byte, int64) (int, error)
+}
+
+func (w *writeAtStub) WriteAt(p []byte, off int64) (int, error) {
+	return w.writeAt(p, off)
+}
+
 // setupOsFileFd creates a real OS-backed file fd entry at the given fd slot.
 // Returns the file path for later verification.
 func setupOsFileFd(t *testing.T, s *State, fdIdx int, content []byte) string {
@@ -33,7 +42,7 @@ func setupOsFileFd(t *testing.T, s *State, fdIdx int, content []byte) string {
 	for len(s.fds) <= fdIdx {
 		s.fds = append(s.fds, fdEntry{})
 	}
-	s.fds[fdIdx] = fdEntry{fdType: 4, file: &osFile{f}}
+	s.fds[fdIdx] = fdEntry{fdType: fdFile, file: &osFile{f}}
 	return path
 }
 
@@ -161,7 +170,7 @@ func TestGroupEPositionedIO(t *testing.T) {
 		for len(s.fds) <= 5 {
 			s.fds = append(s.fds, fdEntry{})
 		}
-		s.fds[5] = fdEntry{fdType: 4, file: &FSFileWrap{File: f}}
+		s.fds[5] = fdEntry{fdType: fdFile, file: &FSFileWrap{File: f}}
 		if errno := s.Xfd_datasync(5); errno != wasiESuccess {
 			t.Errorf("got %d, want ESUCCESS", errno)
 		}
@@ -229,7 +238,7 @@ func TestGroupEPositionedIO(t *testing.T) {
 				return 7, errors.New("real error")
 			},
 		}
-		s.fds = append(s.fds, fdEntry{fdType: 4, file: stub})
+		s.fds = append(s.fds, fdEntry{fdType: fdFile, file: stub})
 		fd := int32(len(s.fds) - 1)
 
 		binary.LittleEndian.PutUint32(buf[nresOff:], 999) // poison
@@ -263,7 +272,7 @@ func TestGroupEPositionedIO(t *testing.T) {
 			s.fds = append(s.fds, fdEntry{})
 		}
 		// FSFileWrap (from os.DirFS) does not support io.ReaderAt or io.WriterAt.
-		s.fds[5] = fdEntry{fdType: 4, file: &FSFileWrap{File: f}}
+		s.fds[5] = fdEntry{fdType: fdFile, file: &FSFileWrap{File: f}}
 
 		binary.LittleEndian.PutUint32(buf[iovPtrOff:], uint32(iovDataOff))
 		binary.LittleEndian.PutUint32(buf[iovPtrOff+4:], 4)
@@ -291,5 +300,46 @@ func TestGroupEPositionedIO(t *testing.T) {
 				t.Errorf("nwritten = %d, want 0 on error", nwritten)
 			}
 		})
+	})
+
+	t.Run("Xfd_pwrite returns EIO and preserves partial byte count when WriteAt returns error", func(t *testing.T) {
+		s, buf := newTestState()
+
+		// Put "PARTIALDATA" into the guest buffer at iovDataOff
+		copy(buf[iovDataOff:], "PARTIALDATA")
+		// Build iovec: {bufPtr=iovDataOff, bufLen=11}
+		binary.LittleEndian.PutUint32(buf[iovPtrOff:], uint32(iovDataOff))
+		binary.LittleEndian.PutUint32(buf[iovPtrOff+4:], 11)
+
+		var captured []byte
+		var capturedOff int64
+		// stubFile implements WriteAt and returns an error after partial write
+		stub := &writeAtStub{
+			writeAt: func(p []byte, off int64) (n int, err error) {
+				captured = make([]byte, len(p))
+				copy(captured, p)
+				capturedOff = off
+				return 7, errors.New("real error")
+			},
+		}
+		s.fds = append(s.fds, fdEntry{fdType: fdFile, file: stub})
+		fd := int32(len(s.fds) - 1)
+
+		binary.LittleEndian.PutUint32(buf[nresOff:], 999) // poison
+		errno := s.Xfd_pwrite(fd, iovPtrOff, 1, 100, nresOff)
+
+		if errno != wasiEIo {
+			t.Errorf("got errno %d, want EIO (%d)", errno, wasiEIo)
+		}
+		nwritten := binary.LittleEndian.Uint32(buf[nresOff : nresOff+4])
+		if nwritten != 7 {
+			t.Errorf("nwritten = %d, want 7", nwritten)
+		}
+		if string(captured) != "PARTIALDATA" {
+			t.Errorf("captured content = %q, want %q", string(captured), "PARTIALDATA")
+		}
+		if capturedOff != 100 {
+			t.Errorf("captured offset = %d, want 100", capturedOff)
+		}
 	})
 }
