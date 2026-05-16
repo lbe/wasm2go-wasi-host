@@ -26,3 +26,7 @@ func parseImports(src string) ([]string, error) {
 
 	return imports, nil
 }
+
+func transpile(wasmPath string) (string, error) {
+	return "", nil
+}
