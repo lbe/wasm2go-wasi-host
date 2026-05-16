@@ -77,7 +77,11 @@ const (
 	rightFdstatGet      uint64 = 1 << 5
 	rightFdstatSetFlags uint64 = 1 << 6
 	rightFilestatGet    uint64 = 1 << 7
-	rightPollOneoff     uint64 = 1 << 14
+	// WASI filestat_set_times flags.
+	fstAtim    int32 = 1 << 0
+	fstMtim    int32 = 1 << 1
+	fstAtimNow int32 = 1 << 2
+	fstMtimNow int32 = 1 << 3
 )
 
 // Rights bitmask bundles for regular files and character devices.
@@ -1579,17 +1583,12 @@ func (s *State) Xfd_filestat_set_size(fd int32, size int64) int32 {
 	return wasiESuccess
 }
 // Xfd_filestat_set_times implements fd_filestat_set_times.
-// fstFlags:
-// - bit 0 (1): ATIM (not implemented)
-// - bit 1 (2): MTIM
-// - bit 2 (4): ATIM_NOW (not implemented)
-// - bit 3 (8): MTIM_NOW
 //
 // For osFile-backed fds, calls os.Chtimes with the specified mtim
 // nanosecond value or the current time if MTIM_NOW is set. For
 // fs.FS-backed fds, returns ESUCCESS without mutation.
 func (s *State) Xfd_filestat_set_times(fd int32, atim, mtim int64, fstFlags int32) int32 {
-	if fstFlags&10 == 0 { // MTIM | MTIM_NOW
+	if fstFlags&(fstMtim|fstMtimNow) == 0 {
 		return wasiESuccess
 	}
 	if fd < 0 || int(fd) >= len(s.fds) {
@@ -1601,19 +1600,20 @@ func (s *State) Xfd_filestat_set_times(fd int32, atim, mtim int64, fstFlags int3
 	}
 	if of, ok := entry.file.(*osFile); ok {
 		targetMtim := mtim
-		if fstFlags&8 != 0 {
+		if fstFlags&fstMtimNow != 0 {
 			targetMtim = time.Now().UnixNano()
 		}
 		return applyMtim(of.Name(), targetMtim)
 	}
 	return wasiESuccess
 }
+
 // Xpath_filestat_set_times implements path_filestat_set_times. Only the
 // MTIM flag (bit 1) is currently acted upon; if it is not set the call is
 // a no-op. Resolves the path and calls os.Chtimes. Returns ESUCCESS
 // without mutation for read-only mounts.
 func (s *State) Xpath_filestat_set_times(dirfd, flags, pathPtr, pathLen int32, atim, mtim int64, fstFlags int32) int32 {
-	if fstFlags&2 == 0 {
+	if fstFlags&fstMtim == 0 {
 		return wasiESuccess
 	}
 	primary := s.resolvePrimary(dirfd, pathPtr, pathLen)
