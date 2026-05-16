@@ -33,7 +33,7 @@ func transpile(wasmPath string) (string, error) {
 	if err != nil {
 		return "", err
 	}
-	return string(out), nil
+	return deduplicateInterfaceMethods(string(out)), nil
 }
 
 // deduplicateInterfaceMethods removes duplicate method signatures from generated
