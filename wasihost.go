@@ -1639,10 +1639,11 @@ func (s *State) Xfd_filestat_set_times(fd int32, atim, mtim int64, fstFlags int3
 	return wasiESuccess
 }
 
-// Xpath_filestat_set_times implements path_filestat_set_times. Only the
-// MTIM flag (bit 1) is currently acted upon; if it is not set the call is
-// a no-op. Resolves the path and calls os.Chtimes. Returns ESUCCESS
-// without mutation for read-only mounts.
+// Xpath_filestat_set_times implements path_filestat_set_times.
+//
+// MTIM (bit 1) and MTIM_NOW (bit 3) flags are acted upon. Resolves the
+// path and calls os.Chtimes. Returns ESUCCESS without mutation for
+// read-only mounts.
 func (s *State) Xpath_filestat_set_times(dirfd, flags, pathPtr, pathLen int32, atim, mtim int64, fstFlags int32) int32 {
 	if fstFlags&(fstMtim|fstMtimNow) == 0 {
 		return wasiESuccess
