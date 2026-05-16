@@ -191,6 +191,47 @@ func TestFilestatMutations(t *testing.T) {
 		}
 	})
 
+	t.Run("Xfd_filestat_set_times fstFlags=ATIM_NOW updates atime but not mtime", func(t *testing.T) {
+		s, _ := newTestState()
+		filePath := setupOsFileFd(t, s, 5, []byte("data"))
+
+		// Ensure we have a baseline and distinguish from "now"
+		past := time.Now().Add(-1 * time.Hour).Truncate(time.Second)
+		if err := os.Chtimes(filePath, past, past); err != nil {
+			t.Fatal(err)
+		}
+
+		fi0, err := os.Stat(filePath)
+		if err != nil {
+			t.Fatal(err)
+		}
+		mtimeBefore := fi0.ModTime()
+
+		// 4 is ATIM_NOW
+		errno := s.Xfd_filestat_set_times(5, 0, 0, 4)
+		if errno != wasiESuccess {
+			t.Fatalf("filestat_set_times returned %d, want ESUCCESS", errno)
+		}
+
+		fi1, err := os.Stat(filePath)
+		if err != nil {
+			t.Fatal(err)
+		}
+
+		atimeAfter := getAtimeFromStat(fi1)
+		mtimeAfter := fi1.ModTime()
+
+		// atime should be close to now
+		if time.Since(atimeAfter) > 10*time.Second {
+			t.Errorf("atime = %v, not close to now (since=%v)", atimeAfter, time.Since(atimeAfter))
+		}
+
+		// mtime should be unchanged
+		if !mtimeAfter.Equal(mtimeBefore) {
+			t.Errorf("mtime changed: before=%v after=%v", mtimeBefore, mtimeAfter)
+		}
+	})
+
 	t.Run("applyMtim error on nonexistent path", func(t *testing.T) {
 		errno := applyMtim("/nonexistent/path/deleted.txt", targetMtimNs)
 		if errno == wasiESuccess {
