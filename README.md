@@ -14,7 +14,7 @@ A specialized **WASI snapshot-preview1** host for Go, designed to run code trans
 
 The primary goal of this project is to provide a reference implementation to confirm compliance with the [WASI preview 1](https://github.com/WebAssembly/WASI/blob/wasi-0.1/preview1/docs.md) specification when using `wasm2go`. It implements all 40 WASI preview1 functions plus the `env.call_host_function` stub required by certain modules.
 
-This repository also includes `wasm2go-run`, a specialized runner for the [WebAssembly/wasi-testsuite](https://github.com/WebAssembly/wasi-testsuite).
+This repository also includes `wasm2go-run`, a specialized executable used by the [WebAssembly/wasi-testsuite](https://github.com/WebAssembly/wasi-testsuite). The forked `wasi-testsuite` submodule owns the test runner, inventory, manifests, fixtures, and `wasm2go` runtime adapter. The compliance target is every WASI Preview1 `wasm32-wasip1` suite in that submodule.
 
 While it can be used as a general-purpose host for `wasm2go` modules, it is intentionally lightweight and standard-library-only. For production-grade performance, advanced sandboxing, or more complex host integrations, more mature runtimes like `wasmtime` or `wazero` are recommended.
 
@@ -117,12 +117,19 @@ See the [`wasm2go-run` documentation](./cmd/wasm2go-run/README.md).
     - `make format`: Formats the code.
 
 3.  **Run the Quality Gate**:
-    The project includes a comprehensive quality gate test that runs linting, Python adapter tests, and E2E AssemblyScript tests. It requires a clean git status to pass.
+    The project includes a quality gate test that runs linting, the submodule adapter unit test, and a `wasm2go-run` build. It requires a clean git status to pass.
     ```bash
     go test -v -run TestQualityGate
     ```
 
-4.  **Formatting**:
+4.  **Run the all-Preview1 compliance inventory**:
+    Build `wasm2go-run`, then execute every WASI Preview1 suite discovered by the `wasi-testsuite` submodule. C and Rust failures are expected until follow-up compliance work fixes them. This command is promoted into the mandatory quality gate only after all Preview1 C and Rust failures are fixed.
+    ```bash
+    go build -o ./bin/wasm2go-run ./cmd/wasm2go-run
+    ./scripts/e2e-wasip1.sh
+    ```
+
+5.  **Formatting**:
     Ensure code is formatted before committing:
     ```bash
     gofmt -w .

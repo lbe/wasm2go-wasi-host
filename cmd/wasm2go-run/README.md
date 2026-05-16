@@ -58,10 +58,13 @@ You can run the tests for the runner package:
 go test ./...
 ```
 
-To verify the runner against the `wasi-testsuite` AssemblyScript samples, use the provided E2E script from the repository root:
+To execute every WASI Preview1 suite discovered by the `wasi-testsuite` submodule, build the runner and use the all-Preview1 E2E script from the repository root:
 ```bash
-./scripts/e2e-assemblyscript.sh
+go build -o ./bin/wasm2go-run ./cmd/wasm2go-run
+./scripts/e2e-wasip1.sh
 ```
+
+C and Rust Preview1 failures are expected until follow-up compliance work fixes them. This all-Preview1 command becomes part of the mandatory quality gate only after those failures are fixed.
 
 ### Building
 

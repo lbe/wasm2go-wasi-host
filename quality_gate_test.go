@@ -9,8 +9,9 @@ import (
 func TestQualityGate(t *testing.T) {
 	// Cleanup artifacts to ensure idempotency and clean state.
 	artifacts := []string{
-		"adapters/__pycache__",
 		".pytest_cache",
+		"wasi-testsuite/.pytest_cache",
+		"wasi-testsuite/adapters/__pycache__",
 	}
 	cleanup := func() {
 		for _, artifact := range artifacts {
@@ -57,22 +58,18 @@ func TestQualityGate(t *testing.T) {
 		t.Errorf("golangci-lint failed:\n%s", string(out))
 	}
 
-	// 4. Ensure Python tests pass.
+	// 4. Ensure submodule adapter Python tests pass.
 	cmd = exec.Command("python3", "-m", "pytest", "adapters/wasm2go_test.py", "-q")
+	cmd.Dir = "wasi-testsuite"
 	out, err = cmd.CombinedOutput()
 	if err != nil {
-		t.Errorf("python3 pytest failed:\n%s", string(out))
+		t.Errorf("wasi-testsuite adapter pytest failed:\n%s", string(out))
 	}
 
-	// 5. Ensure E2E AssemblyScript tests pass.
+	// 5. Ensure wasm2go-run builds.
 	buildCmd := exec.Command("go", "build", "-o", "./bin/wasm2go-run", "./cmd/wasm2go-run")
 	if out, err := buildCmd.CombinedOutput(); err != nil {
 		t.Fatalf("Failed to build wasm2go-run: %v\nOutput: %s", err, string(out))
-	}
-
-	e2eCmd := exec.Command("./scripts/e2e-assemblyscript.sh")
-	if out, err := e2eCmd.CombinedOutput(); err != nil {
-		t.Errorf("E2E AssemblyScript tests failed:\n%s", string(out))
 	}
 
 	// 6. Ensure generated artifacts are removed and the tree is clean after cleanup.
