@@ -81,7 +81,7 @@ func TestGenerateMain(t *testing.T) {
 		if err != nil {
 			t.Errorf("generated code with escapes does not parse: %v\nCode:\n%s", err, got)
 		}
-		
+
 		if !strings.Contains(got, `"b=escap \" ing"`) {
 			t.Error("expected escaped environment variable string")
 		}

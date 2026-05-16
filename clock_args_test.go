@@ -110,7 +110,7 @@ func TestClockAndArgQueries(t *testing.T) {
 		// Check strings
 		prog := string(buf[argvBufOff : argvBufOff+5])
 		flag := string(buf[argvBufOff+5 : argvBufOff+12])
-		val  := string(buf[argvBufOff+12 : argvBufOff+16])
+		val := string(buf[argvBufOff+12 : argvBufOff+16])
 		if prog != "prog\x00" {
 			t.Errorf("got prog %q, want %q", prog, "prog\x00")
 		}

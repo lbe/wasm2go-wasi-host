@@ -12,8 +12,8 @@ import (
 type stubFSFile struct{}
 
 func (stubFSFile) Read(_ []byte) (int, error) { return 0, io.EOF }
-func (stubFSFile) Stat() (fs.FileInfo, error)  { return nil, nil }
-func (stubFSFile) Close() error                { return nil }
+func (stubFSFile) Stat() (fs.FileInfo, error) { return nil, nil }
+func (stubFSFile) Close() error               { return nil }
 
 type errorWriter struct {
 	err error
@@ -38,14 +38,14 @@ func newTestState(opts ...Option) (*State, []byte) {
 
 func TestGroupAFoundation(t *testing.T) {
 	const (
-		countOff    = 100
-		bufSizeOff  = 108
-		envPtrOff   = 200
-		envBufOff   = 300
-		prestatOff  = 400
-		statOff     = 500
-		pathBufOff  = 600
-		randOff     = 700
+		countOff   = 100
+		bufSizeOff = 108
+		envPtrOff  = 200
+		envBufOff  = 300
+		prestatOff = 400
+		statOff    = 500
+		pathBufOff = 600
+		randOff    = 700
 	)
 
 	t.Run("environ_sizes_get writes count and total length", func(t *testing.T) {

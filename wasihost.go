@@ -402,6 +402,7 @@ func (s *State) Xenviron_sizes_get(countPtr, bufSizePtr int32) int32 {
 	writeStringTableSizes(s.mem(), countPtr, bufSizePtr, s.env)
 	return wasiESuccess
 }
+
 // Xenviron_get implements environ_get. Writes a pointer array at envPtr
 // and the corresponding null-terminated "KEY=VALUE" strings packed at
 // envBufPtr into guest memory.
@@ -409,6 +410,7 @@ func (s *State) Xenviron_get(envPtr, envBufPtr int32) int32 {
 	writeStringTable(s.mem(), envPtr, envBufPtr, s.env)
 	return wasiESuccess
 }
+
 // Xfd_prestat_get implements fd_prestat_get. Returns the prestat struct
 // for the preopen directory at fd. Returns EBADF if fd is beyond the
 // last preopen.
@@ -423,6 +425,7 @@ func (s *State) Xfd_prestat_get(fd, prestatPtr int32) int32 {
 	binary.LittleEndian.PutUint32(mem[prestatPtr+4:], pathLen)
 	return wasiESuccess
 }
+
 // Xfd_prestat_dir_name implements fd_prestat_dir_name. Writes the guest
 // path string for the preopen directory at fd into guest memory.
 func (s *State) Xfd_prestat_dir_name(fd, pathPtr, pathLen int32) int32 {
@@ -435,6 +438,7 @@ func (s *State) Xfd_prestat_dir_name(fd, pathPtr, pathLen int32) int32 {
 	copy(mem[pathPtr:], name)
 	return wasiESuccess
 }
+
 // Xfd_fdstat_get implements fd_fdstat_get. Writes a 24-byte fdstat struct
 // at statPtr. fds 0–2 are reported as character devices; all others use
 // the type recorded in the fd table.
@@ -496,12 +500,14 @@ func (s *State) Xfd_renumber(fd, to int32) int32 {
 	s.fds[fd] = fdEntry{}
 	return wasiESuccess
 }
+
 // Xproc_exit implements proc_exit. Panics with [ExitError] so that the
 // embedding application's eval boundary can recover it and obtain the
 // guest exit code.
 func (s *State) Xproc_exit(code int32) {
 	panic(ExitError{Code: code})
 }
+
 // Xrandom_get implements random_get. Fills the guest memory region
 // [bufPtr, bufPtr+bufLen) with cryptographically random bytes.
 func (s *State) Xrandom_get(bufPtr, bufLen int32) int32 {
@@ -1590,6 +1596,7 @@ func (s *State) Xfd_filestat_set_size(fd int32, size int64) int32 {
 	}
 	return wasiESuccess
 }
+
 // Xfd_filestat_set_times implements fd_filestat_set_times.
 //
 // For osFile-backed fds, calls os.Chtimes with the specified mtim
@@ -1679,4 +1686,3 @@ func mapOSError(err error) int32 {
 	}
 	return wasiEIo
 }
-

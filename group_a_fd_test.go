@@ -582,11 +582,11 @@ func TestFdReaddir(t *testing.T) {
 			t.Fatalf("first readdir = %d", errno)
 		}
 		used := binary.LittleEndian.Uint32(buf[usedPtr : usedPtr+4])
-		
+
 		type entry struct {
-			next   uint64
-			name   string
-			dlen   uint32
+			next uint64
+			name string
+			dlen uint32
 		}
 		var entries []entry
 		curr := uint32(rdBufPtr)
@@ -608,7 +608,7 @@ func TestFdReaddir(t *testing.T) {
 		for i := uint32(rdBufPtr); i < rdBufPtr+rdBufLen; i++ {
 			buf[i] = 0
 		}
-		
+
 		errno = s.Xfd_readdir(3, rdBufPtr, rdBufLen, int64(cookie), usedPtr)
 		if errno != wasiESuccess {
 			t.Fatalf("second readdir = %d", errno)
@@ -617,10 +617,10 @@ func TestFdReaddir(t *testing.T) {
 		if used2 == 0 {
 			t.Fatal("second readdir returned 0 entries")
 		}
-		
+
 		nameLen2 := binary.LittleEndian.Uint32(buf[rdBufPtr+16 : rdBufPtr+20])
 		name2 := string(buf[rdBufPtr+24 : rdBufPtr+24+int32(nameLen2)])
-		
+
 		if name2 != entries[1].name {
 			t.Errorf("second call (cookie=%d) got %q, want %q", cookie, name2, entries[1].name)
 		}
@@ -883,8 +883,8 @@ func TestXpollOneoff(t *testing.T) {
 	t.Run("fd_read invalid fd", func(t *testing.T) {
 		buf := make([]byte, 65536)
 		s := New(func() []byte { return buf })
-		binary.LittleEndian.PutUint32(buf[inPtr+40:], 1)  // fd_read
-		binary.LittleEndian.PutUint32(buf[inPtr+8:], 99)  // invalid fd
+		binary.LittleEndian.PutUint32(buf[inPtr+40:], 1) // fd_read
+		binary.LittleEndian.PutUint32(buf[inPtr+8:], 99) // invalid fd
 		if errno := s.Xpoll_oneoff(inPtr, outPtr, 1, neventsPtr); errno != wasiESuccess {
 			t.Fatalf("Xpoll_oneoff = %d", errno)
 		}

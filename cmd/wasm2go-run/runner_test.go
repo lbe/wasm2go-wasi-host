@@ -54,7 +54,6 @@ func TestStdoutAndEnv(t *testing.T) {
 	})
 }
 
-
 func TestProcExit(t *testing.T) {
 	tests := []struct {
 		name         string
@@ -94,7 +93,6 @@ func TestProcExit(t *testing.T) {
 		})
 	}
 }
-
 
 func TestDirMount(t *testing.T) {
 	wasmFile := "../../wasi-testsuite/tests/c/testsuite/wasm32-wasip1/fopen-with-access.wasm"

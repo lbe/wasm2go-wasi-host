@@ -39,14 +39,14 @@ func TestRootWritableMountFallback(t *testing.T) {
 	t.Run("path_create_directory uses hostRoot fallback", func(t *testing.T) {
 		s, buf, hostRoot := setup(t)
 		nameOff, nameLen := writePath(buf, pathOff1, "newdir")
-		
+
 		// If it attempts to create "/newdir" (root of host OS), it will likely fail with EACCES or create in real root.
 		// We want it to create hostRoot/newdir.
 		errno := s.Xpath_create_directory(3, nameOff, nameLen)
 		if errno != wasiESuccess {
 			t.Fatalf("create_directory returned %d, want ESUCCESS", errno)
 		}
-		
+
 		target := filepath.Join(hostRoot, "newdir")
 		if _, err := os.Stat(target); err != nil {
 			t.Errorf("directory not created at %s: %v", target, err)
@@ -60,7 +60,7 @@ func TestRootWritableMountFallback(t *testing.T) {
 			t.Fatal(err)
 		}
 		nameOff, nameLen := writePath(buf, pathOff1, "remdir")
-		
+
 		errno := s.Xpath_remove_directory(3, nameOff, nameLen)
 		if errno != wasiESuccess {
 			t.Fatalf("remove_directory returned %d, want ESUCCESS", errno)
@@ -77,7 +77,7 @@ func TestRootWritableMountFallback(t *testing.T) {
 			t.Fatal(err)
 		}
 		nameOff, nameLen := writePath(buf, pathOff1, "file.txt")
-		
+
 		errno := s.Xpath_unlink_file(3, nameOff, nameLen)
 		if errno != wasiESuccess {
 			t.Fatalf("unlink_file returned %d, want ESUCCESS", errno)
@@ -94,7 +94,7 @@ func TestRootWritableMountFallback(t *testing.T) {
 			t.Fatal(err)
 		}
 		nameOff, nameLen := writePath(buf, pathOff1, "link")
-		
+
 		errno := s.Xpath_readlink(3, nameOff, nameLen, bufOff, 100, nreadOff)
 		if errno != wasiESuccess {
 			t.Fatalf("readlink returned %d, want ESUCCESS", errno)
@@ -105,7 +105,7 @@ func TestRootWritableMountFallback(t *testing.T) {
 		s, buf, hostRoot := setup(t)
 		nameOff, nameLen := writePath(buf, pathOff1, "newsym")
 		targetOff, targetLen := writePath(buf, pathOff2, "target")
-		
+
 		errno := s.Xpath_symlink(targetOff, targetLen, 3, nameOff, nameLen)
 		if errno != wasiESuccess {
 			t.Fatalf("symlink returned %d, want ESUCCESS", errno)
@@ -123,7 +123,7 @@ func TestRootWritableMountFallback(t *testing.T) {
 		}
 		oldOff, oldLen := writePath(buf, pathOff1, "old")
 		newOff, newLen := writePath(buf, pathOff2, "newlink")
-		
+
 		errno := s.Xpath_link(3, 0, oldOff, oldLen, 3, newOff, newLen)
 		if errno != wasiESuccess {
 			t.Fatalf("link returned %d, want ESUCCESS", errno)
@@ -145,10 +145,10 @@ func TestRootWritableMountFallback(t *testing.T) {
 	})
 
 	t.Run("FFI escape via .. uses hostRoot fallback", func(t *testing.T) {
-		// Verify that ".." can escape hostRoot if the host OS allows it, 
+		// Verify that ".." can escape hostRoot if the host OS allows it,
 		// because we resolve it relative to hostRoot.
 		s, buf, hostRoot := setup(t)
-		
+
 		// Create a directory outside hostRoot
 		parentDir := filepath.Dir(hostRoot)
 		outsideDirName := "outside_" + filepath.Base(hostRoot)
@@ -158,15 +158,15 @@ func TestRootWritableMountFallback(t *testing.T) {
 		// Path: "../" + outsideDirName
 		relPath := filepath.Join("..", outsideDirName)
 		nameOff, nameLen := writePath(buf, pathOff1, relPath)
-		
+
 		errno := s.Xpath_create_directory(3, nameOff, nameLen)
-		// This should fail in RED because it currently resolves to /../outside_... 
+		// This should fail in RED because it currently resolves to /../outside_...
 		// which is /outside_... on host root, likely failing with EACCES.
 		// After fix, it should resolve to hostRoot/../outside_... which works.
 		if errno != wasiESuccess {
 			t.Fatalf("create_directory with .. returned %d, want ESUCCESS", errno)
 		}
-		
+
 		if _, err := os.Stat(outsidePath); err != nil {
 			t.Errorf("directory not created outside hostRoot: %v", err)
 		}
