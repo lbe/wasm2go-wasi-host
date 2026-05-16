@@ -49,19 +49,19 @@ func TestInitializationAndOSErrorMapping(t *testing.T) {
 	// Test mapOSError
 	tests := []struct {
 		err  error
-		want uint32
+		want int32
 	}{
-		{os.ErrNotExist, 44},
-		{os.ErrExist, 20},
-		{syscall.ENOTEMPTY, 55},
-		{syscall.ENOTDIR, 54},
-		{syscall.EISDIR, 31},
-		{syscall.EACCES, 2},
-		{syscall.EPERM, 63},
-		{syscall.EROFS, 66},
-		{syscall.EXDEV, 75},
-		{syscall.EINVAL, 28},
-		{errors.New("unknown"), 29},
+		{os.ErrNotExist, int32(wasiENoEnt)},
+		{os.ErrExist, int32(wasiEExist)},
+		{syscall.ENOTEMPTY, int32(wasiENotEmpty)},
+		{syscall.ENOTDIR, int32(wasiENotDir)},
+		{syscall.EISDIR, int32(wasiEIsdir)},
+		{syscall.EACCES, int32(wasiEAcces)},
+		{syscall.EPERM, int32(wasiEPerm)},
+		{syscall.EROFS, int32(wasiEROFS)},
+		{syscall.EXDEV, int32(wasiEXdev)},
+		{syscall.EINVAL, int32(wasiEInval)},
+		{errors.New("unknown"), int32(wasiEIo)},
 	}
 
 	for _, tt := range tests {

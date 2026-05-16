@@ -728,7 +728,7 @@ func (s *State) Xpath_create_directory(dirfd, pathPtr, pathLen int32) int32 {
 		return errno
 	}
 	if err := os.Mkdir(path, 0755); err != nil {
-		return int32(mapOSError(err))
+		return mapOSError(err)
 	}
 	return wasiESuccess
 }
@@ -744,13 +744,13 @@ func (s *State) Xpath_remove_directory(dirfd, pathPtr, pathLen int32) int32 {
 	}
 	fi, err := os.Lstat(path)
 	if err != nil {
-		return int32(mapOSError(err))
+		return mapOSError(err)
 	}
 	if !fi.IsDir() {
 		return wasiENotDir
 	}
 	if err := os.Remove(path); err != nil {
-		return int32(mapOSError(err))
+		return mapOSError(err)
 	}
 	return wasiESuccess
 }
@@ -765,13 +765,13 @@ func (s *State) Xpath_unlink_file(dirfd, pathPtr, pathLen int32) int32 {
 	}
 	fi, err := os.Lstat(path)
 	if err != nil {
-		return int32(mapOSError(err))
+		return mapOSError(err)
 	}
 	if fi.IsDir() {
 		return wasiEIsdir
 	}
 	if err := os.Remove(path); err != nil {
-		return int32(mapOSError(err))
+		return mapOSError(err)
 	}
 	return wasiESuccess
 }
@@ -787,7 +787,7 @@ func (s *State) Xpath_readlink(dirfd, pathPtr, pathLen, bufPtr, bufLen, nreadPtr
 	}
 	target, err := os.Readlink(path)
 	if err != nil {
-		return int32(mapOSError(err))
+		return mapOSError(err)
 	}
 	mem := s.mem()
 	n := copy(mem[bufPtr:bufPtr+bufLen], target)
@@ -806,7 +806,7 @@ func (s *State) Xpath_symlink(oldPathPtr, oldPathLen, dirfd, newPathPtr, newPath
 		return errno
 	}
 	if err := os.Symlink(target, path); err != nil {
-		return int32(mapOSError(err))
+		return mapOSError(err)
 	}
 	return wasiESuccess
 }
@@ -824,7 +824,7 @@ func (s *State) Xpath_link(oldDirfd, oldFlags, oldPathPtr, oldPathLen, newDirfd,
 		return newErr
 	}
 	if err := os.Link(oldPath, newPath); err != nil {
-		return int32(mapOSError(err))
+		return mapOSError(err)
 	}
 	return wasiESuccess
 }
@@ -1556,7 +1556,7 @@ func (s *State) Xfd_filestat_set_size(fd int32, size int64) int32 {
 	}
 	if of, ok := entry.file.(*osFile); ok {
 		if err := of.Truncate(size); err != nil {
-			return int32(mapOSError(err))
+			return mapOSError(err)
 		}
 	}
 	return wasiESuccess
@@ -1604,7 +1604,7 @@ func applyMtim(path string, mtim int64) int32 {
 	mtime := time.Unix(0, mtim)
 	atime := time.Now()
 	if err := os.Chtimes(path, atime, mtime); err != nil {
-		return int32(mapOSError(err))
+		return mapOSError(err)
 	}
 	return wasiESuccess
 }
@@ -1612,37 +1612,37 @@ func applyMtim(path string, mtim int64) int32 {
 // mapOSError converts a host OS error to the closest WASI errno value.
 // Canonical mappings: ErrNotExist→ENOENT(44), ErrExist→EEXIST(20),
 // ENOTEMPTY→ENOTEMPTY(55). All other errors map to EIO(29).
-func mapOSError(err error) uint32 {
+func mapOSError(err error) int32 {
 	if errors.Is(err, os.ErrNotExist) {
-		return uint32(wasiENoEnt)
+		return wasiENoEnt
 	}
 	if errors.Is(err, syscall.ENOTEMPTY) {
-		return uint32(wasiENotEmpty)
+		return wasiENotEmpty
 	}
 	if errors.Is(err, os.ErrExist) {
-		return uint32(wasiEExist)
+		return wasiEExist
 	}
 	if errors.Is(err, syscall.ENOTDIR) {
-		return uint32(wasiENotDir)
+		return wasiENotDir
 	}
 	if errors.Is(err, syscall.EISDIR) {
-		return uint32(wasiEIsdir)
+		return wasiEIsdir
 	}
 	if errors.Is(err, syscall.EACCES) {
-		return uint32(wasiEAcces)
+		return wasiEAcces
 	}
 	if errors.Is(err, syscall.EPERM) {
-		return uint32(wasiEPerm)
+		return wasiEPerm
 	}
 	if errors.Is(err, syscall.EROFS) {
-		return uint32(wasiEROFS)
+		return wasiEROFS
 	}
 	if errors.Is(err, syscall.EXDEV) {
-		return uint32(wasiEXdev)
+		return wasiEXdev
 	}
 	if errors.Is(err, syscall.EINVAL) {
-		return uint32(wasiEInval)
+		return wasiEInval
 	}
-	return uint32(wasiEIo)
+	return wasiEIo
 }
 
