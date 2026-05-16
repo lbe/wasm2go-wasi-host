@@ -2,9 +2,19 @@ package wasihost
 
 import (
 	"encoding/binary"
+	"errors"
 	"os"
 	"testing"
 )
+
+type readAtStub struct {
+	fsFile
+	readAt func([]byte, int64) (int, error)
+}
+
+func (r *readAtStub) ReadAt(p []byte, off int64) (int, error) {
+	return r.readAt(p, off)
+}
 
 // setupOsFileFd creates a real OS-backed file fd entry at the given fd slot.
 // Returns the file path for later verification.
@@ -203,6 +213,38 @@ func TestGroupEPositionedIO(t *testing.T) {
 			t.Error("Xsock_shutdown: want ENOSYS")
 		}
 		_ = buf
+	})
+
+	t.Run("Xfd_pread returns EIO and preserves partial byte count when ReadAt returns error", func(t *testing.T) {
+		s, buf := newTestState()
+
+		// Build iovec: {bufPtr=iovDataOff, bufLen=10}
+		binary.LittleEndian.PutUint32(buf[iovPtrOff:], uint32(iovDataOff))
+		binary.LittleEndian.PutUint32(buf[iovPtrOff+4:], 10)
+
+		// stubFile implements ReadAt and returns an error after partial read
+		stub := &readAtStub{
+			readAt: func(p []byte, off int64) (n int, err error) {
+				copy(p, "PARTIAL")
+				return 7, errors.New("real error")
+			},
+		}
+		s.fds = append(s.fds, fdEntry{fdType: 4, file: stub})
+		fd := int32(len(s.fds) - 1)
+
+		binary.LittleEndian.PutUint32(buf[nresOff:], 999) // poison
+		errno := s.Xfd_pread(fd, iovPtrOff, 1, 0, nresOff)
+
+		if errno != wasiEIo {
+			t.Errorf("got errno %d, want EIO (%d)", errno, wasiEIo)
+		}
+		nread := binary.LittleEndian.Uint32(buf[nresOff : nresOff+4])
+		if nread != 7 {
+			t.Errorf("nread = %d, want 7", nread)
+		}
+		if got := string(buf[iovDataOff : iovDataOff+7]); got != "PARTIAL" {
+			t.Errorf("buffer content = %q, want %q", got, "PARTIAL")
+		}
 	})
 
 	t.Run("Positioned I/O on unsupported types returns error", func(t *testing.T) {
