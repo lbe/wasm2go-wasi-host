@@ -9,8 +9,6 @@ import (
 func TestQualityGate(t *testing.T) {
 	// Cleanup artifacts to ensure idempotency and clean state.
 	artifacts := []string{
-		"./wasm2go-run",
-		"./wasm2go-run-debug",
 		"adapters/__pycache__",
 		".pytest_cache",
 	}
@@ -67,7 +65,7 @@ func TestQualityGate(t *testing.T) {
 	}
 
 	// 5. Ensure E2E AssemblyScript tests pass.
-	buildCmd := exec.Command("go", "build", "-o", "./wasm2go-run", "./cmd/wasm2go-run")
+	buildCmd := exec.Command("go", "build", "-o", "./bin/wasm2go-run", "./cmd/wasm2go-run")
 	if out, err := buildCmd.CombinedOutput(); err != nil {
 		t.Fatalf("Failed to build wasm2go-run: %v\nOutput: %s", err, string(out))
 	}

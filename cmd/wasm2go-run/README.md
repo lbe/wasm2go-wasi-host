@@ -66,5 +66,5 @@ To verify the runner against the `wasi-testsuite` AssemblyScript samples, use th
 ### Building
 
 ```bash
-go build -o wasm2go-run .
+go build -o bin/wasm2go-run .
 ```
