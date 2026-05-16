@@ -7,11 +7,16 @@
 [![CI](https://github.com/lbe/wasm2go-wasi-host/actions/workflows/ci.yml/badge.svg)](https://github.com/lbe/wasm2go-wasi-host/actions/workflows/ci.yml)
 [![Release](https://img.shields.io/github/v/release/lbe/wasm2go-wasi-host)](https://github.com/lbe/wasm2go-wasi-host/releases)
 
-A specialized **WASI snapshot-preview1** host for Go, designed to run the [WebAssembly/wasi-testsuite](https://github.com/WebAssembly/wasi-testsuite) against code transpiled by [wasm2go](https://github.com/ncruces/wasm2go).
+> [!WARNING]
+> **Status: Alpha.** This project is in early development. While the WASI Preview1 specification is stable, the internal host API and the `wasm2go-run` tool are subject to change. Use with caution in production environments.
+
+A specialized **WASI snapshot-preview1** host for Go, designed to run code transpiled by [wasm2go](https://github.com/ncruces/wasm2go).
 
 The primary goal of this project is to provide a reference implementation to confirm compliance with the [WASI preview 1](https://github.com/WebAssembly/WASI/blob/wasi-0.1/preview1/docs.md) specification when using `wasm2go`. It implements all 40 WASI preview1 functions plus the `env.call_host_function` stub required by certain modules.
 
-While it can be used as a general-purpose runner for `wasm2go` modules, it is intentionally lightweight and standard-library-only. For production-grade performance, advanced sandboxing, or more complex host integrations, more mature runtimes like `wasmtime` or `wazero` are recommended.
+This repository also includes `wasm2go-run`, a specialized runner for the [WebAssembly/wasi-testsuite](https://github.com/WebAssembly/wasi-testsuite).
+
+While it can be used as a general-purpose host for `wasm2go` modules, it is intentionally lightweight and standard-library-only. For production-grade performance, advanced sandboxing, or more complex host integrations, more mature runtimes like `wasmtime` or `wazero` are recommended.
 
 ## Features
 
@@ -19,7 +24,7 @@ While it can be used as a general-purpose runner for `wasm2go` modules, it is in
 - **wasm2go-Native**: Direct memory access via guest memory callbacks—no overhead from external runtime APIs.
 - **Capability-oriented Virtual Filesystem**: Support for multiple mounts, including read-only `fs.FS` (embedded files) and writable host directory mounts.
 - **Standard Library Only**: No external dependencies.
-- **CLI Runner**: Includes `wasm2go-run`, a tool that transpiles, compiles, and executes WASM files in one step.
+- **CLI Runner**: This repository includes [`wasm2go-run`](./cmd/wasm2go-run/README.md), a tool that transpiles, compiles, and executes WASM files in one step, primarily for testing.
 
 ## Installation
 
@@ -71,14 +76,7 @@ func main() {
 
 ### Using the CLI Runner
 
-The `wasm2go-run` tool automates the process of transpiling a WASM file to Go, compiling it, and running it with the WASI host.
-
-```bash
-go install github.com/lbe/wasm2go-wasi-host/cmd/wasm2go-run@latest
-
-# Run a WASM binary with mounts and environment variables
-wasm2go-run -dir ./data:/data -env KEY=VALUE my-app.wasm -- --app-arg1
-```
+See the [`wasm2go-run` documentation](./cmd/wasm2go-run/README.md).
 
 ## File System Support
 
