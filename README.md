@@ -125,11 +125,11 @@ See the [`wasm2go-run` documentation](./cmd/wasm2go-run/README.md).
     ```
 
 4.  **Run the all-Preview1 compliance inventory**:
-    Build `wasm2go-run`, point the adapter at that binary with `WASM2GO_RUN`, then let the `wasi-testsuite` submodule execute its own authoritative test inventory. If `WASM2GO_RUN` is unset, the adapter uses `wasm2go-run` from `PATH`. C and Rust failures are expected until follow-up compliance work fixes them. This command is promoted into the mandatory quality gate only after all Preview1 C and Rust failures are fixed.
+    Build `wasm2go-run`, then let the `wasi-testsuite` submodule execute its own authoritative test inventory. The wrapper defaults `WASM2GO_RUN` to this repository's `./bin/wasm2go-run` and `WASM2GO_WASIHOST_PATH` to this repository root; set either variable only to override those paths. C and Rust failures are expected until follow-up compliance work fixes them. This command is promoted into the mandatory quality gate only after all Preview1 C and Rust failures are fixed.
 
     ```bash
     go build -o ./bin/wasm2go-run ./cmd/wasm2go-run
-    WASM2GO_RUN="$PWD/bin/wasm2go-run" ./scripts/e2e-wasip1.sh
+    ./scripts/e2e-wasip1.sh
     ```
 
     Equivalent direct invocation from the submodule:
@@ -137,8 +137,10 @@ See the [`wasm2go-run` documentation](./cmd/wasm2go-run/README.md).
     ```bash
     go build -o ./bin/wasm2go-run ./cmd/wasm2go-run
     cd wasi-testsuite
-    WASM2GO_RUN="$PWD/../bin/wasm2go-run" python3 ./run-tests -r adapters/wasm2go.py
+    WASM2GO_RUN="$PWD/../bin/wasm2go-run" WASM2GO_WASIHOST_PATH="$PWD/.." python3 ./run-tests -r adapters/wasm2go.py
     ```
+
+    If `WASM2GO_RUN` is unset during direct `wasi-testsuite` use, the adapter uses `wasm2go-run` from `PATH`.
 
 5.  **Formatting**:
     Ensure code is formatted before committing:

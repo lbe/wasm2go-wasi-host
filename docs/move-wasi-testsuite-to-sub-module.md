@@ -93,7 +93,8 @@ The target scope is **all WASI Preview1 tests** in the submodule, not only Assem
   wasi-testsuite/adapters/wasm2go.py
   ```
 - [ ] The new script must not discover, enumerate, or filter test suites itself.
-- [ ] The new script must not set `WASM2GO_WASIHOST_PATH`.
+- [ ] The new script must default `WASM2GO_RUN` to `$REPO_ROOT/bin/wasm2go-run` while preserving caller overrides.
+- [ ] The new script must default `WASM2GO_WASIHOST_PATH` to `$REPO_ROOT` while preserving caller overrides.
 - [ ] The new script must call the submodule's authoritative runner:
   ```bash
   python3 ./run-tests -r adapters/wasm2go.py
@@ -129,13 +130,13 @@ All WASI Preview1 tests must be runnable immediately. Many are expected to fail 
 - [ ] Document the exact all-Preview1 command:
   ```bash
   go build -o ./bin/wasm2go-run ./cmd/wasm2go-run
-  WASM2GO_RUN="$PWD/bin/wasm2go-run" ./scripts/e2e-wasip1.sh
+  ./scripts/e2e-wasip1.sh
   ```
 - [ ] Document the equivalent direct submodule invocation:
   ```bash
   go build -o ./bin/wasm2go-run ./cmd/wasm2go-run
   cd wasi-testsuite
-  WASM2GO_RUN="$PWD/../bin/wasm2go-run" python3 ./run-tests -r adapters/wasm2go.py
+  WASM2GO_RUN="$PWD/../bin/wasm2go-run" WASM2GO_WASIHOST_PATH="$PWD/.." python3 ./run-tests -r adapters/wasm2go.py
   ```
 
 ### 7. Verify the separation
@@ -155,7 +156,7 @@ All WASI Preview1 tests must be runnable immediately. Many are expected to fail 
   ```
 - [ ] Run the all-Preview1 compliance command from this repository with the locally built binary:
   ```bash
-  WASM2GO_RUN="$PWD/bin/wasm2go-run" ./scripts/e2e-wasip1.sh
+  ./scripts/e2e-wasip1.sh
   ```
 - [ ] Confirm that `scripts/e2e-wasip1.sh` invokes all Preview1 suites from the submodule.
 - [ ] Confirm that `scripts/e2e-wasip1.sh` exits non-zero because of current WASI compliance failures.

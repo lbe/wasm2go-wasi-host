@@ -61,11 +61,11 @@ You can run the tests for the runner package:
 go test ./...
 ```
 
-To execute every WASI Preview1 suite during development, build `wasm2go-run`, point the adapter at that binary with `WASM2GO_RUN`, and run the `wasi-testsuite` submodule's authoritative runner:
+To execute every WASI Preview1 suite during development, build `wasm2go-run` and run the wrapper. The wrapper defaults `WASM2GO_RUN` to this repository's `./bin/wasm2go-run`, defaults `WASM2GO_WASIHOST_PATH` to this repository root, and delegates test discovery to the `wasi-testsuite` submodule's authoritative runner:
 
 ```bash
 go build -o ./bin/wasm2go-run ./cmd/wasm2go-run
-WASM2GO_RUN="$PWD/bin/wasm2go-run" ./scripts/e2e-wasip1.sh
+./scripts/e2e-wasip1.sh
 ```
 
 Equivalent direct invocation from the submodule:
@@ -73,10 +73,10 @@ Equivalent direct invocation from the submodule:
 ```bash
 go build -o ./bin/wasm2go-run ./cmd/wasm2go-run
 cd wasi-testsuite
-WASM2GO_RUN="$PWD/../bin/wasm2go-run" python3 ./run-tests -r adapters/wasm2go.py
+WASM2GO_RUN="$PWD/../bin/wasm2go-run" WASM2GO_WASIHOST_PATH="$PWD/.." python3 ./run-tests -r adapters/wasm2go.py
 ```
 
-If `WASM2GO_RUN` is unset, the adapter uses `wasm2go-run` from `PATH`.
+If `WASM2GO_RUN` is unset during direct `wasi-testsuite` use, the adapter uses `wasm2go-run` from `PATH`.
 
 C and Rust Preview1 failures are expected until follow-up compliance work fixes them. This all-Preview1 command becomes part of the mandatory quality gate only after those failures are fixed.
 
