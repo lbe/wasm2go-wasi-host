@@ -1531,11 +1531,20 @@ func (s *State) Xsched_yield() int32 {
 }
 
 // Xfd_datasync implements fd_datasync. Validates that fd is a valid
-// open file descriptor index and returns ESUCCESS. This is a minimal
-// implementation that does not perform a host-level sync.
+// open file descriptor index. For osFile-backed fds, invokes host Sync.
+// For fs.FS-backed files, returns ESUCCESS without mutation.
 func (s *State) Xfd_datasync(fd int32) int32 {
 	if fd < 0 || int(fd) >= len(s.fds) {
 		return wasiEBadf
+	}
+	entry := s.fds[fd]
+	if entry.file == nil && entry.fdType == 0 {
+		return wasiEBadf
+	}
+	if syncer, ok := entry.file.(interface{ Sync() error }); ok {
+		if err := syncer.Sync(); err != nil {
+			return mapOSError(err)
+		}
 	}
 	return wasiESuccess
 }
