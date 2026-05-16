@@ -26,7 +26,7 @@ func main() {
 		wasihost.WithEnv({{.}}),
 {{- end}}
 {{- range .Dirs}}
-		wasihost.WithMount({{.Host}}, {{.Guest}}),
+		wasihost.WithMount({{.Guest}}, os.DirFS({{.Host}})),
 {{- end}}
 		wasihost.WithStdin(os.Stdin),
 		wasihost.WithStdout(os.Stdout),
