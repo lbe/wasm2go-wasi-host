@@ -1518,18 +1518,25 @@ func (s *State) Xfd_tell(fd, offsetPtr int32) int32 {
 	return wasiESuccess
 }
 
-// Xsched_yield implements sched_yield. Returns ESUCCESS.
-func (s *State) Xsched_yield() int32 { return wasiESuccess }
+// Xsched_yield implements sched_yield. Always returns ESUCCESS.
+func (s *State) Xsched_yield() int32 {
+	return wasiESuccess
+}
 
-// Xfd_datasync implements fd_datasync. Returns ESUCCESS without calling
-// Sync on the underlying file. A future version may call
-// (*os.File).Sync for osFile-backed fds.
-func (s *State) Xfd_datasync(fd int32) int32 { return wasiESuccess }
+// Xfd_datasync implements fd_datasync. Validates that fd is a valid
+// open file descriptor index and returns ESUCCESS. This is a minimal
+// implementation that does not perform a host-level sync.
+func (s *State) Xfd_datasync(fd int32) int32 {
+	if fd < 0 || int(fd) >= len(s.fds) {
+		return wasiEBadf
+	}
+	return wasiESuccess
+}
 
-// Xfd_sync implements fd_sync. Always returns ESUCCESS without calling
-// Sync on the underlying file. Embedded fs.FS files have no sync
-// semantics, and ExifTool does not issue fd_sync in practice.
-func (s *State) Xfd_sync(fd int32) int32 { return wasiESuccess }
+// Xfd_sync implements fd_sync. Always returns ESUCCESS.
+func (s *State) Xfd_sync(fd int32) int32 {
+	return wasiESuccess
+}
 
 // Xfd_fdstat_set_flags implements fd_fdstat_set_flags. Always returns
 // ESUCCESS. Non-blocking I/O flags have no meaning in a synchronous
