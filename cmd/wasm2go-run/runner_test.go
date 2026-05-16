@@ -1,7 +1,7 @@
 package main
 
 import (
-	"os"
+	"io"
 	"testing"
 )
 
@@ -33,13 +33,13 @@ func TestProcExit(t *testing.T) {
 				t.Fatalf("compile failed: %v", err)
 			}
 
-			exitCode, err := execute(binaryPath, tmpDir, os.Stdout, os.Stderr)
+			exitCode, err := execute(binaryPath, tmpDir, io.Discard, io.Discard)
 			if err != nil {
 				t.Fatalf("execute failed: %v", err)
 			}
 
 			if exitCode != tt.expectedCode {
-				t.Errorf("expected exit code %d, got %d", tt.expectedCode, exitCode)
+				t.Errorf("got %d, want %d", exitCode, tt.expectedCode)
 			}
 		})
 	}
