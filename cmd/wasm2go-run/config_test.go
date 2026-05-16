@@ -50,7 +50,7 @@ func TestParseConfig(t *testing.T) {
 			name:       "version requested",
 			args:       []string{"--version"},
 			wantErr:    ErrVersionRequested,
-			wantStdout: "wasm2go-run version", // partial match
+			wantStdout: "wasm2go-run ", // partial match; exact version comes from Go build metadata
 		},
 	}
 

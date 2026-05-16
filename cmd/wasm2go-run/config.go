@@ -67,7 +67,7 @@ func parseConfig(args []string, stdout io.Writer) (Config, error) {
 	}
 
 	if version {
-		fmt.Fprintln(stdout, "wasm2go-run version 0.0.1")
+		fmt.Fprintf(stdout, "wasm2go-run %s\n", versionString())
 		return Config{}, ErrVersionRequested
 	}
 
