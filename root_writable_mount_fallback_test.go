@@ -153,7 +153,7 @@ func TestRootWritableMountFallback(t *testing.T) {
 		parentDir := filepath.Dir(hostRoot)
 		outsideDirName := "outside_" + filepath.Base(hostRoot)
 		outsidePath := filepath.Join(parentDir, outsideDirName)
-		defer os.RemoveAll(outsidePath)
+		t.Cleanup(func() { os.RemoveAll(outsidePath) })
 
 		// Path: "../" + outsideDirName
 		relPath := filepath.Join("..", outsideDirName)

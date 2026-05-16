@@ -687,9 +687,6 @@ func (s *State) resolvePrimary(dirfd, pathPtr, pathLen int32) string {
 		return ""
 	}
 	primary, _ := mountHostPaths(m, rel)
-	if primary == "" && !m.writable {
-		return ""
-	}
 	return primary
 }
 
