@@ -227,6 +227,10 @@ func WithMount(guestPath string, root fs.FS) Option {
 // operations (os.Create, os.Remove, os.Mkdir, os.Rename, etc.) and for
 // the primary/fallback absolute-path resolution used by path_open on root
 // mounts. If root is nil, os.DirFS(hostRoot) is used as the read overlay.
+//
+// Writable mounts are capability-oriented FFI host path access and are not
+// a security sandbox by default; they intentionally permit parent-directory
+// escape (e.g. via "..") to facilitate interaction with the host filesystem.
 func WithWritableMount(guestPath, hostRoot string, root fs.FS) Option {
 	return func(s *State) {
 		s.mounts = append(s.mounts, mountEntry{guestPath: guestPath, hostRoot: hostRoot, root: root, writable: true})
@@ -564,10 +568,6 @@ func (s *State) readBytes(ptr, length int32) []byte {
 // and a mount-relative path string using longest-prefix matching.
 // Returns (nil, "") if no mount covers the path.
 func (s *State) resolvePath(guestPath string) (*mountEntry, string) {
-	clean := path.Clean("/" + guestPath)
-	if clean == "." {
-		clean = "/"
-	}
 	var best *mountEntry
 	bestLen := -1
 	bestRel := ""
@@ -577,6 +577,29 @@ func (s *State) resolvePath(guestPath string) (*mountEntry, string) {
 		if mp == "." {
 			mp = "/"
 		}
+
+		clean := path.Clean("/" + guestPath)
+		if clean == "." {
+			clean = "/"
+		}
+		// Special case for writable mounts: if the path starts with the mount
+		// prefix but contains ".." that would escape the mount, we still
+		// want to match the mount but keep the ".." in rel.
+		// resolvePath's use of path.Clean above collapses ".." before prefix
+		// matching, which we bypass here if we find a raw prefix match.
+		rawGuest := "/" + strings.TrimPrefix(guestPath, "/")
+		rawMp := "/" + strings.TrimPrefix(m.guestPath, "/")
+		if strings.HasPrefix(rawGuest, rawMp) {
+			rel := strings.TrimPrefix(rawGuest, rawMp)
+			rel = strings.TrimPrefix(rel, "/")
+			if len(rawMp) > bestLen {
+				best = m
+				bestLen = len(rawMp)
+				bestRel = rel
+			}
+			continue
+		}
+
 		match := false
 		if clean == mp {
 			match = true
