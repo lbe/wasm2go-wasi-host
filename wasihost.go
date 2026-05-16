@@ -1609,26 +1609,30 @@ func (s *State) Xfd_filestat_set_times(fd int32, atim, mtim int64, fstFlags int3
 	if entry.file == nil {
 		return wasiEBadf
 	}
-	if of, ok := entry.file.(*osFile); ok {
-		fi, err := of.Stat()
-		if err != nil {
-			return mapOSError(err)
-		}
-		targetAtim := getAtimeFromStat(fi)
-		if fstFlags&fstAtim != 0 {
-			targetAtim = time.Unix(0, atim)
-		}
+	of, ok := entry.file.(*osFile)
+	if !ok {
+		return wasiESuccess
+	}
 
-		targetMtim := fi.ModTime()
-		if fstFlags&fstMtimNow != 0 {
-			targetMtim = time.Now()
-		} else if fstFlags&fstMtim != 0 {
-			targetMtim = time.Unix(0, mtim)
-		}
+	fi, err := of.Stat()
+	if err != nil {
+		return mapOSError(err)
+	}
 
-		if err := os.Chtimes(of.Name(), targetAtim, targetMtim); err != nil {
-			return mapOSError(err)
-		}
+	targetAtim := getAtimeFromStat(fi)
+	if fstFlags&fstAtim != 0 {
+		targetAtim = time.Unix(0, atim)
+	}
+
+	targetMtim := fi.ModTime()
+	if fstFlags&fstMtimNow != 0 {
+		targetMtim = time.Now()
+	} else if fstFlags&fstMtim != 0 {
+		targetMtim = time.Unix(0, mtim)
+	}
+
+	if err := os.Chtimes(of.Name(), targetAtim, targetMtim); err != nil {
+		return mapOSError(err)
 	}
 	return wasiESuccess
 }

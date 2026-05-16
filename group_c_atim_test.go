@@ -8,7 +8,8 @@ import (
 
 func TestFdFilestatSetTimesAtim(t *testing.T) {
 	s, _ := newTestState()
-	filePath := setupOsFileFd(t, s, 5, []byte("data"))
+	fd := int32(5)
+	filePath := setupOsFileFd(t, s, int(fd), []byte("data"))
 
 	// targetAtim is far in the past to be distinguishable
 	targetAtim := time.Date(2010, 1, 1, 0, 0, 0, 0, time.UTC)
@@ -22,7 +23,7 @@ func TestFdFilestatSetTimesAtim(t *testing.T) {
 	initialMtim := fi0.ModTime()
 
 	// fstAtim = 1
-	errno := s.Xfd_filestat_set_times(5, targetAtimNs, 0, 1)
+	errno := s.Xfd_filestat_set_times(fd, targetAtimNs, 0, fstAtim)
 	if errno != wasiESuccess {
 		t.Fatalf("filestat_set_times returned %d, want ESUCCESS", errno)
 	}
@@ -53,12 +54,12 @@ func TestFdFilestatSetTimesAtimPreservesExistingTests(t *testing.T) {
 	targetMtim := time.Date(2020, 1, 1, 0, 0, 0, 0, time.UTC)
 	targetMtimNs := targetMtim.UnixNano()
 
-	t.Run("Xfd_filestat_set_times fstFlags=2 updates mtime on osFile", func(t *testing.T) {
+	t.Run("Xfd_filestat_set_times fstMtim updates mtime on osFile", func(t *testing.T) {
 		s, _ := newTestState()
-		filePath := setupOsFileFd(t, s, 5, []byte("data"))
+		fd := int32(5)
+		filePath := setupOsFileFd(t, s, int(fd), []byte("data"))
 
-		// fstMtim = 2
-		errno := s.Xfd_filestat_set_times(5, 0, targetMtimNs, 2)
+		errno := s.Xfd_filestat_set_times(fd, 0, targetMtimNs, fstMtim)
 		if errno != wasiESuccess {
 			t.Fatalf("filestat_set_times returned %d, want ESUCCESS", errno)
 		}
@@ -75,17 +76,17 @@ func TestFdFilestatSetTimesAtimPreservesExistingTests(t *testing.T) {
 		}
 	})
 
-	t.Run("Xfd_filestat_set_times fstFlags=MTIM_NOW updates mtime to current", func(t *testing.T) {
+	t.Run("Xfd_filestat_set_times fstMtimNow updates mtime to current", func(t *testing.T) {
 		s, _ := newTestState()
-		filePath := setupOsFileFd(t, s, 5, []byte("data"))
+		fd := int32(5)
+		filePath := setupOsFileFd(t, s, int(fd), []byte("data"))
 
 		past := time.Now().Add(-1 * time.Hour)
 		if err := os.Chtimes(filePath, past, past); err != nil {
 			t.Fatal(err)
 		}
 
-		// fstMtimNow = 8
-		errno := s.Xfd_filestat_set_times(5, 0, 0, 8)
+		errno := s.Xfd_filestat_set_times(fd, 0, 0, fstMtimNow)
 		if errno != wasiESuccess {
 			t.Fatalf("filestat_set_times returned %d, want ESUCCESS", errno)
 		}
