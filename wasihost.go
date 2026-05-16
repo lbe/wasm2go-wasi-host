@@ -1641,11 +1641,11 @@ func (s *State) Xfd_filestat_set_times(fd int32, atim, mtim int64, fstFlags int3
 
 // Xpath_filestat_set_times implements path_filestat_set_times.
 //
-// MTIM (bit 1) and MTIM_NOW (bit 3) flags are acted upon. Resolves the
-// path and calls os.Chtimes. Returns ESUCCESS without mutation for
-// read-only mounts.
+// ATIM (bit 0), MTIM (bit 1), and MTIM_NOW (bit 3) flags are acted upon.
+// Resolves the path and calls os.Chtimes. Returns ESUCCESS without
+// mutation for read-only mounts.
 func (s *State) Xpath_filestat_set_times(dirfd, flags, pathPtr, pathLen int32, atim, mtim int64, fstFlags int32) int32 {
-	if fstFlags&(fstMtim|fstMtimNow) == 0 {
+	if fstFlags&(fstAtim|fstMtim|fstMtimNow) == 0 {
 		return wasiESuccess
 	}
 	primary := s.resolvePrimary(dirfd, pathPtr, pathLen)
@@ -1653,14 +1653,27 @@ func (s *State) Xpath_filestat_set_times(dirfd, flags, pathPtr, pathLen int32, a
 		return wasiEROFS
 	}
 
-	targetMtim := int64(0)
-	if fstFlags&fstMtimNow != 0 {
-		targetMtim = time.Now().UnixNano()
-	} else {
-		targetMtim = mtim
+	fi, err := os.Stat(primary)
+	if err != nil {
+		return mapOSError(err)
 	}
 
-	return applyMtim(primary, targetMtim)
+	targetAtim := getAtimeFromStat(fi)
+	if fstFlags&fstAtim != 0 {
+		targetAtim = time.Unix(0, atim)
+	}
+
+	targetMtim := fi.ModTime()
+	if fstFlags&fstMtimNow != 0 {
+		targetMtim = time.Now()
+	} else if fstFlags&fstMtim != 0 {
+		targetMtim = time.Unix(0, mtim)
+	}
+
+	if err := os.Chtimes(primary, targetAtim, targetMtim); err != nil {
+		return mapOSError(err)
+	}
+	return wasiESuccess
 }
 
 // applyMtim calls os.Chtimes to set the mtime of the file at path to the
