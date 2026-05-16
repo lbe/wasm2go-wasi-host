@@ -271,4 +271,53 @@ func TestFilestatMutations(t *testing.T) {
 			t.Errorf("mtime = %v, not close to now", fi.ModTime())
 		}
 	})
+
+	t.Run("Xpath_filestat_set_times fstFlags=ATIM updates atime by path", func(t *testing.T) {
+		s, buf := newTestState()
+		hostDir := setupWritableMount(t, s, buf)
+		fname := "atim.txt"
+		hostPath := filepath.Join(hostDir, fname)
+		if err := os.WriteFile(hostPath, []byte("x"), 0644); err != nil {
+			t.Fatal(err)
+		}
+
+		// Set to a past time first to ensure change is visible
+		past := time.Date(2010, 1, 1, 0, 0, 0, 0, time.UTC)
+		if err := os.Chtimes(hostPath, past, past); err != nil {
+			t.Fatal(err)
+		}
+
+		targetAtim := time.Date(2022, 2, 2, 2, 2, 2, 0, time.UTC)
+		targetAtimNs := targetAtim.UnixNano()
+
+		pathOff, pathLen := writePath(buf, 500, fname)
+
+		// 1 is ATIM
+		errno := s.Xpath_filestat_set_times(3, 0, pathOff, pathLen, int64(targetAtimNs), 0, 1)
+		if errno != wasiESuccess {
+			t.Fatalf("Xpath_filestat_set_times fstFlags=1 returned %d, want ESUCCESS", errno)
+		}
+
+		fi, err := os.Stat(hostPath)
+		if err != nil {
+			t.Fatal(err)
+		}
+
+		atimAfter := getAtimeFromStat(fi)
+		mtimeAfter := fi.ModTime()
+
+		diff := atimAfter.Sub(targetAtim)
+		if diff < 0 {
+			diff = -diff
+		}
+		// Filesystem precision might vary, but 2s is safe for most
+		if diff > 2*time.Second {
+			t.Errorf("atime = %v, want within 2s of %v (diff=%v)", atimAfter, targetAtim, diff)
+		}
+
+		// mtime should be unchanged (still 'past')
+		if !mtimeAfter.Equal(past) {
+			t.Errorf("mtime changed: got %v, want %v", mtimeAfter, past)
+		}
+	})
 }
