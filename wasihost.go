@@ -1578,13 +1578,18 @@ func (s *State) Xfd_filestat_set_size(fd int32, size int64) int32 {
 	}
 	return wasiESuccess
 }
-// Xfd_filestat_set_times implements fd_filestat_set_times. Only the MTIM
-// flag (bit 1) is currently acted upon; if it is not set the call is a
-// no-op. For osFile-backed fds, calls os.Chtimes with the specified mtim
-// nanosecond value. For fs.FS-backed fds, returns ESUCCESS without
-// mutation.
+// Xfd_filestat_set_times implements fd_filestat_set_times.
+// fstFlags:
+// - bit 0 (1): ATIM (not implemented)
+// - bit 1 (2): MTIM
+// - bit 2 (4): ATIM_NOW (not implemented)
+// - bit 3 (8): MTIM_NOW
+//
+// For osFile-backed fds, calls os.Chtimes with the specified mtim
+// nanosecond value or the current time if MTIM_NOW is set. For
+// fs.FS-backed fds, returns ESUCCESS without mutation.
 func (s *State) Xfd_filestat_set_times(fd int32, atim, mtim int64, fstFlags int32) int32 {
-	if fstFlags&2 == 0 {
+	if fstFlags&10 == 0 { // MTIM | MTIM_NOW
 		return wasiESuccess
 	}
 	if fd < 0 || int(fd) >= len(s.fds) {
@@ -1595,7 +1600,11 @@ func (s *State) Xfd_filestat_set_times(fd int32, atim, mtim int64, fstFlags int3
 		return wasiEBadf
 	}
 	if of, ok := entry.file.(*osFile); ok {
-		return applyMtim(of.Name(), mtim)
+		targetMtim := mtim
+		if fstFlags&8 != 0 {
+			targetMtim = time.Now().UnixNano()
+		}
+		return applyMtim(of.Name(), targetMtim)
 	}
 	return wasiESuccess
 }
