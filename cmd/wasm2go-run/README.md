@@ -28,6 +28,7 @@ wasm2go-run [options] <wasm-file> [-- <guest-args>]
 ### Examples
 
 Run a WASM binary with mounts and environment variables:
+
 ```bash
 wasm2go-run -dir ./data:/data -env KEY=VALUE my-app.wasm -- --app-arg1
 ```
@@ -49,20 +50,33 @@ wasm2go-run -dir ./data:/data -env KEY=VALUE my-app.wasm -- --app-arg1
 ### Testing the Runner
 
 The runner depends on the `wasi-testsuite` submodule being populated. If you haven't already:
+
 ```bash
 git submodule update --init --recursive
 ```
 
 You can run the tests for the runner package:
+
 ```bash
 go test ./...
 ```
 
-To execute every WASI Preview1 suite discovered by the `wasi-testsuite` submodule, build the runner and use the all-Preview1 E2E script from the repository root:
+To execute every WASI Preview1 suite during development, build `wasm2go-run`, point the adapter at that binary with `WASM2GO_RUN`, and run the `wasi-testsuite` submodule's authoritative runner:
+
 ```bash
 go build -o ./bin/wasm2go-run ./cmd/wasm2go-run
-./scripts/e2e-wasip1.sh
+WASM2GO_RUN="$PWD/bin/wasm2go-run" ./scripts/e2e-wasip1.sh
 ```
+
+Equivalent direct invocation from the submodule:
+
+```bash
+go build -o ./bin/wasm2go-run ./cmd/wasm2go-run
+cd wasi-testsuite
+WASM2GO_RUN="$PWD/../bin/wasm2go-run" python3 ./run-tests -r adapters/wasm2go.py
+```
+
+If `WASM2GO_RUN` is unset, the adapter uses `wasm2go-run` from `PATH`.
 
 C and Rust Preview1 failures are expected until follow-up compliance work fixes them. This all-Preview1 command becomes part of the mandatory quality gate only after those failures are fixed.
 

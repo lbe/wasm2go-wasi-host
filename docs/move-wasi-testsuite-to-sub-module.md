@@ -92,32 +92,16 @@ The target scope is **all WASI Preview1 tests** in the submodule, not only Assem
   ```text
   wasi-testsuite/adapters/wasm2go.py
   ```
-- [ ] The new script must discover every `wasm32-wasip1` test suite present in the submodule with:
+- [ ] The new script must not discover, enumerate, or filter test suites itself.
+- [ ] The new script must not set `WASM2GO_WASIHOST_PATH`.
+- [ ] The new script must call the submodule's authoritative runner:
   ```bash
-  find tests -path '*/testsuite/wasm32-wasip1' -type d | sort
-  ```
-- [ ] The new script must set these defaults:
-  ```bash
-  export WASM2GO_RUN="${WASM2GO_RUN:-$REPO_ROOT/bin/wasm2go-run}"
-  export WASM2GO_WASIHOST_PATH="${WASM2GO_WASIHOST_PATH:-$REPO_ROOT}"
-  ```
-- [ ] The new script must print the discovered suite inventory before running.
-- [ ] The new script must call the submodule's real test runner:
-  ```bash
-  python3 test-runner/wasi_test_runner.py \
-    --runtime-adapter adapters/wasm2go.py \
-    --test-suite "${suites[@]}"
+  python3 ./run-tests -r adapters/wasm2go.py
   ```
 - [ ] The script must exit non-zero when any WASI Preview1 test fails.
 - [ ] Do not copy `wasi-testsuite` runner code, manifests, fixtures, or test discovery logic into this repository.
 
-Expected initial discovered suites printed by `scripts/e2e-wasip1.sh` after it changes into `wasi-testsuite/`:
-
-```text
-tests/assemblyscript/testsuite/wasm32-wasip1
-tests/c/testsuite/wasm32-wasip1
-tests/rust/testsuite/wasm32-wasip1
-```
+The `wasi-testsuite` submodule owns suite discovery and inventory.
 
 ### 5. Add an explicit all-Preview1 compliance command without making it the normal quality gate yet
 
@@ -145,7 +129,13 @@ All WASI Preview1 tests must be runnable immediately. Many are expected to fail 
 - [ ] Document the exact all-Preview1 command:
   ```bash
   go build -o ./bin/wasm2go-run ./cmd/wasm2go-run
-  ./scripts/e2e-wasip1.sh
+  WASM2GO_RUN="$PWD/bin/wasm2go-run" ./scripts/e2e-wasip1.sh
+  ```
+- [ ] Document the equivalent direct submodule invocation:
+  ```bash
+  go build -o ./bin/wasm2go-run ./cmd/wasm2go-run
+  cd wasi-testsuite
+  WASM2GO_RUN="$PWD/../bin/wasm2go-run" python3 ./run-tests -r adapters/wasm2go.py
   ```
 
 ### 7. Verify the separation
@@ -163,9 +153,9 @@ All WASI Preview1 tests must be runnable immediately. Many are expected to fail 
   ```bash
   cd ..
   ```
-- [ ] Run the all-Preview1 compliance command from this repository:
+- [ ] Run the all-Preview1 compliance command from this repository with the locally built binary:
   ```bash
-  ./scripts/e2e-wasip1.sh
+  WASM2GO_RUN="$PWD/bin/wasm2go-run" ./scripts/e2e-wasip1.sh
   ```
 - [ ] Confirm that `scripts/e2e-wasip1.sh` invokes all Preview1 suites from the submodule.
 - [ ] Confirm that `scripts/e2e-wasip1.sh` exits non-zero because of current WASI compliance failures.
