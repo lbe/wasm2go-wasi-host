@@ -1524,8 +1524,9 @@ func (s *State) Xfd_tell(fd, offsetPtr int32) int32 {
 }
 
 // Xsched_yield implements sched_yield. This host is synchronous;
-// yielding has no effect. Returns ESUCCESS.
+// yielding calls the schedYield seam and returns ESUCCESS.
 func (s *State) Xsched_yield() int32 {
+	schedYield()
 	return wasiESuccess
 }
 
