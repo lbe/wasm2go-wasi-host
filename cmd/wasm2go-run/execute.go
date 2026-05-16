@@ -11,6 +11,7 @@ func execute(binaryPath, buildDir string, stdout, stderr io.Writer) (int, error)
 	defer os.RemoveAll(buildDir)
 
 	cmd := exec.Command(binaryPath)
+	cmd.Stdin = os.Stdin
 	cmd.Stdout = stdout
 	cmd.Stderr = stderr
 
