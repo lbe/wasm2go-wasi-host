@@ -54,6 +54,13 @@ func TestInitializationAndOSErrorMapping(t *testing.T) {
 		{os.ErrNotExist, 44},
 		{os.ErrExist, 20},
 		{syscall.ENOTEMPTY, 55},
+		{syscall.ENOTDIR, 54},
+		{syscall.EISDIR, 31},
+		{syscall.EACCES, 2},
+		{syscall.EPERM, 63},
+		{syscall.EROFS, 66},
+		{syscall.EXDEV, 75},
+		{syscall.EINVAL, 28},
 		{errors.New("unknown"), 29},
 	}
 
