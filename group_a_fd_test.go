@@ -4,8 +4,10 @@ import (
 	"bytes"
 	"encoding/binary"
 	"fmt"
+	"io/fs"
 	"os"
 	"path/filepath"
+	"runtime"
 	"strings"
 	"testing"
 	"testing/fstest"
@@ -13,14 +15,12 @@ import (
 
 // newWMState creates a State with a single writable mount at guest path "/tmp"
 // rooted at a fresh t.TempDir(). fd 3 is the preopen for "/tmp".
-// "/tmp" is NOT a root mount so mountHostPaths returns filepath.Join(tmpDir,rel)
-// with no root-special-case fallback.
 func newWMState(t *testing.T) (*State, []byte, string) {
 	t.Helper()
 	buf := make([]byte, 65536)
 	tmpDir := t.TempDir()
 	s := New(func() []byte { return buf },
-		WithWritableMount("/tmp", tmpDir, os.DirFS(tmpDir)),
+		WithHostDirectoryPreopen("/tmp", tmpDir),
 	)
 	return s, buf, tmpDir
 }
@@ -647,7 +647,7 @@ func TestXpathFilestatGet(t *testing.T) {
 	t.Run("read-only mount file", func(t *testing.T) {
 		buf := make([]byte, 65536)
 		s := New(func() []byte { return buf },
-			WithMount("/tmp", fstest.MapFS{
+			WithReadOnlyFS("/tmp", fstest.MapFS{
 				"a.txt": &fstest.MapFile{Data: []byte("content")},
 			}),
 		)
@@ -682,8 +682,9 @@ func TestXpathFilestatGet(t *testing.T) {
 			"lib/perl.pm": &fstest.MapFile{Data: []byte("# perl")},
 		}
 		s := New(func() []byte { return buf },
-			WithWritableMount("/tmp", tmpDir, overlay),
+			WithHostDirectoryPreopen("/tmp", tmpDir),
 		)
+		s.mounts[len(s.mounts)-1].root = overlay
 		p := "lib/perl.pm"
 		copy(buf[pathOff:], p)
 		if errno := s.Xpath_filestat_get(3, 0, pathOff, int32(len(p)), statPtr); errno != wasiESuccess {
@@ -727,7 +728,7 @@ func TestXpathOpen(t *testing.T) {
 	t.Run("read-only mount file", func(t *testing.T) {
 		buf := make([]byte, 65536)
 		s := New(func() []byte { return buf },
-			WithMount("/tmp", fstest.MapFS{
+			WithReadOnlyFS("/tmp", fstest.MapFS{
 				"a.txt": &fstest.MapFile{Data: []byte("hello")},
 			}),
 		)
@@ -793,6 +794,180 @@ func TestXpathOpen(t *testing.T) {
 	})
 }
 
+// TestPathOpenDistinguishesPermissionDeniedFromMissingOnReadOnlyFS verifies that
+// path_open against a read-only fs.FS preopen maps fs.ErrPermission to EACCES and
+// leaves missing paths as ENOENT.
+func TestPathOpenDistinguishesPermissionDeniedFromMissingOnReadOnlyFS(t *testing.T) {
+	t.Parallel()
+	const (
+		pathOff = 1100
+		fdPtr   = 2100
+	)
+	buf := make([]byte, 65536)
+	s := New(func() []byte { return buf },
+		WithReadOnlyFS("/data", errorFS{name: "secret", err: fs.ErrPermission}),
+	)
+
+	copy(buf[pathOff:], "secret")
+	if errno := s.Xpath_open(3, 0, pathOff, 6, 0, int64(rightFDRead), 0, 0, fdPtr); errno != wasiEAcces {
+		t.Fatalf("path_open(%q) = %d, want EACCES (%d)", "secret", errno, wasiEAcces)
+	}
+
+	copy(buf[pathOff:], "absent.txt")
+	if errno := s.Xpath_open(3, 0, pathOff, 10, 0, int64(rightFDRead), 0, 0, fdPtr); errno != wasiENoEnt {
+		t.Fatalf("path_open(%q) = %d, want ENOENT (%d)", "absent.txt", errno, wasiENoEnt)
+	}
+}
+
+// TestPathOpenOnWritablePreopenMapsHostOpenErrorsToDistinctErrnos verifies that
+// path_open on a writable host-backed preopen surfaces host open failures as
+// distinct WASI errnos (EACCES, EISDIR, ENOENT, ENOTDIR) instead of collapsing
+// unrelated errors to ENOENT or incorrectly succeeding via fs.FS fallback.
+func TestPathOpenOnWritablePreopenMapsHostOpenErrorsToDistinctErrnos(t *testing.T) {
+	t.Parallel()
+	const (
+		pathOff = 4200
+		fdPtr   = 5200
+	)
+
+	cases := []struct {
+		name string
+		skip func(t *testing.T)
+		prep func(t *testing.T, tmpDir string) (guestRelPath string)
+		// path_open args (after dirfd, lookupFlags, pathPtr, pathLen).
+		oflags    int32
+		rights    int64
+		wantErrno int32
+	}{
+		{
+			name: "EACCES when host denies read on a mode-000 file",
+			skip: func(t *testing.T) {
+				if runtime.GOOS == "windows" {
+					t.Skip("chmod does not reliably produce EACCES for this scenario on Windows")
+				}
+				if os.Geteuid() == 0 {
+					t.Skip("EACCES is not reliably observable when running as root")
+				}
+			},
+			prep: func(t *testing.T, tmpDir string) string {
+				t.Helper()
+				p := filepath.Join(tmpDir, "mode000.txt")
+				if err := os.WriteFile(p, []byte("x"), 0o000); err != nil {
+					t.Fatal(err)
+				}
+				if err := os.Chmod(p, 0); err != nil {
+					t.Fatal(err)
+				}
+				t.Cleanup(func() { _ = os.Chmod(p, 0o600) })
+				return "mode000.txt"
+			},
+			oflags:    0,
+			rights:    int64(rightFDRead),
+			wantErrno: wasiEAcces,
+		},
+		{
+			name: "EISDIR when opening a directory as a non-directory file with write",
+			prep: func(t *testing.T, tmpDir string) string {
+				t.Helper()
+				if err := os.Mkdir(filepath.Join(tmpDir, "subdir"), 0o755); err != nil {
+					t.Fatal(err)
+				}
+				return "subdir"
+			},
+			oflags:    0,
+			rights:    int64(rightFDWrite),
+			wantErrno: wasiEIsdir,
+		},
+		{
+			name: "ENOENT for a path that is actually missing without O_CREAT",
+			prep: func(t *testing.T, _ string) string {
+				t.Helper()
+				return "surely-missing-path.txt"
+			},
+			oflags:    0,
+			rights:    int64(rightFDRead),
+			wantErrno: wasiENoEnt,
+		},
+		{
+			name: "ENOTDIR when a path component is a regular file",
+			prep: func(t *testing.T, tmpDir string) string {
+				t.Helper()
+				if err := os.WriteFile(filepath.Join(tmpDir, "leaf.txt"), []byte("x"), 0o644); err != nil {
+					t.Fatal(err)
+				}
+				return "leaf.txt/beneath-file"
+			},
+			oflags:    0,
+			rights:    int64(rightFDRead),
+			wantErrno: wasiENotDir,
+		},
+	}
+
+	for _, tc := range cases {
+		tc := tc
+		t.Run(tc.name, func(t *testing.T) {
+			t.Parallel()
+			if tc.skip != nil {
+				tc.skip(t)
+			}
+			s, buf, tmpDir := newWMState(t)
+			rel := tc.prep(t, tmpDir)
+			copy(buf[pathOff:], rel)
+			errno := s.Xpath_open(dirfd, 0, pathOff, int32(len(rel)), tc.oflags, tc.rights, 0, 0, fdPtr)
+			if errno != tc.wantErrno {
+				t.Fatalf("Xpath_open(%q) errno=%d, want %d", rel, errno, tc.wantErrno)
+			}
+		})
+	}
+}
+
+// TestPathOpenDirectoryFlagRejectsPlainFiles verifies that path_open with the
+// WASI O_DIRECTORY oflag returns ENOTDIR for a regular file beneath a host
+// preopen and leaves no usable fd, while opening a real directory succeeds and
+// fd_fdstat_get reports a directory file type.
+func TestPathOpenDirectoryFlagRejectsPlainFiles(t *testing.T) {
+	t.Parallel()
+	const (
+		pathOff     = 1000
+		fdFilePtr   = 2000
+		fdSubdirPtr = 2100
+		fdstatPtr   = 3000
+	)
+
+	s, buf, tmpDir := newWMState(t)
+
+	if err := os.WriteFile(filepath.Join(tmpDir, "file.txt"), []byte("x"), 0o644); err != nil {
+		t.Fatal(err)
+	}
+	if err := os.Mkdir(filepath.Join(tmpDir, "subdir"), 0o755); err != nil {
+		t.Fatal(err)
+	}
+
+	copy(buf[pathOff:], "file.txt")
+	binary.LittleEndian.PutUint32(buf[fdFilePtr:], 0xffffffff)
+
+	errno := s.Xpath_open(dirfd, 0, pathOff, 8, int32(oflagDir), 0, 0, 0, fdFilePtr)
+	if errno != wasiENotDir {
+		t.Fatalf("Xpath_open regular file with O_DIRECTORY: errno=%d, want ENOTDIR (%d)", errno, wasiENotDir)
+	}
+	if got := int32(binary.LittleEndian.Uint32(buf[fdFilePtr : fdFilePtr+4])); got >= 0 {
+		t.Fatalf("fd output after ENOTDIR: got fd %d, want invalid (negative)", got)
+	}
+
+	copy(buf[pathOff:], "subdir")
+	errno = s.Xpath_open(dirfd, 0, pathOff, 6, int32(oflagDir), 0, 0, 0, fdSubdirPtr)
+	if errno != wasiESuccess {
+		t.Fatalf("Xpath_open subdir with O_DIRECTORY: errno=%d, want ESUCCESS", errno)
+	}
+	subFD := int32(binary.LittleEndian.Uint32(buf[fdSubdirPtr : fdSubdirPtr+4]))
+	if errno := s.Xfd_fdstat_get(subFD, fdstatPtr); errno != wasiESuccess {
+		t.Fatalf("Xfd_fdstat_get(dir): errno=%d", errno)
+	}
+	if ft := buf[fdstatPtr]; ft != fdDir {
+		t.Fatalf("fd_fdstat_get.fs_filetype = %d, want directory (%d)", ft, fdDir)
+	}
+}
+
 // TestXpathRename covers success, EROFS on read-only mount, and ENOENT with no
 // mounts.
 func TestXpathRename(t *testing.T) {
@@ -821,7 +996,7 @@ func TestXpathRename(t *testing.T) {
 
 	t.Run("EROFS read-only mount", func(t *testing.T) {
 		buf := make([]byte, 65536)
-		s := New(func() []byte { return buf }, WithMount("/tmp", fstest.MapFS{}))
+		s := New(func() []byte { return buf }, WithReadOnlyFS("/tmp", fstest.MapFS{}))
 		srcPathOff, srcLen := writePath(buf, srcOff, "a.txt")
 		dstPathOff, dstLen := writePath(buf, dstOff, "b.txt")
 		if errno := s.Xpath_rename(3, srcPathOff, srcLen, 3, dstPathOff, dstLen); errno != wasiEROFS {

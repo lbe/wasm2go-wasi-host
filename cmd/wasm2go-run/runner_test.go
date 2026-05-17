@@ -119,6 +119,31 @@ func TestDirMount(t *testing.T) {
 		}
 	})
 
+	t.Run("writable-mount-is-actually-writable", func(t *testing.T) {
+		wasmFile := "../../wasi-testsuite/tests/rust/testsuite/wasm32-wasip1/path_open_read_write.wasm"
+		wPath := testdata(wasmFile)
+		hostDir := t.TempDir()
+
+		cfg := Config{
+			Dirs:     []DirMount{{Host: hostDir, Guest: "scratch"}},
+			WasmArgs: []string{"scratch"},
+		}
+
+		tmpDir, binaryPath, err := compile(wPath, cfg)
+		if err != nil {
+			t.Fatalf("compile failed: %v", err)
+		}
+
+		exitCode, err := execute(binaryPath, tmpDir, nil, io.Discard, io.Discard)
+		if err != nil {
+			t.Fatalf("execute failed: %v", err)
+		}
+
+		if exitCode != 0 {
+			t.Errorf("got exit code %d, want 0", exitCode)
+		}
+	})
+
 	t.Run("without-dir-mount", func(t *testing.T) {
 		cfg := Config{}
 

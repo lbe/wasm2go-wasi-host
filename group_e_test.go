@@ -54,7 +54,7 @@ func setupOsFileFd(t *testing.T, s *State, fdIdx int, content []byte) string {
 	for len(s.fds) <= fdIdx {
 		s.fds = append(s.fds, fdEntry{})
 	}
-	s.fds[fdIdx] = fdEntry{fdType: fdFile, file: &osFile{f}}
+	s.fds[fdIdx] = fdEntry{fdType: fdFile, file: &osFile{f}, rightsBase: rightsRegularFile}
 	return path
 }
 
@@ -286,7 +286,7 @@ func TestGroupEPositionedIO(t *testing.T) {
 				return 7, errors.New("real error")
 			},
 		}
-		s.fds = append(s.fds, fdEntry{fdType: fdFile, file: stub})
+		s.fds = append(s.fds, fdEntry{fdType: fdFile, file: stub, rightsBase: rightFDRead})
 		fd := int32(len(s.fds) - 1)
 
 		binary.LittleEndian.PutUint32(buf[nresOff:], 999) // poison
@@ -320,7 +320,7 @@ func TestGroupEPositionedIO(t *testing.T) {
 			s.fds = append(s.fds, fdEntry{})
 		}
 		// FSFileWrap (from os.DirFS) does not support io.ReaderAt or io.WriterAt.
-		s.fds[5] = fdEntry{fdType: fdFile, file: &FSFileWrap{File: f}}
+		s.fds[5] = fdEntry{fdType: fdFile, file: &FSFileWrap{File: f}, rightsBase: rightFDRead | rightFDWrite}
 
 		binary.LittleEndian.PutUint32(buf[iovPtrOff:], uint32(iovDataOff))
 		binary.LittleEndian.PutUint32(buf[iovPtrOff+4:], 4)
@@ -370,7 +370,7 @@ func TestGroupEPositionedIO(t *testing.T) {
 				return 7, errors.New("real error")
 			},
 		}
-		s.fds = append(s.fds, fdEntry{fdType: fdFile, file: stub})
+		s.fds = append(s.fds, fdEntry{fdType: fdFile, file: stub, rightsBase: rightFDWrite})
 		fd := int32(len(s.fds) - 1)
 
 		binary.LittleEndian.PutUint32(buf[nresOff:], 999) // poison

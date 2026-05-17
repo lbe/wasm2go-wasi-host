@@ -42,7 +42,7 @@ func TestGenerateMain(t *testing.T) {
 		expectedSnippets := []string{
 			`WithArgs("foo.wasm", "a")`,
 			`WithEnv("K=V")`,
-			`WithMount("g", os.DirFS("/h"))`,
+			`WithHostDirectoryPreopen("g", "/h")`,
 			`WithStdin`,
 			`WithStdout`,
 			`WithStderr`,

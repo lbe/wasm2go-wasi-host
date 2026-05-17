@@ -38,7 +38,7 @@ sequenceDiagram
 
 ### Filesystem Layer
 
-`wasihost` uses a capability-oriented approach. Pre-opened directories are mapped to guest FDs at initialization.
+`wasihost` uses a capability-oriented approach. Preopened directories (including read-only fs.FS preopens and writable host directories) are mapped to guest FDs at initialization. These preopened directories provide the base capabilities for filesystem access.
 
 ```mermaid
 graph TD

@@ -13,7 +13,7 @@
 //	    func() []byte { return *mod.Xmemory().Slice() },
 //	    wasihost.WithStdin(stdinReader),
 //	    wasihost.WithStdout(stdoutWriter),
-//	    wasihost.WithWritableMount("/", hostDir, os.DirFS(hostDir)),
+//	    wasihost.WithHostDirectoryPreopen("/", hostDir),
 //	)
 //	mod := zeroperl.New(state, state)
 //
@@ -56,6 +56,7 @@ const (
 	wasiEInval    int32 = 28
 	wasiEIo       int32 = 29
 	wasiEIsdir    int32 = 31
+	wasiELoop     int32 = 32 // __WASI_ERRNO_LOOP (e.g. O_NOFOLLOW-style open on symlink)
 	wasiENoEnt    int32 = 44
 	wasiENoSys    int32 = 52
 	wasiENotDir   int32 = 54
@@ -64,34 +65,66 @@ const (
 	wasiEPerm     int32 = 63
 	wasiEROFS     int32 = 66
 	wasiEXdev     int32 = 75
+	wasiENotCap   int32 = 76
 
 	// WASI file descriptor type tags, written into fdstat and filestat structs.
 	fdCharDev byte = 2 // character device (stdin, stdout, stderr, /dev/null)
-	fdDir     byte = 3 // directory
-	fdFile    byte = 4 // regular file
+	fdDir     byte = 3 // directory (__WASI_FILETYPE_DIRECTORY)
+	fdFile    byte = 4 // regular file (__WASI_FILETYPE_REGULAR_FILE)
+	fdSymlink byte = 7 // symbolic link (__WASI_FILETYPE_SYMBOLIC_LINK)
 
-	// WASI rights bitmasks used in fd_fdstat_get responses.
-	rightFDRead         uint64 = 1 << 0
-	rightFDWrite        uint64 = 1 << 1
-	rightFDSeek         uint64 = 1 << 2
-	rightFdstatGet      uint64 = 1 << 5
-	rightFdstatSetFlags uint64 = 1 << 6
-	rightFilestatGet    uint64 = 1 << 7
+	// WASI snapshot-preview1 __wasi_rights_t (bit positions per spec).
+	rightFDRead             uint64 = 1 << 1  // __WASI_RIGHT_FD_READ
+	rightFDSeek             uint64 = 1 << 2  // __WASI_RIGHT_FD_SEEK
+	rightFDFdstatSetFlags   uint64 = 1 << 3  // __WASI_RIGHT_FD_FDSTAT_SET_FLAGS
+	rightFDWrite            uint64 = 1 << 6  // __WASI_RIGHT_FD_WRITE
+	rightPathOpen           uint64 = 1 << 13 // __WASI_RIGHT_PATH_OPEN
+	rightFDReaddir          uint64 = 1 << 14 // __WASI_RIGHT_FD_READDIR
+	rightPathReadlink       uint64 = 1 << 15 // __WASI_RIGHT_PATH_READLINK
+	rightPathFilestatGet    uint64 = 1 << 18 // __WASI_RIGHT_PATH_FILESTAT_GET
+	rightFDFilestatGet      uint64 = 1 << 21 // __WASI_RIGHT_FD_FILESTAT_GET
+	rightFDFilestatSetSize  uint64 = 1 << 22 // __WASI_RIGHT_FD_FILESTAT_SET_SIZE
+	rightFDFilestatSetTimes uint64 = 1 << 23 // __WASI_RIGHT_FD_FILESTAT_SET_TIMES
+
+	// rightsDirectoryInherited is every path_* capability in bits 9–26 of __wasi_rights_t
+	// (path_create_directory through path_unlink_file per snapshot-preview1), i.e. (1<<27)-(1<<9).
+	// Excludes fd_poll and fd_sock at 27–28. Used as rights_inheriting for writable dir preopens.
+	rightsDirectoryInherited uint64 = (1 << 27) - (1 << 9)
 	// WASI filestat_set_times flags.
 	fstAtim    int32 = 1 << 0
 	fstMtim    int32 = 1 << 1
 	fstAtimNow int32 = 1 << 2
 	fstMtimNow int32 = 1 << 3
+
+	// __wasi_lookupflags_t bit: follow symlinks when resolving a path (e.g.
+	// path_open, path_filestat_get). Matches __WASI_LOOKUPFLAGS_SYMLINK_FOLLOW.
+	wasiLookupSymlinkFollow int32 = 1 << 0
 )
 
-// Rights bitmask bundles for regular files and character devices.
+// Rights bundles for preopens, files, and character devices (composed from the
+// __wasi_rights_t constants above; values match snapshot-preview1).
 var (
-	rightsRegular = rightFDRead | rightFDWrite | rightFDSeek | rightFdstatGet | rightFdstatSetFlags | rightFilestatGet
-	rightsCharDev = rightFDRead | rightFDWrite | rightFdstatGet
+	// Writable host-directory preopen: FD read/seek/fdstat-set/write plus full
+	// directory path capability set for children (rightsDirectoryInherited).
+	rightsWritableDirPreopen = rightFDRead | rightFDSeek | rightFDFdstatSetFlags | rightFDWrite | rightsDirectoryInherited
+	// Read-only fs.FS preopen: navigation and metadata without write or path mutation.
+	rightsReadOnlyDirPreopen = rightFDRead | rightFDSeek | rightFDFdstatSetFlags | rightPathOpen | rightFDReaddir | rightPathReadlink | rightPathFilestatGet | rightFDFilestatGet
+	// Regular file: FD I/O, fdstat, and filestat get/set size/times (no path_* bits).
+	rightsRegularFile = rightFDRead | rightFDSeek | rightFDFdstatSetFlags | rightFDWrite | rightFDFilestatGet | rightFDFilestatSetSize | rightFDFilestatSetTimes
+	// Alias for tests and callers that request the full writable-directory mask via path_open.
+	rightsRegular = rightsWritableDirPreopen
+	rightsCharDev = rightFDRead | rightFDWrite | rightFDFdstatSetFlags | rightFDFilestatGet
+
+	// WASI fd_flags bitmasks.
+	fdFlagsAppend   int32 = 1 << 0
+	fdFlagsDSync    int32 = 1 << 1
+	fdFlagsNonBlock int32 = 1 << 2
+	fdFlagsRSync    int32 = 1 << 3
+	fdFlagsSync     int32 = 1 << 4
 
 	// WASI path_open oflags bits. Bit positions match the WASI specification.
 	oflagCreat uint32 = 1 << 0 // O_CREAT: create file if it does not exist
-	oflagDir   uint32 = 1 << 1 // O_DIRECTORY: fail if not a directory
+	oflagDir   uint32 = 1 << 1 // __WASI_OFLAGS_DIRECTORY: path must be a directory (ENOTDIR if it is a non-directory file)
 	oflagExcl  uint32 = 1 << 2 // O_EXCL: fail if file already exists
 	oflagTrunc uint32 = 1 << 3 // O_TRUNC: truncate file to zero length on open
 
@@ -142,13 +175,37 @@ type osFile struct{ *os.File }
 // are preopen directory entries. Higher slots are allocated dynamically
 // by path_open and freed by fd_close.
 type fdEntry struct {
-	file    fsFile
-	path    string
-	fdType  byte
-	offset  int64
-	mount   int
-	preopen bool
-	dirFile fs.ReadDirFile
+	file             fsFile
+	path             string
+	fdType           byte
+	offset           int64
+	mount            int
+	preopen          bool
+	dirFile          fs.ReadDirFile
+	rightsBase       uint64
+	rightsInheriting uint64
+	fdFlags          uint16
+}
+
+// errnoIfFDRightsMissing returns wasiENotCap if rightsBase does not include
+// every bit set in required; otherwise it returns 0.
+func errnoIfFDRightsMissing(rightsBase, required uint64) int32 {
+	if (rightsBase & required) != required {
+		return wasiENotCap
+	}
+	return 0
+}
+
+// errnoIfHostPathNotADirectory is the path_open O_DIRECTORY pre-check for a
+// resolved writable host path. When the path exists and is not a directory,
+// it returns wasiENotDir. Stat errors (including ENOENT) return 0 so the
+// subsequent OpenFile (or overlay fallback) can map errors as usual.
+func errnoIfHostPathNotADirectory(hostPath string) int32 {
+	fi, err := os.Stat(hostPath)
+	if err == nil && !fi.IsDir() {
+		return wasiENotDir
+	}
+	return 0
 }
 
 // mountEntry maps a guest path prefix to a host filesystem. If writable
@@ -160,6 +217,7 @@ type mountEntry struct {
 	root      fs.FS
 	hostRoot  string
 	writable  bool
+	readonly  bool // explicitly read-only via WithReadOnlyFS
 }
 
 // Option is a functional option for configuring a [State] at construction
@@ -202,13 +260,26 @@ func New(mem func() []byte, opts ...Option) *State {
 	}
 	// Initialize fd table
 	s.fds = make([]fdEntry, 3+len(s.mounts), 8+len(s.mounts))
-	s.fds[0] = fdEntry{fdType: fdCharDev, path: "stdin"}
-	s.fds[1] = fdEntry{fdType: fdCharDev, path: "stdout"}
-	s.fds[2] = fdEntry{fdType: fdCharDev, path: "stderr"}
-	for i, m := range s.mounts {
-		s.preopens = append(s.preopens, fdEntry{path: m.guestPath, fdType: fdDir, mount: i, preopen: true})
-		s.fds[3+i] = fdEntry{path: m.guestPath, fdType: fdDir, mount: i, preopen: true}
+	s.fds[0] = fdEntry{fdType: fdCharDev, path: "stdin", rightsBase: rightsCharDev, rightsInheriting: 0}
+	s.fds[1] = fdEntry{fdType: fdCharDev, path: "stdout", rightsBase: rightsCharDev, rightsInheriting: 0}
+	s.fds[2] = fdEntry{fdType: fdCharDev, path: "stderr", rightsBase: rightsCharDev, rightsInheriting: 0}
+
+	for i := range s.mounts {
+		rights := rightsWritableDirPreopen
+		if s.mounts[i].readonly {
+			rights = rightsReadOnlyDirPreopen
+		}
+		s.fds[3+i] = fdEntry{
+			path:             s.mounts[i].guestPath,
+			fdType:           fdDir,
+			mount:            i,
+			preopen:          true,
+			rightsBase:       rights,
+			rightsInheriting: rights,
+		}
 	}
+	s.preopens = s.fds[3 : 3+len(s.mounts)]
+
 	return s
 }
 
@@ -221,29 +292,18 @@ func WithArgs(args ...string) Option { return func(s *State) { s.args = append(s
 // including all required entries such as PERL5LIB. Multiple calls append.
 func WithEnv(env ...string) Option { return func(s *State) { s.env = append(s.env, env...) } }
 
-// WithMount adds a read-only guest filesystem mount. guestPath (e.g. "/",
-// "/lib") is served from root. Multiple mounts may be added; path_open and
-// related functions select the longest-matching guestPath prefix for any
-// given guest path.
-func WithMount(guestPath string, root fs.FS) Option {
+// WithReadOnlyFS adds a read-only guest filesystem mount that is explicitly
+// marked as read-only in WASI preopens, reporting no write or mutation rights.
+func WithReadOnlyFS(guestPath string, root fs.FS) Option {
 	return func(s *State) {
-		s.mounts = append(s.mounts, mountEntry{guestPath: guestPath, root: root})
+		s.mounts = append(s.mounts, mountEntry{guestPath: guestPath, root: root, writable: false, readonly: true})
 	}
 }
 
-// WithWritableMount adds a writable guest filesystem mount. root is an
-// overlay fs.FS used for read-through lookups (e.g. an embedded FS for
-// stdlib files); hostRoot is the absolute host path used for write
-// operations (os.Create, os.Remove, os.Mkdir, os.Rename, etc.) and for
-// the primary/fallback absolute-path resolution used by path_open on root
-// mounts. If root is nil, os.DirFS(hostRoot) is used as the read overlay.
-//
-// Writable mounts are capability-oriented FFI host path access and are not
-// a security sandbox by default; they intentionally permit parent-directory
-// escape (e.g. via "..") to facilitate interaction with the host filesystem.
-func WithWritableMount(guestPath, hostRoot string, root fs.FS) Option {
+// WithHostDirectoryPreopen adds a host directory as a WASI preopened directory.
+func WithHostDirectoryPreopen(guestPath, hostPath string) Option {
 	return func(s *State) {
-		s.mounts = append(s.mounts, mountEntry{guestPath: guestPath, hostRoot: hostRoot, root: root, writable: true})
+		s.mounts = append(s.mounts, mountEntry{guestPath: guestPath, hostRoot: hostPath, root: os.DirFS(hostPath), writable: true})
 	}
 }
 
@@ -446,10 +506,6 @@ func (s *State) Xfd_prestat_dir_name(fd, pathPtr, pathLen int32) int32 {
 // the type recorded in the fd table.
 func (s *State) Xfd_fdstat_get(fd, statPtr int32) int32 {
 	s.assertSingleOwner()
-	if fd >= 0 && fd <= 2 {
-		writeFdstat(s.mem(), statPtr, fdCharDev, rightsCharDev, rightsCharDev)
-		return wasiESuccess
-	}
 	if fd < 0 || int(fd) >= len(s.fds) {
 		return wasiEBadf
 	}
@@ -457,16 +513,16 @@ func (s *State) Xfd_fdstat_get(fd, statPtr int32) int32 {
 	if entry.file == nil && entry.fdType == 0 {
 		return wasiEBadf
 	}
-	writeFdstat(s.mem(), statPtr, entry.fdType, rightsRegular, rightsRegular)
+	writeFdstat(s.mem(), statPtr, entry.fdType, entry.fdFlags, entry.rightsBase, entry.rightsInheriting)
 	return wasiESuccess
 }
 
 // writeFdstat writes a 24-byte WASI fdstat struct at statPtr in mem.
 // Layout: fdtype(2) + flags(2) + padding(4) + rights_base(8) + rights_inheriting(8).
-func writeFdstat(mem []byte, statPtr int32, fdType byte, rightsBase, rightsInheriting uint64) {
+func writeFdstat(mem []byte, statPtr int32, fdType byte, fdFlags uint16, rightsBase, rightsInheriting uint64) {
 	var buf [24]byte
 	binary.LittleEndian.PutUint16(buf[0:], uint16(fdType))
-	binary.LittleEndian.PutUint16(buf[2:], 0)
+	binary.LittleEndian.PutUint16(buf[2:], fdFlags)
 	binary.LittleEndian.PutUint32(buf[4:], 0)
 	binary.LittleEndian.PutUint64(buf[8:], rightsBase)
 	binary.LittleEndian.PutUint64(buf[16:], rightsInheriting)
@@ -475,6 +531,8 @@ func writeFdstat(mem []byte, statPtr int32, fdType byte, rightsBase, rightsInher
 
 // writeFilestat writes a 64-byte WASI filestat struct at bufPtr in mem.
 // Layout: dev(8) + ino(8) + filetype(8) + nlink(8) + size(8) + atim(8) + mtim(8) + ctim(8).
+// fdType is a WASI snapshot-preview1 filetype tag (same values as fdstat.fs_filetype),
+// e.g. fdDir, fdFile, fdSymlink.
 // atim, mtim, and ctim are all set to mtimeNs; this host does not track
 // separate access times.
 func writeFilestat(mem []byte, bufPtr int32, fdType byte, size int64, mtimeNs int64) {
@@ -598,34 +656,148 @@ func (s *State) resolvePath(guestPath string) (*mountEntry, string) {
 		if clean == "." {
 			clean = "/"
 		}
-		// Special case: if the path starts with the mount prefix but contains
-		// ".." that would escape the mount, we still want to match the mount
-		// but keep the ".." in rel.
-		// resolvePath's use of path.Clean below collapses ".." before prefix
-		// matching, which we bypass here if we find a raw prefix match.
-		rawGuest := "/" + strings.TrimPrefix(guestPath, "/")
-		rawMp := "/" + strings.TrimPrefix(m.guestPath, "/")
-		switch {
-		case rawGuest == rawMp || strings.HasPrefix(rawGuest, rawMp+"/"):
-			rel := strings.TrimPrefix(rawGuest, rawMp)
-			rel = strings.TrimPrefix(rel, "/")
-			if len(rawMp) > bestLen {
-				best = m
-				bestLen = len(rawMp)
-				bestRel = rel
-			}
-			continue
-		case clean == mp, mp == "/", strings.HasPrefix(clean, mp+"/"):
+
+		if (clean == mp || strings.HasPrefix(clean, mp+"/")) && len(mp) > bestLen {
 			rel := strings.TrimPrefix(clean, mp)
 			rel = strings.TrimPrefix(rel, "/")
-			if len(mp) > bestLen {
-				best = m
-				bestLen = len(mp)
-				bestRel = rel
-			}
+			best = m
+			bestLen = len(mp)
+			bestRel = rel
+		}
+
+		raw := "/" + strings.TrimPrefix(guestPath, "/")
+		if (strings.HasPrefix(raw, mp+"/") || raw == mp) && len(mp) > bestLen {
+			rel := strings.TrimPrefix(raw, mp)
+			rel = strings.TrimPrefix(rel, "/")
+			best = m
+			bestLen = len(mp)
+			bestRel = rel
 		}
 	}
 	return best, bestRel
+}
+
+// preopenMountRelEscapes reports whether a mount-relative guest path
+// lexically escapes upward past the preopen root after normalization
+// (for example ".." or "../segment").
+func preopenMountRelEscapes(rel string) bool {
+	relLex := strings.TrimLeft(rel, "/")
+	cleanLex := path.Clean(relLex)
+	return cleanLex == ".." || strings.HasPrefix(cleanLex, "../")
+}
+
+// preopenDirfdLexicallyEscapes reports whether dirfd refers to a directory
+// preopen and mountRel would lexically escape that preopen's root (see
+// preopenMountRelEscapes). Matches the guard used before host-backed path
+// operations in resolveWritable, Xpath_open, and Xpath_filestat_get.
+func (s *State) preopenDirfdLexicallyEscapes(dirfd int32, mountRel string) bool {
+	return dirfd >= 0 && int(dirfd) < len(s.fds) && s.fds[dirfd].preopen && preopenMountRelEscapes(mountRel)
+}
+
+// joinWritableHostPathForLookup joins hostRoot with a mount-relative path for a
+// host directory preopen. When symlink following is not requested and the final
+// path component exists and is a symlink, it returns ELOOP (WASI snapshot-preview1),
+// matching O_NOFOLLOW-style path open behavior. When symlink following is
+// requested, it runs writableHostSymlinkFollowConfinementErrno so resolution
+// cannot escape hostRoot.
+func joinWritableHostPathForLookup(hostRoot, relPath string, lookupFlags int32) (hostPath string, errno int32) {
+	hostPath = filepath.Join(hostRoot, filepath.FromSlash(relPath))
+	if lookupFlags&wasiLookupSymlinkFollow == 0 {
+		// Open without SYMLINK_FOLLOW must not traverse the final symlink; Lstat
+		// distinguishes a present symlink from a missing path (Lstat error).
+		fi, err := os.Lstat(hostPath)
+		if err == nil && fi.Mode()&os.ModeSymlink != 0 {
+			return hostPath, wasiELoop
+		}
+		return hostPath, wasiESuccess
+	}
+	return hostPath, writableHostSymlinkFollowConfinementErrno(hostRoot, hostPath)
+}
+
+// statHostPathOrOverlay runs os.Lstat or os.Stat on hostPath (depending on
+// followFinalSymlink), and if that fails tries fs.Stat on overlay at relPath.
+// Used for writable mounts where some paths exist only in the overlay fs.FS.
+func statHostPathOrOverlay(hostPath string, overlay fs.FS, relPath string, followFinalSymlink bool) (fs.FileInfo, error) {
+	var fi fs.FileInfo
+	var err error
+	if followFinalSymlink {
+		fi, err = os.Stat(hostPath)
+	} else {
+		fi, err = os.Lstat(hostPath)
+	}
+	if err != nil {
+		return fs.Stat(overlay, relPath)
+	}
+	return fi, nil
+}
+
+// filestatFdTypeFromInfo maps os.FileInfo / fs.FileInfo to a WASI preview1
+// filetype for the filestat struct.
+func filestatFdTypeFromInfo(fi fs.FileInfo) byte {
+	switch {
+	case fi.Mode()&fs.ModeSymlink != 0:
+		return fdSymlink
+	case fi.IsDir():
+		return fdDir
+	default:
+		return fdFile
+	}
+}
+
+// writableHostSymlinkFollowConfinementErrno checks that resolving hostPath with
+// symlink awareness stays inside hostRoot (after filepath.Clean / EvalSymlinks).
+// It returns ESUCCESS when the resolved path is confined to the preopen,
+// ENOTCAPABLE when symlink steps would reach outside the root, and ENOENT when
+// symlink resolution fails (non-ErrNotExist errors) or the root cannot be resolved.
+//
+// When the final path component is missing—as with O_CREAT while following
+// symlinks—EvalSymlinks returns ErrNotExist for the full path. The implementation
+// then walks up with filepath.Dir, re-running EvalSymlinks on each parent, until
+// it finds an existing prefix. That preserves confinement checks for symlink
+// chains that point outside the preopen followed by a non-existent trailing name.
+func writableHostSymlinkFollowConfinementErrno(hostRoot, hostPath string) int32 {
+	p := filepath.Clean(hostPath)
+	var resolved string
+	for {
+		var err error
+		resolved, err = filepath.EvalSymlinks(p)
+		if err == nil {
+			break
+		}
+		if errors.Is(err, fs.ErrNotExist) {
+			parent := filepath.Dir(p)
+			if parent == p {
+				return wasiESuccess
+			}
+			p = parent
+			continue
+		}
+		return wasiENoEnt
+	}
+	rootReal, err := filepath.EvalSymlinks(hostRoot)
+	if err != nil {
+		return wasiENoEnt
+	}
+	rootAbs, err := filepath.Abs(rootReal)
+	if err != nil {
+		return wasiEIo
+	}
+	resAbs, err := filepath.Abs(resolved)
+	if err != nil {
+		return wasiEIo
+	}
+	rel, err := filepath.Rel(rootAbs, resAbs)
+	if err != nil {
+		return wasiENotCap
+	}
+	if rel == "." {
+		return wasiESuccess
+	}
+	sep := string(filepath.Separator)
+	if rel == ".." || strings.HasPrefix(rel, ".."+sep) {
+		return wasiENotCap
+	}
+	return wasiESuccess
 }
 
 // resolveDirfdPath resolves a WASI (dirfd, pathPtr, pathLen) triple to a
@@ -645,7 +817,7 @@ func (s *State) resolveDirfdPath(dirfd, pathPtr, pathLen int32) (*mountEntry, st
 	if dirfd >= 0 && int(dirfd) < len(s.fds) {
 		entry := s.fds[dirfd]
 		if entry.preopen && entry.mount >= 0 && entry.mount < len(s.mounts) {
-			return &s.mounts[entry.mount], path.Clean(guestPath)
+			return &s.mounts[entry.mount], guestPath
 		}
 		if entry.fdType == fdDir && entry.path != "" {
 			full := path.Join(entry.path, guestPath)
@@ -655,70 +827,28 @@ func (s *State) resolveDirfdPath(dirfd, pathPtr, pathLen int32) (*mountEntry, st
 	return nil, ""
 }
 
-// isRootMount reports whether m covers the guest root directory "/".
-func isRootMount(m *mountEntry) bool {
-	return path.Clean("/"+m.guestPath) == "/"
-}
-
-// mountHostPaths returns the primary and fallback host filesystem paths
-// for a mount-relative path rel within mount m. Returns ("", "") if m is
-// nil, not writable, or has no hostRoot.
-//
-// For root mounts the primary path is the re-absolutized form
-// ("/" + rel), recovering the original absolute host path that the WASI
-// libc stripped when mapping guest paths to the "/" preopen fd. If that
-// path differs from filepath.Join(hostRoot, rel), the joined form is
-// returned as fallback for cwd-relative paths.
-// For non-root mounts only the joined path is returned as primary.
-func mountHostPaths(m *mountEntry, rel string) (primary, fallback string) {
-	if m == nil || !m.writable || m.hostRoot == "" {
-		return "", ""
-	}
-	joined := filepath.Join(m.hostRoot, filepath.FromSlash(rel))
-	if isRootMount(m) {
-		abs := "/" + filepath.FromSlash(rel)
-		if abs != joined {
-			return abs, joined
-		}
-	}
-	return joined, ""
-}
-
-// resolvePrimary is a convenience wrapper that resolves a (dirfd, path)
-// pair to a single primary host path. Returns "" if the path resolves to
-// a read-only or unmounted location.
-func (s *State) resolvePrimary(dirfd, pathPtr, pathLen int32) string {
-	m, rel := s.resolveDirfdPath(dirfd, pathPtr, pathLen)
-	if m == nil {
-		return ""
-	}
-	primary, _ := mountHostPaths(m, rel)
-	return primary
-}
-
-// resolveWritable resolves a (dirfd, path) pair to a host path, choosing
-// between primary and fallback based on existence. This is used for
-// mutation operations where relative paths on a root writable mount
-// should fall back to the hostRoot.
+// resolveWritable resolves a (dirfd, path) pair to a host path for mutation
+// and other host-backed operations. Directory preopens reject mount-relative
+// paths that lexically escape the preopen root with ENOTCAPABLE (see
+// preopenDirfdLexicallyEscapes) before joining hostRoot.
 func (s *State) resolveWritable(dirfd, pathPtr, pathLen int32) (string, int32) {
 	m, rel := s.resolveDirfdPath(dirfd, pathPtr, pathLen)
 	if m == nil {
 		if dirfd < 0 || int(dirfd) >= len(s.fds) {
 			return "", wasiEBadf
 		}
-		// Existing behavior from TestWASIStubs/TestXpathRename
 		return "", wasiEROFS
 	}
-	primary, fallback := mountHostPaths(m, rel)
-	if primary == "" {
+
+	if s.preopenDirfdLexicallyEscapes(dirfd, rel) {
+		return "", wasiENotCap
+	}
+
+	if !m.writable || m.hostRoot == "" {
 		return "", wasiEROFS
 	}
-	if fallback != "" {
-		if _, err := os.Stat(primary); err != nil {
-			return fallback, wasiESuccess
-		}
-	}
-	return primary, wasiESuccess
+
+	return filepath.Join(m.hostRoot, filepath.FromSlash(rel)), wasiESuccess
 }
 
 // Xpath_create_directory implements path_create_directory. Creates a
@@ -857,10 +987,21 @@ func (s *State) Xfd_close(fd int32) int32 {
 // io.Reader configured by [WithStdin]. For other fds, uses ReadAt when
 // the underlying file supports it (osFile) to keep the WASI-level offset
 // in sync with WriteAt calls; falls back to Read for fs.FS-backed files.
+// Returns ENOTCAPABLE when FD_READ is not set in the fd's rights_base.
 func (s *State) Xfd_read(fd int32, iovsPtr int32, iovsCount int32, nreadPtr int32) int32 {
 	s.assertSingleOwner()
+	if fd < 0 || int(fd) >= len(s.fds) {
+		return wasiEBadf
+	}
+	entry := s.fds[fd]
+	if entry.file == nil && entry.fdType == 0 {
+		return wasiEBadf
+	}
 	mem := s.mem()
 	if fd == 0 {
+		if errno := errnoIfFDRightsMissing(entry.rightsBase, rightFDRead); errno != 0 {
+			return errno
+		}
 		var total uint32
 		for i := int32(0); i < iovsCount; i++ {
 			off := iovsPtr + i*8
@@ -891,12 +1032,11 @@ func (s *State) Xfd_read(fd int32, iovsPtr int32, iovsCount int32, nreadPtr int3
 		binary.LittleEndian.PutUint32(mem[nreadPtr:], total)
 		return wasiESuccess
 	}
-	if fd < 0 || int(fd) >= len(s.fds) {
-		return wasiEBadf
-	}
-	entry := s.fds[fd]
 	if entry.file == nil {
 		return wasiEBadf
+	}
+	if errno := errnoIfFDRightsMissing(entry.rightsBase, rightFDRead); errno != 0 {
+		return errno
 	}
 	var total uint32
 	for i := int32(0); i < iovsCount; i++ {
@@ -937,11 +1077,19 @@ func (s *State) Xfd_read(fd int32, iovsPtr int32, iovsCount int32, nreadPtr int3
 // Xfd_write implements fd_write. For fd 1 and 2 (stdout/stderr), writes
 // to the io.Writers configured by [WithStdout] and [WithStderr]. For
 // other fds, uses WriteAt with the current fd offset; only osFile-backed
-// entries support writes.
+// entries support writes. Returns ENOTCAPABLE when FD_WRITE is not set in
+// the fd's rights_base.
 func (s *State) Xfd_write(fd int32, iovsPtr int32, iovsCount int32, nwrittenPtr int32) int32 {
 	s.assertSingleOwner()
+	if fd < 0 || int(fd) >= len(s.fds) {
+		return wasiEBadf
+	}
+	entry := s.fds[fd]
 	mem := s.mem()
 	if fd == 1 || fd == 2 {
+		if errno := errnoIfFDRightsMissing(entry.rightsBase, rightFDWrite); errno != 0 {
+			return errno
+		}
 		var total uint32
 		for i := int32(0); i < iovsCount; i++ {
 			off := iovsPtr + i*8
@@ -968,12 +1116,11 @@ func (s *State) Xfd_write(fd int32, iovsPtr int32, iovsCount int32, nwrittenPtr 
 		binary.LittleEndian.PutUint32(mem[nwrittenPtr:], total)
 		return wasiESuccess
 	}
-	if fd < 0 || int(fd) >= len(s.fds) {
-		return wasiEBadf
-	}
-	entry := s.fds[fd]
 	if entry.file == nil {
 		return wasiEBadf
+	}
+	if errno := errnoIfFDRightsMissing(entry.rightsBase, rightFDWrite); errno != 0 {
+		return errno
 	}
 	var total uint32
 	for i := int32(0); i < iovsCount; i++ {
@@ -989,7 +1136,13 @@ func (s *State) Xfd_write(fd int32, iovsPtr int32, iovsCount int32, nwrittenPtr 
 		if !ok {
 			break
 		}
-		n, err := wa.WriteAt(mem[bufPtr:bufPtr+bufLen], entry.offset)
+		writeOff := entry.offset
+		if entry.fdFlags&uint16(fdFlagsAppend) != 0 {
+			if fi, err := entry.file.Stat(); err == nil {
+				writeOff = fi.Size()
+			}
+		}
+		n, err := wa.WriteAt(mem[bufPtr:bufPtr+bufLen], writeOff)
 		entry.offset += int64(n)
 		total += uint32(n)
 		if err != nil {
@@ -1146,51 +1299,100 @@ func (s *State) Xfd_filestat_get(fd, bufPtr int32) int32 {
 }
 
 // Xpath_filestat_get implements path_filestat_get. Resolves the path and
-// writes a 64-byte filestat struct. For writable mounts, tries os.Stat
-// first (with primary/fallback resolution), then falls back to the
-// overlay fs.FS for embedded files.
+// writes a 64-byte filestat struct. On writable host-backed mounts, when
+// SYMLINK_FOLLOW is absent the final component is examined with Lstat-like
+// semantics (a symlink is reported as filetype symbolic link); when it is
+// set, symlinks in the final component are followed (Stat). Both paths try
+// the host filesystem first, then fall back to fs.Stat on the overlay for
+// embedded-only files. Read-only mounts use fs.Stat on the mount root only.
+// Writable host directory preopens return ENOTCAPABLE for mount-relative paths
+// that lexically escape the preopen (same check as path_open and resolveWritable).
 func (s *State) Xpath_filestat_get(dirfd, flags, pathPtr, pathLen, bufPtr int32) int32 {
 	mount, relPath := s.resolveDirfdPath(dirfd, pathPtr, pathLen)
 	if mount == nil {
 		return wasiENoEnt
 	}
+
 	var fi fs.FileInfo
+	var err error
 	if mount.writable && mount.hostRoot != "" {
-		primary, cwdFallback := mountHostPaths(mount, relPath)
-		var osErr error
-		fi, osErr = os.Stat(primary)
-		if osErr != nil && cwdFallback != "" {
-			fi, osErr = os.Stat(cwdFallback)
+		if s.preopenDirfdLexicallyEscapes(dirfd, relPath) {
+			return wasiENotCap
 		}
-		if osErr != nil {
-			var fsErr error
-			fi, fsErr = fs.Stat(mount.root, relPath)
-			if fsErr != nil {
-				return wasiENoEnt
+		if flags&wasiLookupSymlinkFollow == 0 {
+			hostPath := filepath.Join(mount.hostRoot, filepath.FromSlash(relPath))
+			fi, err = statHostPathOrOverlay(hostPath, mount.root, relPath, false)
+		} else {
+			hostPath, errno := joinWritableHostPathForLookup(mount.hostRoot, relPath, flags)
+			if errno != wasiESuccess {
+				return errno
 			}
+			fi, err = statHostPathOrOverlay(hostPath, mount.root, relPath, true)
+		}
+		if err != nil {
+			return wasiENoEnt
 		}
 	} else {
-		var fsErr error
-		fi, fsErr = fs.Stat(mount.root, relPath)
-		if fsErr != nil {
+		fi, err = fs.Stat(mount.root, relPath)
+		if err != nil {
 			return wasiENoEnt
 		}
 	}
-	fdType := fdFile
-	if fi.IsDir() {
-		fdType = fdDir
-	}
-	writeFilestat(s.mem(), bufPtr, fdType, fi.Size(), fi.ModTime().UnixNano())
+	writeFilestat(s.mem(), bufPtr, filestatFdTypeFromInfo(fi), fi.Size(), fi.ModTime().UnixNano())
 	return wasiESuccess
+}
+
+// fileRightsForOpen returns rights_base and rights_inheriting for a regular file
+// opened via path_open. rights_inheriting is always parentInh.
+// req is rights_base already intersected with parentInh; rights_base is then
+// the intersection of rightsRegularFile, parentInh, and the effective read/write
+// intent from req (WASI preview1: read-only and write-only opens collapse to a single bit).
+func fileRightsForOpen(parentInh, req uint64) (base uint64, inheriting uint64) {
+	inheriting = parentInh
+	maxFile := rightsRegularFile & parentInh
+	if (req&rightFDRead) != 0 && (req&rightFDWrite) != 0 {
+		return maxFile, inheriting
+	}
+	if (req&rightFDRead) != 0 && (req&rightFDWrite) == 0 {
+		return rightFDRead & maxFile, inheriting
+	}
+	if (req&rightFDWrite) != 0 && (req&rightFDRead) == 0 {
+		return rightFDWrite & maxFile, inheriting
+	}
+	return req & maxFile, inheriting
+}
+
+// pathOpenStoredRights returns rights_base and rights_inheriting for an fd created
+// by path_open. fdRightsBase and fdRightsInheriting are each ANDed with parentInh
+// (the directory fd's rights_inheriting) so bits the parent cannot pass on are
+// dropped; path_open still succeeds. Regular files then run fileRightsForOpen on
+// that clamped base so the stored base matches the regular-file capability bundle.
+func pathOpenStoredRights(parentInh uint64, openedType byte, fdRightsBase, fdRightsInheriting int64) (base uint64, inheriting uint64) {
+	base = uint64(fdRightsBase) & parentInh
+	inheriting = uint64(fdRightsInheriting) & parentInh
+	if openedType == fdFile {
+		base, inheriting = fileRightsForOpen(parentInh, base)
+	}
+	return base, inheriting
 }
 
 // Xpath_open implements path_open. Resolves the guest path and allocates
 // a new fd. For writable mounts, opens via os.OpenFile using oflags and
 // fdRightsBase to determine OS open flags; falls back to the overlay
-// fs.FS for read-only opens that do not create or truncate. The special
-// path "/dev/null" is handled as a character-device fd without mount
-// resolution. Absolute guest paths stored on directory fds enable correct
-// nested resolution during directory recursion.
+// fs.FS for read-only opens that do not create or truncate. When O_DIRECTORY
+// is set on a writable host-backed path, an existing non-directory returns
+// ENOTDIR before open. The special path "/dev/null" is handled as a
+// character-device fd without mount resolution. Absolute guest paths stored
+// on directory fds enable correct nested resolution during directory recursion.
+// fd_rights_base and fd_rights_inheriting are clamped to the directory fd's
+// rights_inheriting when recording the new fd (bits outside that mask are dropped).
+// Other checks still return ENOTCAPABLE, e.g. write on a read-only mount or
+// sandbox escape on a preopen directory.
+//
+// FS open errors (overlay fallback after a missing host file, embedded fs.FS
+// mounts, and read-only preopens) are passed through [mapOSError], so well-known
+// errors such as permission denied map to the appropriate WASI errno rather than
+// a single ENOENT for every failure.
 func (s *State) Xpath_open(dirfd int32, lookupFlags int32, pathPtr int32, pathLen int32, oflags int32, fdRightsBase int64, fdRightsInheriting int64, fdFlags int32, fdPtr int32) int32 {
 	s.assertSingleOwner()
 	pathBytes := s.readBytes(pathPtr, pathLen)
@@ -1198,7 +1400,7 @@ func (s *State) Xpath_open(dirfd int32, lookupFlags int32, pathPtr int32, pathLe
 	mem := s.mem()
 	if guestPath == "/dev/null" {
 		fd := s.allocFD()
-		s.fds[fd] = fdEntry{fdType: fdCharDev, path: "/dev/null"}
+		s.fds[fd] = fdEntry{fdType: fdCharDev, path: "/dev/null", rightsBase: rightsCharDev, rightsInheriting: 0}
 		binary.LittleEndian.PutUint32(mem[fdPtr:], uint32(fd))
 		return wasiESuccess
 	}
@@ -1206,14 +1408,34 @@ func (s *State) Xpath_open(dirfd int32, lookupFlags int32, pathPtr int32, pathLe
 	if mount == nil {
 		return wasiENoEnt
 	}
+	parentInh := uint64(0)
+	if dirfd >= 0 && int(dirfd) < len(s.fds) {
+		parentInh = s.fds[dirfd].rightsInheriting
+	}
+
+	if mount.readonly {
+		if (uint32(oflags)&(oflagCreat|oflagTrunc)) != 0 || (uint64(fdRightsBase)&rightFDWrite) != 0 {
+			return wasiENotCap
+		}
+	}
+
+	if s.preopenDirfdLexicallyEscapes(dirfd, relPath) {
+		return wasiENotCap
+	}
 	var f fs.File
 	var err error
-	if mount.writable {
-		primary, cwdFallback := mountHostPaths(mount, relPath)
-		if primary == "" {
-			primary = relPath
+
+	if mount.writable && mount.hostRoot != "" {
+		hostPath, errno := joinWritableHostPathForLookup(mount.hostRoot, relPath, lookupFlags)
+		if errno != wasiESuccess {
+			return errno
 		}
-		hostPath := primary
+		wantDirectory := uint32(oflags)&oflagDir != 0
+		if wantDirectory {
+			if errno := errnoIfHostPathNotADirectory(hostPath); errno != 0 {
+				return errno
+			}
+		}
 		osFlags := os.O_RDONLY
 		if (uint64(fdRightsBase)&rightFDWrite) != 0 || (uint32(oflags)&(oflagCreat|oflagTrunc|oflagExcl)) != 0 {
 			osFlags = os.O_RDWR
@@ -1227,18 +1449,17 @@ func (s *State) Xpath_open(dirfd int32, lookupFlags int32, pathPtr int32, pathLe
 		if uint32(oflags)&oflagExcl != 0 {
 			osFlags |= os.O_EXCL
 		}
-		if uint32(oflags)&oflagDir != 0 {
+		if wantDirectory {
 			osFlags = os.O_RDONLY
 		}
 		hostFile, osErr := os.OpenFile(hostPath, osFlags, 0o666)
-		if osErr != nil && cwdFallback != "" {
-			hostFile, osErr = os.OpenFile(cwdFallback, osFlags, 0o666)
-		}
 		if osErr != nil {
-			if uint32(oflags)&(oflagCreat|oflagTrunc|oflagExcl) == 0 {
+			if uint32(oflags)&(oflagCreat|oflagTrunc|oflagExcl) == 0 &&
+				errors.Is(osErr, os.ErrNotExist) {
 				f, err = mount.root.Open(relPath)
 				if err != nil {
-					return wasiENoEnt
+					// Preserve overlay errno (mapOSError); do not collapse to ENOENT.
+					return mapOSError(err)
 				}
 				fi, _ := f.Stat()
 				fdType := fdFile
@@ -1250,7 +1471,15 @@ func (s *State) Xpath_open(dirfd int32, lookupFlags int32, pathPtr int32, pathLe
 				if fdType == fdDir {
 					entryPath = path.Clean("/" + mount.guestPath + "/" + relPath)
 				}
-				entry := fdEntry{file: &FSFileWrap{File: f}, path: entryPath, fdType: fdType}
+				rb, ri := pathOpenStoredRights(parentInh, fdType, fdRightsBase, fdRightsInheriting)
+				entry := fdEntry{
+					file:             &FSFileWrap{File: f},
+					path:             entryPath,
+					fdType:           fdType,
+					rightsBase:       rb,
+					rightsInheriting: ri,
+					fdFlags:          uint16(fdFlags),
+				}
 				if fdType == fdDir {
 					if df, ok := f.(fs.ReadDirFile); ok {
 						entry.dirFile = df
@@ -1260,24 +1489,32 @@ func (s *State) Xpath_open(dirfd int32, lookupFlags int32, pathPtr int32, pathLe
 				binary.LittleEndian.PutUint32(mem[fdPtr:], uint32(fd))
 				return wasiESuccess
 			}
-			return wasiENoEnt
+			return mapOSError(osErr)
 		}
 		fi, _ := hostFile.Stat()
 		fd := s.allocFD()
 		entryPath := guestPath
+		finalType := fdFile
 		if fi != nil && fi.IsDir() {
 			entryPath = path.Clean("/" + mount.guestPath + "/" + relPath)
+			finalType = fdDir
 		}
-		s.fds[fd] = fdEntry{file: &osFile{File: hostFile}, path: entryPath, fdType: fdFile}
-		if fi != nil && fi.IsDir() {
-			s.fds[fd].fdType = fdDir
+		rb, ri := pathOpenStoredRights(parentInh, finalType, fdRightsBase, fdRightsInheriting)
+		s.fds[fd] = fdEntry{
+			file:             &osFile{File: hostFile},
+			path:             entryPath,
+			fdType:           finalType,
+			rightsBase:       rb,
+			rightsInheriting: ri,
+			fdFlags:          uint16(fdFlags),
 		}
 		binary.LittleEndian.PutUint32(mem[fdPtr:], uint32(fd))
 		return wasiESuccess
 	}
 	f, err = mount.root.Open(relPath)
 	if err != nil {
-		return wasiENoEnt
+		// mount.root ([fs.FS]): preserve errno via [mapOSError], same as host opens.
+		return mapOSError(err)
 	}
 	fi, _ := f.Stat()
 	fdType := fdFile
@@ -1294,7 +1531,15 @@ func (s *State) Xpath_open(dirfd int32, lookupFlags int32, pathPtr int32, pathLe
 			}
 		}
 	}
-	entry := fdEntry{file: &FSFileWrap{File: f}, path: savedPath, fdType: fdType}
+	rb, ri := pathOpenStoredRights(parentInh, fdType, fdRightsBase, fdRightsInheriting)
+	entry := fdEntry{
+		file:             &FSFileWrap{File: f},
+		path:             savedPath,
+		fdType:           fdType,
+		rightsBase:       rb,
+		rightsInheriting: ri,
+		fdFlags:          uint16(fdFlags),
+	}
 	if fdType == fdDir {
 		if df, ok := f.(fs.ReadDirFile); ok {
 			entry.dirFile = df
@@ -1306,27 +1551,26 @@ func (s *State) Xpath_open(dirfd int32, lookupFlags int32, pathPtr int32, pathLe
 }
 
 // Xpath_rename implements path_rename. Resolves both old and new paths
-// and calls os.Rename. Uses primary/fallback resolution for root mounts:
-// if the primary (re-absolutized) path does not exist, retries with the
-// cwd-joined fallback. Returns EROFS if either mount is read-only.
+// and calls os.Rename. Returns EROFS if either mount is read-only or if
+// the resolved paths are not beneath a writable preopen root.
 func (s *State) Xpath_rename(oldDirfd, oldPathPtr, oldPathLen, newDirfd, newPathPtr, newPathLen int32) int32 {
-	oldMount, oldRel := s.resolveDirfdPath(oldDirfd, oldPathPtr, oldPathLen)
-	newMount, newRel := s.resolveDirfdPath(newDirfd, newPathPtr, newPathLen)
+	oldMount, _ := s.resolveDirfdPath(oldDirfd, oldPathPtr, oldPathLen)
+	newMount, _ := s.resolveDirfdPath(newDirfd, newPathPtr, newPathLen)
 	if oldMount == nil || newMount == nil {
 		return wasiENoEnt
 	}
-	oldPrimary, oldFallback := mountHostPaths(oldMount, oldRel)
-	newPrimary, newFallback := mountHostPaths(newMount, newRel)
-	if oldPrimary == "" || newPrimary == "" {
-		return wasiEROFS
+
+	oldPath, oldErr := s.resolveWritable(oldDirfd, oldPathPtr, oldPathLen)
+	if oldErr != wasiESuccess {
+		return oldErr
 	}
-	if oldFallback != "" {
-		if _, err := os.Stat(oldPrimary); err != nil {
-			oldPrimary, newPrimary = oldFallback, newFallback
-		}
+	newPath, newErr := s.resolveWritable(newDirfd, newPathPtr, newPathLen)
+	if newErr != wasiESuccess {
+		return newErr
 	}
-	if err := os.Rename(oldPrimary, newPrimary); err != nil {
-		return wasiEIo
+
+	if err := os.Rename(oldPath, newPath); err != nil {
+		return mapOSError(err)
 	}
 	return wasiESuccess
 }
@@ -1413,7 +1657,8 @@ func writeStringTable(mem []byte, ptrBase, bufBase int32, items []string) {
 // without updating the fd's WASI-level offset (entry.offset). Requires
 // the underlying file to implement ReadAt; if it does not, no bytes are
 // read. Returns EINVAL for fds 0–2 (positioned reads on stdio are not
-// defined by WASI).
+// defined by WASI). Returns ENOTCAPABLE when FD_READ is not set in the fd's
+// rights_base.
 func (s *State) Xfd_pread(fd, iovsPtr, iovsCount int32, offset int64, nreadPtr int32) int32 {
 	if fd <= 2 {
 		return wasiEInval
@@ -1424,6 +1669,9 @@ func (s *State) Xfd_pread(fd, iovsPtr, iovsCount int32, offset int64, nreadPtr i
 	entry := s.fds[fd]
 	if entry.file == nil {
 		return wasiEBadf
+	}
+	if errno := errnoIfFDRightsMissing(entry.rightsBase, rightFDRead); errno != 0 {
+		return errno
 	}
 	mem := s.mem()
 	var total uint32
@@ -1463,7 +1711,8 @@ func (s *State) Xfd_pread(fd, iovsPtr, iovsCount int32, offset int64, nreadPtr i
 // written and ENOTSUP is returned. If WriteAt returns an error, fd_pwrite
 // returns EIO and preserves the partial byte count in guest memory.
 // Returns EINVAL for fds 0–2 (positioned writes on stdio are not
-// defined by WASI).
+// defined by WASI). Returns ENOTCAPABLE when FD_WRITE is not set in the fd's
+// rights_base.
 func (s *State) Xfd_pwrite(fd, iovsPtr, iovsCount int32, offset int64, nwrittenPtr int32) int32 {
 	if fd <= 2 {
 		return wasiEInval
@@ -1474,6 +1723,9 @@ func (s *State) Xfd_pwrite(fd, iovsPtr, iovsCount int32, offset int64, nwrittenP
 	entry := s.fds[fd]
 	if entry.file == nil {
 		return wasiEBadf
+	}
+	if errno := errnoIfFDRightsMissing(entry.rightsBase, rightFDWrite); errno != 0 {
+		return errno
 	}
 
 	mem := s.mem()
@@ -1555,10 +1807,24 @@ func (s *State) Xfd_sync(fd int32) int32 {
 	return wasiESuccess
 }
 
-// Xfd_fdstat_set_flags implements fd_fdstat_set_flags. Always returns
-// ESUCCESS. Non-blocking I/O flags have no meaning in a synchronous
-// wasm2go host; this is an intentional no-op.
-func (s *State) Xfd_fdstat_set_flags(fd, flags int32) int32 { return wasiESuccess }
+// Xfd_fdstat_set_flags implements fd_fdstat_set_flags.
+// Supported flags: APPEND, DSYNC, NONBLOCK, RSYNC, SYNC.
+func (s *State) Xfd_fdstat_set_flags(fd, flags int32) int32 {
+	s.assertSingleOwner()
+	if fd < 0 || int(fd) >= len(s.fds) {
+		return wasiEBadf
+	}
+	entry := &s.fds[fd]
+	if entry.file == nil && entry.fdType == 0 {
+		return wasiEBadf
+	}
+	// WASI only allows setting these 5 flags.
+	if (flags & ^(fdFlagsAppend | fdFlagsDSync | fdFlagsNonBlock | fdFlagsRSync | fdFlagsSync)) != 0 {
+		return wasiEInval
+	}
+	entry.fdFlags = uint16(flags)
+	return wasiESuccess
+}
 
 // Xfd_advise implements fd_advise (POSIX posix_fadvise). Always returns
 // ESUCCESS. There is no portable Go equivalent for this hint; it is
@@ -1569,9 +1835,24 @@ func (s *State) Xfd_advise(fd int32, offset, length int64, advice int32) int32 {
 // Disk-space pre-reservation is advisory; this is an intentional no-op.
 func (s *State) Xfd_allocate(fd int32, offset, length int64) int32 { return wasiESuccess }
 
-// Xfd_fdstat_set_rights implements fd_fdstat_set_rights. Always returns
-// ESUCCESS. Capability rights narrowing is not enforced in this host.
-func (s *State) Xfd_fdstat_set_rights(fd int32, base, inheriting int64) int32 { return wasiESuccess }
+func (s *State) Xfd_fdstat_set_rights(fd int32, base, inheriting int64) int32 {
+	s.assertSingleOwner()
+	if fd < 0 || int(fd) >= len(s.fds) {
+		return wasiEBadf
+	}
+	entry := &s.fds[fd]
+	if entry.file == nil && entry.fdType == 0 {
+		return wasiEBadf
+	}
+	uBase := uint64(base)
+	uInheriting := uint64(inheriting)
+	if (uBase & ^entry.rightsBase) != 0 || (uInheriting & ^entry.rightsInheriting) != 0 {
+		return wasiENotCap
+	}
+	entry.rightsBase = uBase
+	entry.rightsInheriting = uInheriting
+	return wasiESuccess
+}
 
 // Xproc_raise implements proc_raise. Always returns ENOSYS. Raising a
 // signal inside a WASM guest has no meaningful host mapping.
@@ -1588,8 +1869,9 @@ func (s *State) Xsock_send(fd, iovsPtr, iovsLen, siFlags, nsentPtr int32) int32 
 func (s *State) Xsock_shutdown(fd, how int32) int32                             { return wasiENoSys }
 
 // Xfd_filestat_set_size implements fd_filestat_set_size. For osFile-backed
-// fds, truncates the file to size bytes via (*os.File).Truncate. For
-// fs.FS-backed fds, returns ESUCCESS without mutation (embedded files are
+// fds, truncates the file to size bytes via (*os.File).Truncate when
+// FD_FILESTAT_SET_SIZE is set in rights_base; otherwise returns ENOTCAPABLE.
+// For fs.FS-backed fds, returns ESUCCESS without mutation (embedded files are
 // read-only by construction).
 func (s *State) Xfd_filestat_set_size(fd int32, size int64) int32 {
 	if fd < 0 || int(fd) >= len(s.fds) {
@@ -1600,6 +1882,9 @@ func (s *State) Xfd_filestat_set_size(fd int32, size int64) int32 {
 		return wasiEBadf
 	}
 	if of, ok := entry.file.(*osFile); ok {
+		if errno := errnoIfFDRightsMissing(entry.rightsBase, rightFDFilestatSetSize); errno != 0 {
+			return errno
+		}
 		if err := of.Truncate(size); err != nil {
 			return mapOSError(err)
 		}
@@ -1661,16 +1946,17 @@ func computeTargetTimes(fi fs.FileInfo, atim, mtim int64, fstFlags int32) (time.
 // Xpath_filestat_set_times implements path_filestat_set_times.
 //
 // ATIM (bit 0), MTIM (bit 1), ATIM_NOW (bit 2), and MTIM_NOW (bit 3) flags
-// are acted upon. Resolves writable host paths and calls os.Chtimes.
-// Returns EROFS when the path is read-only or cannot be resolved to a
-// writable host path.
+// are acted upon. Resolves paths with resolveWritable (including ENOTCAPABLE
+// when a directory preopen path lexically escapes the mount) and calls
+// os.Chtimes. Returns EROFS when the path is read-only or cannot be resolved
+// to a writable host path.
 func (s *State) Xpath_filestat_set_times(dirfd, flags, pathPtr, pathLen int32, atim, mtim int64, fstFlags int32) int32 {
 	if fstFlags&(fstAtim|fstMtim|fstAtimNow|fstMtimNow) == 0 {
 		return wasiESuccess
 	}
-	primary := s.resolvePrimary(dirfd, pathPtr, pathLen)
-	if primary == "" {
-		return wasiEROFS
+	primary, werrno := s.resolveWritable(dirfd, pathPtr, pathLen)
+	if werrno != wasiESuccess {
+		return werrno
 	}
 
 	fi, err := os.Stat(primary)
@@ -1686,9 +1972,27 @@ func (s *State) Xpath_filestat_set_times(dirfd, flags, pathPtr, pathLen int32, a
 	return wasiESuccess
 }
 
-// mapOSError converts a host OS error to the closest WASI errno value.
-// Canonical mappings: ErrNotExist→ENOENT(44), ErrExist→EEXIST(20),
-// ENOTEMPTY→ENOTEMPTY(55). All other errors map to EIO(29).
+// mapOSError returns the closest WASI snapshot-preview1 errno for a host
+// error from os/syscall (including *os.PathError and wrapped errors).
+// Errors from [fs.FS] Open are supported as well: the standard library uses
+// the same sentinels for fs and os (e.g. [fs.ErrNotExist] == [os.ErrNotExist],
+// [fs.ErrPermission] == [os.ErrPermission]), so [errors.Is] matches both.
+//
+// Mappings use [errors.Is] against well-known errors:
+//
+//   - [os.ErrNotExist] → ENOENT (44)
+//   - [syscall.ENOTEMPTY] → ENOTEMPTY (55)
+//   - [os.ErrExist] → EEXIST (20)
+//   - [syscall.ENOTDIR] → ENOTDIR (54)
+//   - [syscall.EISDIR] → EISDIR (31)
+//   - [syscall.EACCES] → EACCES (2)
+//   - [syscall.EPERM] → EPERM (63)
+//   - [os.ErrPermission] → EACCES (2)
+//   - [syscall.EROFS] → EROFS (66)
+//   - [syscall.EXDEV] → EXDEV (75)
+//   - [syscall.EINVAL] → EINVAL (28)
+//
+// Any other error maps to EIO (29).
 func mapOSError(err error) int32 {
 	if errors.Is(err, os.ErrNotExist) {
 		return wasiENoEnt
@@ -1710,6 +2014,9 @@ func mapOSError(err error) int32 {
 	}
 	if errors.Is(err, syscall.EPERM) {
 		return wasiEPerm
+	}
+	if errors.Is(err, os.ErrPermission) {
+		return wasiEAcces
 	}
 	if errors.Is(err, syscall.EROFS) {
 		return wasiEROFS

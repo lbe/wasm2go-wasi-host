@@ -4,6 +4,7 @@ import (
 	"errors"
 	"io"
 	"io/fs"
+	"strings"
 	"testing"
 	"testing/fstest"
 )
@@ -139,8 +140,8 @@ func TestResolvePath(t *testing.T) {
 	t.Parallel()
 
 	s := New(nil,
-		WithMount("/", fstest.MapFS{}),
-		WithMount("/lib", fstest.MapFS{}),
+		WithReadOnlyFS("/", fstest.MapFS{}),
+		WithReadOnlyFS("/lib", fstest.MapFS{}),
 	)
 
 	tests := []struct {
@@ -164,7 +165,7 @@ func TestResolvePath(t *testing.T) {
 	}
 
 	// Path that matches no mount → nil.
-	s2 := New(nil, WithMount("/lib", fstest.MapFS{}))
+	s2 := New(nil, WithReadOnlyFS("/lib", fstest.MapFS{}))
 	m, _ := s2.resolvePath("/usr/bin")
 	if m != nil {
 		t.Errorf("expected nil mount for unmatched path, got non-nil")
@@ -238,4 +239,20 @@ func TestFsFileWrapSeekNoSeeker(t *testing.T) {
 	if err.Error() != "seek not supported" {
 		t.Errorf("Seek error = %q, want %q", err.Error(), "seek not supported")
 	}
+}
+
+// errorFS is a test [fs.FS] used to assert errno propagation from path_open:
+// Open returns a [*fs.PathError] wrapping err for a matching path segment so
+// [mapOSError] can classify it (e.g. [fs.ErrPermission] → EACCES). Other
+// paths report not exist so resolution can reach the injected error.
+type errorFS struct {
+	name string
+	err  error
+}
+
+func (e errorFS) Open(name string) (fs.File, error) {
+	if name == e.name || strings.HasSuffix(name, "/"+e.name) {
+		return nil, &fs.PathError{Op: "open", Path: name, Err: e.err}
+	}
+	return nil, &fs.PathError{Op: "open", Path: name, Err: fs.ErrNotExist}
 }

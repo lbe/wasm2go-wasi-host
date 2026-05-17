@@ -20,8 +20,8 @@ func TestInitializationAndOSErrorMapping(t *testing.T) {
 	options := []Option{
 		WithArgs("arg1"),
 		WithEnv("VAR=VAL"),
-		WithMount("/tmp", os.DirFS("/tmp")),
-		WithWritableMount("/data", "/tmp/data", os.DirFS("/tmp/data")),
+		WithReadOnlyFS("/tmp", os.DirFS("/tmp")),
+		WithHostDirectoryPreopen("/data", "/tmp/data"),
 		WithStdin(os.Stdin),
 		WithStdout(os.Stdout),
 		WithStderr(os.Stderr),
