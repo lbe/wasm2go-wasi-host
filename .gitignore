@@ -1,1 +1,48 @@
-coverage.out
+# Binary/Executables
+bin/
+*.exe
+*.exe~
+*.dll
+*.so
+*.dylib
+
+# Test coverage
+*.out
+
+# Go
+vendor/
+go.sum
+
+# Python
+__pycache__/
+adapters/__pycache__/
+.pytest_cache/
+*.py[cod]
+*$py.class
+.env
+.venv
+env/
+venv/
+build/
+dist/
+
+# Vim
+*~
+*.swp
+*.swo
+.netrwhist
+
+# VS Code
+.vscode/
+!.vscode/settings.json
+!.vscode/tasks.json
+!.vscode/launch.json
+!.vscode/extensions.json
+*.code-workspace
+
+# Cursor
+.cursor/
+
+# Project Specific
+/.pi
+wasi-testsuite/

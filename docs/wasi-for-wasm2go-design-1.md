@@ -14,7 +14,7 @@ the test strategy needed to derive a TDD execution plan.
 
 ### Source material
 
-`/Users/whgi/src/go-exiftool-wasm/wasi.go` (~1073 lines) is the reference
+`go-exiftool-wasm/wasi.go` (~1073 lines) is the reference
 implementation. It is the wasm2go-native WASI host that backs
 `github.com/lbe/go-exiftool-wasm`, the package that runs ExifTool inside a
 zeroperl WASM module. Key properties:
@@ -48,7 +48,7 @@ zeroperl WASM module. Key properties:
 - `wasi-additional-recommendations.md` — follow-up correctness notes including
   `clock_time_get` clock-id semantics, poll_oneoff fd subscriptions, and the
   silent-success mutator issue.
-- `/Users/whgi/src/go-exiftool-wasm/io.go` — defines the `guestIO` interface
+- `go-exiftool-wasm/io.go` — defines the `guestIO` interface
   (`ReadStdin`, `WriteStdout`, `WriteStderr`, `CloseStdin`, `CloseAll`) that
   will be replaced by standard `io.Reader`/`io.Writer` options in the new
   module.

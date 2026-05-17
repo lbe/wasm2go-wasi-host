@@ -284,7 +284,8 @@ func TestFdRead(t *testing.T) {
 	})
 }
 
-// TestFdWrite covers stdout, stderr, nil-stdout, osFile WriteAt, and EBADF.
+// TestFdWrite covers stdout, stderr, nil-stdout, osFile WriteAt, EBADF,
+// and error/partial write reporting.
 func TestFdWrite(t *testing.T) {
 	t.Parallel()
 	const (
@@ -310,6 +311,27 @@ func TestFdWrite(t *testing.T) {
 		}
 		if n := binary.LittleEndian.Uint32(buf[nwrittenOff : nwrittenOff+4]); n != 5 {
 			t.Errorf("nwritten = %d, want 5", n)
+		}
+	})
+
+	t.Run("reports partial write before error", func(t *testing.T) {
+		buf := make([]byte, 65536)
+		// errorWriter will return n=2 then error
+		ew := &errorWriter{err: fmt.Errorf("disk full"), n: 2}
+		s := New(func() []byte { return buf }, WithStdout(ew))
+
+		copy(buf[dataBuf:], "hello") // 5 bytes
+		binary.LittleEndian.PutUint32(buf[iovsOff:], uint32(dataBuf))
+		binary.LittleEndian.PutUint32(buf[iovsOff+4:], 5)
+
+		errno := s.Xfd_write(1, iovsOff, 1, nwrittenOff)
+		if errno != wasiEIo {
+			t.Errorf("errno = %d, want EIO (%d)", errno, wasiEIo)
+		}
+
+		nwritten := binary.LittleEndian.Uint32(buf[nwrittenOff : nwrittenOff+4])
+		if nwritten != 2 {
+			t.Errorf("nwritten = %d, want 2", nwritten)
 		}
 	})
 
@@ -534,6 +556,74 @@ func TestFdReaddir(t *testing.T) {
 			t.Errorf("preopen readdir = %d, want ESUCCESS or EIO", errno)
 		}
 		_ = buf // used via s.mem closure
+	})
+
+	t.Run("cookies honor stream position across calls", func(t *testing.T) {
+		s, buf, tmpDir := newWMState(t)
+		// Create 3 files to ensure we have enough entries to split across calls.
+		for _, name := range []string{"f1", "f2", "f3"} {
+			if err := os.WriteFile(filepath.Join(tmpDir, name), []byte("x"), 0644); err != nil {
+				t.Fatal(err)
+			}
+		}
+
+		// fd 3 is preopen for tmpDir.
+		const (
+			rdBufPtr = 1000
+			rdBufLen = 4096 // plenty of space
+			usedPtr  = 8000
+		)
+
+		// First call: cookie=0, read some entries.
+		// We expect f1, f2, f3...
+		// First, get all entries to know what to expect.
+		errno := s.Xfd_readdir(3, rdBufPtr, rdBufLen, 0, usedPtr)
+		if errno != wasiESuccess {
+			t.Fatalf("first readdir = %d", errno)
+		}
+		used := binary.LittleEndian.Uint32(buf[usedPtr : usedPtr+4])
+
+		type entry struct {
+			next uint64
+			name string
+			dlen uint32
+		}
+		var entries []entry
+		curr := uint32(rdBufPtr)
+		for curr < rdBufPtr+used {
+			next := binary.LittleEndian.Uint64(buf[curr : curr+8])
+			nameLen := binary.LittleEndian.Uint32(buf[curr+16 : curr+20])
+			name := string(buf[curr+24 : curr+24+nameLen])
+			entries = append(entries, entry{next, name, 24 + nameLen})
+			curr += 24 + nameLen
+		}
+
+		if len(entries) < 2 {
+			t.Fatalf("expected at least 2 entries, got %d: %v", len(entries), entries)
+		}
+
+		// Second call: cookie = entries[0].next
+		cookie := entries[0].next
+		// Clear buffer to be sure.
+		for i := uint32(rdBufPtr); i < rdBufPtr+rdBufLen; i++ {
+			buf[i] = 0
+		}
+
+		errno = s.Xfd_readdir(3, rdBufPtr, rdBufLen, int64(cookie), usedPtr)
+		if errno != wasiESuccess {
+			t.Fatalf("second readdir = %d", errno)
+		}
+		used2 := binary.LittleEndian.Uint32(buf[usedPtr : usedPtr+4])
+		if used2 == 0 {
+			t.Fatal("second readdir returned 0 entries")
+		}
+
+		nameLen2 := binary.LittleEndian.Uint32(buf[rdBufPtr+16 : rdBufPtr+20])
+		name2 := string(buf[rdBufPtr+24 : rdBufPtr+24+int32(nameLen2)])
+
+		if name2 != entries[1].name {
+			t.Errorf("second call (cookie=%d) got %q, want %q", cookie, name2, entries[1].name)
+		}
 	})
 
 	t.Run("EBADF invalid fd", func(t *testing.T) {
@@ -793,8 +883,8 @@ func TestXpollOneoff(t *testing.T) {
 	t.Run("fd_read invalid fd", func(t *testing.T) {
 		buf := make([]byte, 65536)
 		s := New(func() []byte { return buf })
-		binary.LittleEndian.PutUint32(buf[inPtr+40:], 1)  // fd_read
-		binary.LittleEndian.PutUint32(buf[inPtr+8:], 99)  // invalid fd
+		binary.LittleEndian.PutUint32(buf[inPtr+40:], 1) // fd_read
+		binary.LittleEndian.PutUint32(buf[inPtr+8:], 99) // invalid fd
 		if errno := s.Xpoll_oneoff(inPtr, outPtr, 1, neventsPtr); errno != wasiESuccess {
 			t.Fatalf("Xpoll_oneoff = %d", errno)
 		}

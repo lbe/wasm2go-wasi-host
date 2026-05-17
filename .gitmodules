@@ -1,4 +1,4 @@
 [submodule "wasi-testsuite"]
 	path = wasi-testsuite
 	url = https://github.com/lbe/wasi-testsuite
-	branch = prod/testsuite-base
+	branch = prod/testsuite-with-wasm2go

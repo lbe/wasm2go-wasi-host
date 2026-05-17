@@ -50,6 +50,7 @@ import (
 // the specification exactly.
 const (
 	wasiESuccess  int32 = 0
+	wasiEAcces    int32 = 2
 	wasiEBadf     int32 = 8
 	wasiEExist    int32 = 20
 	wasiEInval    int32 = 28
@@ -59,7 +60,10 @@ const (
 	wasiENoSys    int32 = 52
 	wasiENotDir   int32 = 54
 	wasiENotEmpty int32 = 55
+	wasiENotSup   int32 = 56
+	wasiEPerm     int32 = 63
 	wasiEROFS     int32 = 66
+	wasiEXdev     int32 = 75
 
 	// WASI file descriptor type tags, written into fdstat and filestat structs.
 	fdCharDev byte = 2 // character device (stdin, stdout, stderr, /dev/null)
@@ -73,7 +77,11 @@ const (
 	rightFdstatGet      uint64 = 1 << 5
 	rightFdstatSetFlags uint64 = 1 << 6
 	rightFilestatGet    uint64 = 1 << 7
-	rightPollOneoff     uint64 = 1 << 14
+	// WASI filestat_set_times flags.
+	fstAtim    int32 = 1 << 0
+	fstMtim    int32 = 1 << 1
+	fstAtimNow int32 = 1 << 2
+	fstMtimNow int32 = 1 << 3
 )
 
 // Rights bitmask bundles for regular files and character devices.
@@ -86,6 +94,9 @@ var (
 	oflagDir   uint32 = 1 << 1 // O_DIRECTORY: fail if not a directory
 	oflagExcl  uint32 = 1 << 2 // O_EXCL: fail if file already exists
 	oflagTrunc uint32 = 1 << 3 // O_TRUNC: truncate file to zero length on open
+
+	// schedYield is a seam for testing sched_yield.
+	schedYield func() = runtime.Gosched
 )
 
 // State is a WASI snapshot-preview1 host for a single wasm2go Module
@@ -138,7 +149,6 @@ type fdEntry struct {
 	mount   int
 	preopen bool
 	dirFile fs.ReadDirFile
-	dirOff  int64
 }
 
 // mountEntry maps a guest path prefix to a host filesystem. If writable
@@ -227,6 +237,10 @@ func WithMount(guestPath string, root fs.FS) Option {
 // operations (os.Create, os.Remove, os.Mkdir, os.Rename, etc.) and for
 // the primary/fallback absolute-path resolution used by path_open on root
 // mounts. If root is nil, os.DirFS(hostRoot) is used as the read overlay.
+//
+// Writable mounts are capability-oriented FFI host path access and are not
+// a security sandbox by default; they intentionally permit parent-directory
+// escape (e.g. via "..") to facilitate interaction with the host filesystem.
 func WithWritableMount(guestPath, hostRoot string, root fs.FS) Option {
 	return func(s *State) {
 		s.mounts = append(s.mounts, mountEntry{guestPath: guestPath, hostRoot: hostRoot, root: root, writable: true})
@@ -390,6 +404,7 @@ func (s *State) Xenviron_sizes_get(countPtr, bufSizePtr int32) int32 {
 	writeStringTableSizes(s.mem(), countPtr, bufSizePtr, s.env)
 	return wasiESuccess
 }
+
 // Xenviron_get implements environ_get. Writes a pointer array at envPtr
 // and the corresponding null-terminated "KEY=VALUE" strings packed at
 // envBufPtr into guest memory.
@@ -397,6 +412,7 @@ func (s *State) Xenviron_get(envPtr, envBufPtr int32) int32 {
 	writeStringTable(s.mem(), envPtr, envBufPtr, s.env)
 	return wasiESuccess
 }
+
 // Xfd_prestat_get implements fd_prestat_get. Returns the prestat struct
 // for the preopen directory at fd. Returns EBADF if fd is beyond the
 // last preopen.
@@ -411,6 +427,7 @@ func (s *State) Xfd_prestat_get(fd, prestatPtr int32) int32 {
 	binary.LittleEndian.PutUint32(mem[prestatPtr+4:], pathLen)
 	return wasiESuccess
 }
+
 // Xfd_prestat_dir_name implements fd_prestat_dir_name. Writes the guest
 // path string for the preopen directory at fd into guest memory.
 func (s *State) Xfd_prestat_dir_name(fd, pathPtr, pathLen int32) int32 {
@@ -423,6 +440,7 @@ func (s *State) Xfd_prestat_dir_name(fd, pathPtr, pathLen int32) int32 {
 	copy(mem[pathPtr:], name)
 	return wasiESuccess
 }
+
 // Xfd_fdstat_get implements fd_fdstat_get. Writes a 24-byte fdstat struct
 // at statPtr. fds 0–2 are reported as character devices; all others use
 // the type recorded in the fd table.
@@ -484,12 +502,14 @@ func (s *State) Xfd_renumber(fd, to int32) int32 {
 	s.fds[fd] = fdEntry{}
 	return wasiESuccess
 }
+
 // Xproc_exit implements proc_exit. Panics with [ExitError] so that the
 // embedding application's eval boundary can recover it and obtain the
 // guest exit code.
 func (s *State) Xproc_exit(code int32) {
 	panic(ExitError{Code: code})
 }
+
 // Xrandom_get implements random_get. Fills the guest memory region
 // [bufPtr, bufPtr+bufLen) with cryptographically random bytes.
 func (s *State) Xrandom_get(bufPtr, bufLen int32) int32 {
@@ -564,10 +584,6 @@ func (s *State) readBytes(ptr, length int32) []byte {
 // and a mount-relative path string using longest-prefix matching.
 // Returns (nil, "") if no mount covers the path.
 func (s *State) resolvePath(guestPath string) (*mountEntry, string) {
-	clean := path.Clean("/" + guestPath)
-	if clean == "." {
-		clean = "/"
-	}
 	var best *mountEntry
 	bestLen := -1
 	bestRel := ""
@@ -577,23 +593,36 @@ func (s *State) resolvePath(guestPath string) (*mountEntry, string) {
 		if mp == "." {
 			mp = "/"
 		}
-		match := false
-		if clean == mp {
-			match = true
-		} else if mp == "/" {
-			match = true
-		} else if strings.HasPrefix(clean, mp+"/") {
-			match = true
+
+		clean := path.Clean("/" + guestPath)
+		if clean == "." {
+			clean = "/"
 		}
-		if !match {
+		// Special case: if the path starts with the mount prefix but contains
+		// ".." that would escape the mount, we still want to match the mount
+		// but keep the ".." in rel.
+		// resolvePath's use of path.Clean below collapses ".." before prefix
+		// matching, which we bypass here if we find a raw prefix match.
+		rawGuest := "/" + strings.TrimPrefix(guestPath, "/")
+		rawMp := "/" + strings.TrimPrefix(m.guestPath, "/")
+		switch {
+		case rawGuest == rawMp || strings.HasPrefix(rawGuest, rawMp+"/"):
+			rel := strings.TrimPrefix(rawGuest, rawMp)
+			rel = strings.TrimPrefix(rel, "/")
+			if len(rawMp) > bestLen {
+				best = m
+				bestLen = len(rawMp)
+				bestRel = rel
+			}
 			continue
-		}
-		rel := strings.TrimPrefix(clean, mp)
-		rel = strings.TrimPrefix(rel, "/")
-		if len(mp) > bestLen {
-			best = m
-			bestLen = len(mp)
-			bestRel = rel
+		case clean == mp, mp == "/", strings.HasPrefix(clean, mp+"/"):
+			rel := strings.TrimPrefix(clean, mp)
+			rel = strings.TrimPrefix(rel, "/")
+			if len(mp) > bestLen {
+				best = m
+				bestLen = len(mp)
+				bestRel = rel
+			}
 		}
 	}
 	return best, bestRel
@@ -660,8 +689,36 @@ func mountHostPaths(m *mountEntry, rel string) (primary, fallback string) {
 // a read-only or unmounted location.
 func (s *State) resolvePrimary(dirfd, pathPtr, pathLen int32) string {
 	m, rel := s.resolveDirfdPath(dirfd, pathPtr, pathLen)
+	if m == nil {
+		return ""
+	}
 	primary, _ := mountHostPaths(m, rel)
 	return primary
+}
+
+// resolveWritable resolves a (dirfd, path) pair to a host path, choosing
+// between primary and fallback based on existence. This is used for
+// mutation operations where relative paths on a root writable mount
+// should fall back to the hostRoot.
+func (s *State) resolveWritable(dirfd, pathPtr, pathLen int32) (string, int32) {
+	m, rel := s.resolveDirfdPath(dirfd, pathPtr, pathLen)
+	if m == nil {
+		if dirfd < 0 || int(dirfd) >= len(s.fds) {
+			return "", wasiEBadf
+		}
+		// Existing behavior from TestWASIStubs/TestXpathRename
+		return "", wasiEROFS
+	}
+	primary, fallback := mountHostPaths(m, rel)
+	if primary == "" {
+		return "", wasiEROFS
+	}
+	if fallback != "" {
+		if _, err := os.Stat(primary); err != nil {
+			return fallback, wasiESuccess
+		}
+	}
+	return primary, wasiESuccess
 }
 
 // Xpath_create_directory implements path_create_directory. Creates a
@@ -669,12 +726,12 @@ func (s *State) resolvePrimary(dirfd, pathPtr, pathLen int32) string {
 // mount is read-only, EEXIST if the directory already exists, ENOENT if
 // the parent does not exist.
 func (s *State) Xpath_create_directory(dirfd, pathPtr, pathLen int32) int32 {
-	primary := s.resolvePrimary(dirfd, pathPtr, pathLen)
-	if primary == "" {
-		return wasiEROFS
+	path, errno := s.resolveWritable(dirfd, pathPtr, pathLen)
+	if errno != wasiESuccess {
+		return errno
 	}
-	if err := os.Mkdir(primary, 0755); err != nil {
-		return int32(mapOSError(err))
+	if err := os.Mkdir(path, 0755); err != nil {
+		return mapOSError(err)
 	}
 	return wasiESuccess
 }
@@ -684,19 +741,19 @@ func (s *State) Xpath_create_directory(dirfd, pathPtr, pathLen int32) int32 {
 // is read-only, ENOTDIR if the target is a file, ENOTEMPTY if the
 // directory is not empty.
 func (s *State) Xpath_remove_directory(dirfd, pathPtr, pathLen int32) int32 {
-	primary := s.resolvePrimary(dirfd, pathPtr, pathLen)
-	if primary == "" {
-		return wasiEROFS
+	path, errno := s.resolveWritable(dirfd, pathPtr, pathLen)
+	if errno != wasiESuccess {
+		return errno
 	}
-	fi, err := os.Lstat(primary)
+	fi, err := os.Lstat(path)
 	if err != nil {
-		return int32(mapOSError(err))
+		return mapOSError(err)
 	}
 	if !fi.IsDir() {
 		return wasiENotDir
 	}
-	if err := os.Remove(primary); err != nil {
-		return int32(mapOSError(err))
+	if err := os.Remove(path); err != nil {
+		return mapOSError(err)
 	}
 	return wasiESuccess
 }
@@ -705,19 +762,19 @@ func (s *State) Xpath_remove_directory(dirfd, pathPtr, pathLen int32) int32 {
 // resolved host path. Returns EROFS if the mount is read-only, EISDIR if
 // the target is a directory, ENOENT if the file does not exist.
 func (s *State) Xpath_unlink_file(dirfd, pathPtr, pathLen int32) int32 {
-	primary := s.resolvePrimary(dirfd, pathPtr, pathLen)
-	if primary == "" {
-		return wasiEROFS
+	path, errno := s.resolveWritable(dirfd, pathPtr, pathLen)
+	if errno != wasiESuccess {
+		return errno
 	}
-	fi, err := os.Lstat(primary)
+	fi, err := os.Lstat(path)
 	if err != nil {
-		return int32(mapOSError(err))
+		return mapOSError(err)
 	}
 	if fi.IsDir() {
 		return wasiEIsdir
 	}
-	if err := os.Remove(primary); err != nil {
-		return int32(mapOSError(err))
+	if err := os.Remove(path); err != nil {
+		return mapOSError(err)
 	}
 	return wasiESuccess
 }
@@ -727,13 +784,13 @@ func (s *State) Xpath_unlink_file(dirfd, pathPtr, pathLen int32) int32 {
 // bufLen bytes, and writes the actual byte count to nreadPtr. Returns
 // EROFS if the mount is read-only (embedded fs.FS mounts have no symlinks).
 func (s *State) Xpath_readlink(dirfd, pathPtr, pathLen, bufPtr, bufLen, nreadPtr int32) int32 {
-	primary := s.resolvePrimary(dirfd, pathPtr, pathLen)
-	if primary == "" {
-		return wasiEROFS
+	path, errno := s.resolveWritable(dirfd, pathPtr, pathLen)
+	if errno != wasiESuccess {
+		return errno
 	}
-	target, err := os.Readlink(primary)
+	target, err := os.Readlink(path)
 	if err != nil {
-		return int32(mapOSError(err))
+		return mapOSError(err)
 	}
 	mem := s.mem()
 	n := copy(mem[bufPtr:bufPtr+bufLen], target)
@@ -747,12 +804,12 @@ func (s *State) Xpath_readlink(dirfd, pathPtr, pathLen, bufPtr, bufLen, nreadPtr
 // exists.
 func (s *State) Xpath_symlink(oldPathPtr, oldPathLen, dirfd, newPathPtr, newPathLen int32) int32 {
 	target := string(s.readBytes(oldPathPtr, oldPathLen))
-	primary := s.resolvePrimary(dirfd, newPathPtr, newPathLen)
-	if primary == "" {
-		return wasiEROFS
+	path, errno := s.resolveWritable(dirfd, newPathPtr, newPathLen)
+	if errno != wasiESuccess {
+		return errno
 	}
-	if err := os.Symlink(target, primary); err != nil {
-		return int32(mapOSError(err))
+	if err := os.Symlink(target, path); err != nil {
+		return mapOSError(err)
 	}
 	return wasiESuccess
 }
@@ -761,15 +818,16 @@ func (s *State) Xpath_symlink(oldPathPtr, oldPathLen, dirfd, newPathPtr, newPath
 // old path to the resolved new path via os.Link. Returns EROFS if either
 // mount is read-only.
 func (s *State) Xpath_link(oldDirfd, oldFlags, oldPathPtr, oldPathLen, newDirfd, newPathPtr, newPathLen int32) int32 {
-	oldMount, oldRel := s.resolveDirfdPath(oldDirfd, oldPathPtr, oldPathLen)
-	newMount, newRel := s.resolveDirfdPath(newDirfd, newPathPtr, newPathLen)
-	oldPrimary, _ := mountHostPaths(oldMount, oldRel)
-	newPrimary, _ := mountHostPaths(newMount, newRel)
-	if oldPrimary == "" || newPrimary == "" {
-		return wasiEROFS
+	oldPath, oldErr := s.resolveWritable(oldDirfd, oldPathPtr, oldPathLen)
+	if oldErr != wasiESuccess {
+		return oldErr
 	}
-	if err := os.Link(oldPrimary, newPrimary); err != nil {
-		return int32(mapOSError(err))
+	newPath, newErr := s.resolveWritable(newDirfd, newPathPtr, newPathLen)
+	if newErr != wasiESuccess {
+		return newErr
+	}
+	if err := os.Link(oldPath, newPath); err != nil {
+		return mapOSError(err)
 	}
 	return wasiESuccess
 }
@@ -891,16 +949,21 @@ func (s *State) Xfd_write(fd int32, iovsPtr int32, iovsCount int32, nwrittenPtr 
 			bufLen := int32(binary.LittleEndian.Uint32(mem[off+4:]))
 			data := mem[bufPtr : bufPtr+bufLen]
 			var n int
+			var err error
 			if fd == 1 {
 				if s.stdout != nil {
-					n, _ = s.stdout.Write(data)
+					n, err = s.stdout.Write(data)
 				}
 			} else {
 				if s.stderr != nil {
-					n, _ = s.stderr.Write(data)
+					n, err = s.stderr.Write(data)
 				}
 			}
 			total += uint32(n)
+			if err != nil {
+				binary.LittleEndian.PutUint32(mem[nwrittenPtr:], total)
+				return wasiEIo
+			}
 		}
 		binary.LittleEndian.PutUint32(mem[nwrittenPtr:], total)
 		return wasiESuccess
@@ -917,13 +980,22 @@ func (s *State) Xfd_write(fd int32, iovsPtr int32, iovsCount int32, nwrittenPtr 
 		off := iovsPtr + i*8
 		bufPtr := int32(binary.LittleEndian.Uint32(mem[off:]))
 		bufLen := int32(binary.LittleEndian.Uint32(mem[off+4:]))
-		f, ok := entry.file.(interface {
+		if bufLen == 0 {
+			continue
+		}
+		wa, ok := entry.file.(interface {
 			WriteAt([]byte, int64) (int, error)
 		})
-		if ok {
-			n, _ := f.WriteAt(mem[bufPtr:bufPtr+bufLen], entry.offset)
-			entry.offset += int64(n)
-			total += uint32(n)
+		if !ok {
+			break
+		}
+		n, err := wa.WriteAt(mem[bufPtr:bufPtr+bufLen], entry.offset)
+		entry.offset += int64(n)
+		total += uint32(n)
+		if err != nil {
+			s.fds[fd] = entry
+			binary.LittleEndian.PutUint32(mem[nwrittenPtr:], total)
+			return wasiEIo
 		}
 	}
 	s.fds[fd] = entry
@@ -971,34 +1043,46 @@ func (s *State) Xfd_readdir(fd int32, bufPtr int32, bufLen int32, cookie int64, 
 		return wasiEBadf
 	}
 	entry := &s.fds[fd]
-	if entry.preopen {
-		if entry.mount < 0 || entry.mount >= len(s.mounts) {
-			return wasiEBadf
-		}
-		if entry.file == nil {
-			if d, ok := s.mounts[entry.mount].root.(fs.ReadDirFS); ok {
-				entries, err := d.ReadDir(".")
-				if err != nil {
-					return wasiEIo
+	mem := s.mem()
+	// Cache listing on first call for preopens or any directory fd.
+	if entry.dirFile == nil {
+		if entry.preopen {
+			if entry.mount < 0 || entry.mount >= len(s.mounts) {
+				return wasiEBadf
+			}
+			if entry.file == nil {
+				if d, ok := s.mounts[entry.mount].root.(fs.ReadDirFS); ok {
+					entries, err := d.ReadDir(".")
+					if err != nil {
+						return wasiEIo
+					}
+					entry.file = &DirEntriesFile{Entries: entries}
 				}
-				entry.file = &DirEntriesFile{Entries: entries}
 			}
 		}
-	}
-	if entry.file == nil {
-		return wasiEBadf
-	}
-	if entry.dirFile == nil {
+		if entry.file == nil {
+			return wasiEBadf
+		}
 		df, ok := entry.file.(fs.ReadDirFile)
 		if !ok {
 			return wasiENotDir
 		}
 		entry.dirFile = df
 	}
-	mem := s.mem()
+
 	entries, err := entry.dirFile.ReadDir(-1)
 	if err != nil && err != io.EOF {
 		return wasiEIo
+	}
+	// Restore entries to the file if it's our own DirEntriesFile adapter,
+	// so that subsequent calls with cookies can still access them.
+	if de, ok := entry.file.(*DirEntriesFile); ok {
+		de.idx = 0
+	}
+
+	if cookie > 0 && int(cookie) >= len(entries) {
+		binary.LittleEndian.PutUint32(mem[bufUsedPtr:], 0)
+		return wasiESuccess
 	}
 	if len(entries) == 0 {
 		binary.LittleEndian.PutUint32(mem[bufUsedPtr:], 0)
@@ -1351,19 +1435,22 @@ func (s *State) Xfd_pread(fd, iovsPtr, iovsCount int32, offset int64, nreadPtr i
 		if bufLen == 0 {
 			continue
 		}
-		var n int
-		var err error
 		ra, ok := entry.file.(interface {
 			ReadAt([]byte, int64) (int, error)
 		})
 		if !ok {
-			break
+			binary.LittleEndian.PutUint32(mem[nreadPtr:], total)
+			return wasiENotSup
 		}
-		n, err = ra.ReadAt(mem[bufPtr:bufPtr+bufLen], curOff)
+		n, err := ra.ReadAt(mem[bufPtr:bufPtr+bufLen], curOff)
 		total += uint32(n)
 		curOff += int64(n)
 		if err != nil {
-			break
+			if err == io.EOF {
+				break
+			}
+			binary.LittleEndian.PutUint32(mem[nreadPtr:], total)
+			return wasiEIo
 		}
 	}
 	binary.LittleEndian.PutUint32(mem[nreadPtr:], total)
@@ -1373,8 +1460,10 @@ func (s *State) Xfd_pread(fd, iovsPtr, iovsCount int32, offset int64, nreadPtr i
 // Xfd_pwrite implements fd_pwrite. Writes to fd at the given offset
 // without updating the fd's WASI-level offset (entry.offset). Requires
 // the underlying file to implement WriteAt; if it does not, no bytes are
-// written. Returns EINVAL for fds 0–2 (positioned writes on stdio are
-// not defined by WASI).
+// written and ENOTSUP is returned. If WriteAt returns an error, fd_pwrite
+// returns EIO and preserves the partial byte count in guest memory.
+// Returns EINVAL for fds 0–2 (positioned writes on stdio are not
+// defined by WASI).
 func (s *State) Xfd_pwrite(fd, iovsPtr, iovsCount int32, offset int64, nwrittenPtr int32) int32 {
 	if fd <= 2 {
 		return wasiEInval
@@ -1386,6 +1475,7 @@ func (s *State) Xfd_pwrite(fd, iovsPtr, iovsCount int32, offset int64, nwrittenP
 	if entry.file == nil {
 		return wasiEBadf
 	}
+
 	mem := s.mem()
 	var total uint32
 	curOff := offset
@@ -1400,13 +1490,16 @@ func (s *State) Xfd_pwrite(fd, iovsPtr, iovsCount int32, offset int64, nwrittenP
 			WriteAt([]byte, int64) (int, error)
 		})
 		if !ok {
-			break
+			binary.LittleEndian.PutUint32(mem[nwrittenPtr:], total)
+			return wasiENotSup
 		}
+
 		n, err := wa.WriteAt(mem[bufPtr:bufPtr+bufLen], curOff)
 		total += uint32(n)
 		curOff += int64(n)
 		if err != nil {
-			break
+			binary.LittleEndian.PutUint32(mem[nwrittenPtr:], total)
+			return wasiEIo
 		}
 	}
 	binary.LittleEndian.PutUint32(mem[nwrittenPtr:], total)
@@ -1430,18 +1523,37 @@ func (s *State) Xfd_tell(fd, offsetPtr int32) int32 {
 	return wasiESuccess
 }
 
-// Xsched_yield implements sched_yield. Returns ESUCCESS.
-func (s *State) Xsched_yield() int32 { return wasiESuccess }
+// Xsched_yield implements sched_yield. This host is synchronous;
+// yielding calls the [runtime.Gosched] seam and returns ESUCCESS.
+func (s *State) Xsched_yield() int32 {
+	schedYield()
+	return wasiESuccess
+}
 
-// Xfd_datasync implements fd_datasync. Returns ESUCCESS without calling
-// Sync on the underlying file. A future version may call
-// (*os.File).Sync for osFile-backed fds.
-func (s *State) Xfd_datasync(fd int32) int32 { return wasiESuccess }
+// Xfd_datasync implements fd_datasync. Validates that fd is a valid
+// open file descriptor index. For sync-capable fds (those whose underlying
+// file implements a Sync() error method, such as osFile), invokes host Sync
+// and maps any error. For other files, returns ESUCCESS without mutation.
+func (s *State) Xfd_datasync(fd int32) int32 {
+	if fd < 0 || int(fd) >= len(s.fds) {
+		return wasiEBadf
+	}
+	entry := s.fds[fd]
+	if entry.file == nil && entry.fdType == 0 {
+		return wasiEBadf
+	}
+	if syncer, ok := entry.file.(interface{ Sync() error }); ok {
+		if err := syncer.Sync(); err != nil {
+			return mapOSError(err)
+		}
+	}
+	return wasiESuccess
+}
 
-// Xfd_sync implements fd_sync. Always returns ESUCCESS without calling
-// Sync on the underlying file. Embedded fs.FS files have no sync
-// semantics, and ExifTool does not issue fd_sync in practice.
-func (s *State) Xfd_sync(fd int32) int32 { return wasiESuccess }
+// Xfd_sync implements fd_sync. Always returns ESUCCESS.
+func (s *State) Xfd_sync(fd int32) int32 {
+	return wasiESuccess
+}
 
 // Xfd_fdstat_set_flags implements fd_fdstat_set_flags. Always returns
 // ESUCCESS. Non-blocking I/O flags have no meaning in a synchronous
@@ -1489,18 +1601,19 @@ func (s *State) Xfd_filestat_set_size(fd int32, size int64) int32 {
 	}
 	if of, ok := entry.file.(*osFile); ok {
 		if err := of.Truncate(size); err != nil {
-			return int32(mapOSError(err))
+			return mapOSError(err)
 		}
 	}
 	return wasiESuccess
 }
-// Xfd_filestat_set_times implements fd_filestat_set_times. Only the MTIM
-// flag (bit 1) is currently acted upon; if it is not set the call is a
-// no-op. For osFile-backed fds, calls os.Chtimes with the specified mtim
-// nanosecond value. For fs.FS-backed fds, returns ESUCCESS without
-// mutation.
+
+// Xfd_filestat_set_times implements fd_filestat_set_times.
+//
+// For osFile-backed fds, calls os.Chtimes with the specified nanosecond
+// values. Honors ATIM, MTIM, ATIM_NOW, and MTIM_NOW flags. For
+// fs.FS-backed fds, returns ESUCCESS without mutation.
 func (s *State) Xfd_filestat_set_times(fd int32, atim, mtim int64, fstFlags int32) int32 {
-	if fstFlags&2 == 0 {
+	if fstFlags&(fstAtim|fstMtim|fstAtimNow|fstMtimNow) == 0 {
 		return wasiESuccess
 	}
 	if fd < 0 || int(fd) >= len(s.fds) {
@@ -1510,34 +1623,65 @@ func (s *State) Xfd_filestat_set_times(fd int32, atim, mtim int64, fstFlags int3
 	if entry.file == nil {
 		return wasiEBadf
 	}
-	if of, ok := entry.file.(*osFile); ok {
-		return applyMtim(of.Name(), mtim)
+	of, ok := entry.file.(*osFile)
+	if !ok {
+		return wasiESuccess
+	}
+
+	fi, err := of.Stat()
+	if err != nil {
+		return mapOSError(err)
+	}
+
+	targetAtim, targetMtim := computeTargetTimes(fi, atim, mtim, fstFlags)
+
+	if err := os.Chtimes(of.Name(), targetAtim, targetMtim); err != nil {
+		return mapOSError(err)
 	}
 	return wasiESuccess
 }
-// Xpath_filestat_set_times implements path_filestat_set_times. Only the
-// MTIM flag (bit 1) is currently acted upon; if it is not set the call is
-// a no-op. Resolves the path and calls os.Chtimes. Returns ESUCCESS
-// without mutation for read-only mounts.
+
+func computeTargetTimes(fi fs.FileInfo, atim, mtim int64, fstFlags int32) (time.Time, time.Time) {
+	targetAtim := getAtimeFromStat(fi)
+	if fstFlags&fstAtimNow != 0 {
+		targetAtim = time.Now()
+	} else if fstFlags&fstAtim != 0 {
+		targetAtim = time.Unix(0, atim)
+	}
+
+	targetMtim := fi.ModTime()
+	if fstFlags&fstMtimNow != 0 {
+		targetMtim = time.Now()
+	} else if fstFlags&fstMtim != 0 {
+		targetMtim = time.Unix(0, mtim)
+	}
+	return targetAtim, targetMtim
+}
+
+// Xpath_filestat_set_times implements path_filestat_set_times.
+//
+// ATIM (bit 0), MTIM (bit 1), ATIM_NOW (bit 2), and MTIM_NOW (bit 3) flags
+// are acted upon. Resolves writable host paths and calls os.Chtimes.
+// Returns EROFS when the path is read-only or cannot be resolved to a
+// writable host path.
 func (s *State) Xpath_filestat_set_times(dirfd, flags, pathPtr, pathLen int32, atim, mtim int64, fstFlags int32) int32 {
-	if fstFlags&2 == 0 {
+	if fstFlags&(fstAtim|fstMtim|fstAtimNow|fstMtimNow) == 0 {
 		return wasiESuccess
 	}
 	primary := s.resolvePrimary(dirfd, pathPtr, pathLen)
 	if primary == "" {
 		return wasiEROFS
 	}
-	return applyMtim(primary, mtim)
-}
 
-// applyMtim calls os.Chtimes to set the mtime of the file at path to the
-// given nanosecond timestamp. atime is set to the current wall time as a
-// neutral value. Returns the mapped WASI errno on failure.
-func applyMtim(path string, mtim int64) int32 {
-	mtime := time.Unix(0, mtim)
-	atime := time.Now()
-	if err := os.Chtimes(path, atime, mtime); err != nil {
-		return int32(mapOSError(err))
+	fi, err := os.Stat(primary)
+	if err != nil {
+		return mapOSError(err)
+	}
+
+	targetAtim, targetMtim := computeTargetTimes(fi, atim, mtim, fstFlags)
+
+	if err := os.Chtimes(primary, targetAtim, targetMtim); err != nil {
+		return mapOSError(err)
 	}
 	return wasiESuccess
 }
@@ -1545,16 +1689,36 @@ func applyMtim(path string, mtim int64) int32 {
 // mapOSError converts a host OS error to the closest WASI errno value.
 // Canonical mappings: ErrNotExist→ENOENT(44), ErrExist→EEXIST(20),
 // ENOTEMPTY→ENOTEMPTY(55). All other errors map to EIO(29).
-func mapOSError(err error) uint32 {
+func mapOSError(err error) int32 {
 	if errors.Is(err, os.ErrNotExist) {
-		return 44
+		return wasiENoEnt
 	}
 	if errors.Is(err, syscall.ENOTEMPTY) {
-		return 55
+		return wasiENotEmpty
 	}
 	if errors.Is(err, os.ErrExist) {
-		return 20
+		return wasiEExist
 	}
-	return 29
+	if errors.Is(err, syscall.ENOTDIR) {
+		return wasiENotDir
+	}
+	if errors.Is(err, syscall.EISDIR) {
+		return wasiEIsdir
+	}
+	if errors.Is(err, syscall.EACCES) {
+		return wasiEAcces
+	}
+	if errors.Is(err, syscall.EPERM) {
+		return wasiEPerm
+	}
+	if errors.Is(err, syscall.EROFS) {
+		return wasiEROFS
+	}
+	if errors.Is(err, syscall.EXDEV) {
+		return wasiEXdev
+	}
+	if errors.Is(err, syscall.EINVAL) {
+		return wasiEInval
+	}
+	return wasiEIo
 }
-

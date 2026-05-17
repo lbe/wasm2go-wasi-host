@@ -68,11 +68,11 @@ func TestFilestatMutations(t *testing.T) {
 		}
 	})
 
-	t.Run("Xfd_filestat_set_times fstFlags=2 updates mtime on osFile", func(t *testing.T) {
+	t.Run("Xfd_filestat_set_times fstMtim updates mtime on osFile", func(t *testing.T) {
 		s, _ := newTestState()
 		filePath := setupOsFileFd(t, s, 5, []byte("data"))
 
-		errno := s.Xfd_filestat_set_times(5, 0, targetMtimNs, 2)
+		errno := s.Xfd_filestat_set_times(5, 0, targetMtimNs, fstMtim)
 		if errno != wasiESuccess {
 			t.Fatalf("filestat_set_times returned %d, want ESUCCESS", errno)
 		}
@@ -112,7 +112,7 @@ func TestFilestatMutations(t *testing.T) {
 		}
 	})
 
-	t.Run("Xpath_filestat_set_times fstFlags=2 updates mtime by path", func(t *testing.T) {
+	t.Run("Xpath_filestat_set_times fstMtim updates mtime by path", func(t *testing.T) {
 		s, buf := newTestState()
 		hostDir := setupWritableMount(t, s, buf)
 		fname := "testfile.txt"
@@ -121,7 +121,7 @@ func TestFilestatMutations(t *testing.T) {
 		}
 		pathOff, pathLen := writePath(buf, 500, fname)
 
-		errno := s.Xpath_filestat_set_times(3, 0, pathOff, pathLen, 0, targetMtimNs, 2)
+		errno := s.Xpath_filestat_set_times(3, 0, pathOff, pathLen, 0, targetMtimNs, fstMtim)
 		if errno != wasiESuccess {
 			t.Fatalf("xpath_filestat_set_times returned %d, want ESUCCESS", errno)
 		}
@@ -165,10 +165,205 @@ func TestFilestatMutations(t *testing.T) {
 		}
 	})
 
-	t.Run("applyMtim error on nonexistent path", func(t *testing.T) {
-		errno := applyMtim("/nonexistent/path/deleted.txt", targetMtimNs)
+	t.Run("Xfd_filestat_set_times fstMtimNow updates mtime to current", func(t *testing.T) {
+		s, _ := newTestState()
+		filePath := setupOsFileFd(t, s, 5, []byte("data"))
+
+		// Set to a past time first to ensure NOW change is visible
+		past := time.Now().Add(-1 * time.Hour)
+		if err := os.Chtimes(filePath, past, past); err != nil {
+			t.Fatal(err)
+		}
+
+		errno := s.Xfd_filestat_set_times(5, 0, 0, fstMtimNow)
+		if errno != wasiESuccess {
+			t.Fatalf("filestat_set_times returned %d, want ESUCCESS", errno)
+		}
+
+		fi, err := os.Stat(filePath)
+		if err != nil {
+			t.Fatal(err)
+		}
+		// mtime should be within a few seconds of "now"
+		if time.Since(fi.ModTime()) > 5*time.Second {
+			t.Errorf("mtime = %v, not close to now", fi.ModTime())
+		}
+	})
+
+	t.Run("Xfd_filestat_set_times fstAtimNow updates atime but not mtime", func(t *testing.T) {
+		s, _ := newTestState()
+		filePath := setupOsFileFd(t, s, 5, []byte("data"))
+
+		// Ensure we have a baseline and distinguish from "now"
+		past := time.Now().Add(-1 * time.Hour).Truncate(time.Second)
+		if err := os.Chtimes(filePath, past, past); err != nil {
+			t.Fatal(err)
+		}
+
+		fi0, err := os.Stat(filePath)
+		if err != nil {
+			t.Fatal(err)
+		}
+		mtimeBefore := fi0.ModTime()
+
+		errno := s.Xfd_filestat_set_times(5, 0, 0, fstAtimNow)
+		if errno != wasiESuccess {
+			t.Fatalf("filestat_set_times returned %d, want ESUCCESS", errno)
+		}
+
+		fi1, err := os.Stat(filePath)
+		if err != nil {
+			t.Fatal(err)
+		}
+
+		atimeAfter := getAtimeFromStat(fi1)
+		mtimeAfter := fi1.ModTime()
+
+		// atime should be close to now
+		if time.Since(atimeAfter) > 10*time.Second {
+			t.Errorf("atime = %v, not close to now (since=%v)", atimeAfter, time.Since(atimeAfter))
+		}
+
+		// mtime should be unchanged
+		if !mtimeAfter.Equal(mtimeBefore) {
+			t.Errorf("mtime changed: before=%v after=%v", mtimeBefore, mtimeAfter)
+		}
+	})
+
+	t.Run("Xpath_filestat_set_times error on nonexistent path", func(t *testing.T) {
+		s, buf := newTestState()
+		_ = setupWritableMount(t, s, buf)
+		pathOff, pathLen := writePath(buf, 500, "/nonexistent/path/deleted.txt")
+		errno := s.Xpath_filestat_set_times(3, 0, pathOff, pathLen, 0, targetMtimNs, fstMtim)
 		if errno == wasiESuccess {
-			t.Error("applyMtim on missing path returned ESUCCESS, want error")
+			t.Error("Xpath_filestat_set_times on missing path returned ESUCCESS, want error")
+		}
+	})
+
+	t.Run("Xpath_filestat_set_times fstMtimNow updates mtime to current", func(t *testing.T) {
+		s, buf := newTestState()
+		hostDir := setupWritableMount(t, s, buf)
+		fname := "now.txt"
+		hostPath := filepath.Join(hostDir, fname)
+		if err := os.WriteFile(hostPath, []byte("x"), 0644); err != nil {
+			t.Fatal(err)
+		}
+
+		// Set to a past time first to ensure NOW change is visible
+		past := time.Now().Add(-1 * time.Hour)
+		if err := os.Chtimes(hostPath, past, past); err != nil {
+			t.Fatal(err)
+		}
+
+		pathOff, pathLen := writePath(buf, 500, fname)
+
+		errno := s.Xpath_filestat_set_times(3, 0, pathOff, pathLen, 0, 0, fstMtimNow)
+		if errno != wasiESuccess {
+			t.Fatalf("Xpath_filestat_set_times fstMtimNow returned %d, want ESUCCESS", errno)
+		}
+
+		fi, err := os.Stat(hostPath)
+		if err != nil {
+			t.Fatal(err)
+		}
+		// mtime should be within a few seconds of "now"
+		if time.Since(fi.ModTime()) > 5*time.Second {
+			t.Errorf("mtime = %v, not close to now", fi.ModTime())
+		}
+	})
+
+	t.Run("Xpath_filestat_set_times fstAtim updates atime by path", func(t *testing.T) {
+		s, buf := newTestState()
+		hostDir := setupWritableMount(t, s, buf)
+		fname := "atim.txt"
+		hostPath := filepath.Join(hostDir, fname)
+		if err := os.WriteFile(hostPath, []byte("x"), 0644); err != nil {
+			t.Fatal(err)
+		}
+
+		// Set to a past time first to ensure change is visible
+		past := time.Date(2010, 1, 1, 0, 0, 0, 0, time.UTC)
+		if err := os.Chtimes(hostPath, past, past); err != nil {
+			t.Fatal(err)
+		}
+
+		targetAtim := time.Date(2022, 2, 2, 2, 2, 2, 0, time.UTC)
+		targetAtimNs := targetAtim.UnixNano()
+
+		pathOff, pathLen := writePath(buf, 500, fname)
+
+		errno := s.Xpath_filestat_set_times(3, 0, pathOff, pathLen, int64(targetAtimNs), 0, fstAtim)
+		if errno != wasiESuccess {
+			t.Fatalf("Xpath_filestat_set_times fstAtim returned %d, want ESUCCESS", errno)
+		}
+
+		fi, err := os.Stat(hostPath)
+		if err != nil {
+			t.Fatal(err)
+		}
+
+		atimAfter := getAtimeFromStat(fi)
+		mtimeAfter := fi.ModTime()
+
+		diff := atimAfter.Sub(targetAtim)
+		if diff < 0 {
+			diff = -diff
+		}
+		// Filesystem precision might vary, but 2s is safe for most
+		if diff > 2*time.Second {
+			t.Errorf("atime = %v, want within 2s of %v (diff=%v)", atimAfter, targetAtim, diff)
+		}
+
+		// mtime should be unchanged (still 'past')
+		if !mtimeAfter.Equal(past) {
+			t.Errorf("mtime changed: got %v, want %v", mtimeAfter, past)
+		}
+	})
+
+	t.Run("Xpath_filestat_set_times fstAtimNow updates atime but not mtime", func(t *testing.T) {
+		s, buf := newTestState()
+		hostDir := setupWritableMount(t, s, buf)
+		fname := "atim_now.txt"
+		hostPath := filepath.Join(hostDir, fname)
+		if err := os.WriteFile(hostPath, []byte("x"), 0644); err != nil {
+			t.Fatal(err)
+		}
+
+		// Set to a past time first to ensure change is visible
+		past := time.Now().Add(-1 * time.Hour).Truncate(time.Second)
+		if err := os.Chtimes(hostPath, past, past); err != nil {
+			t.Fatal(err)
+		}
+
+		fi0, err := os.Stat(hostPath)
+		if err != nil {
+			t.Fatal(err)
+		}
+		mtimeBefore := fi0.ModTime()
+
+		pathOff, pathLen := writePath(buf, 500, fname)
+
+		errno := s.Xpath_filestat_set_times(3, 0, pathOff, pathLen, 0, 0, fstAtimNow)
+		if errno != wasiESuccess {
+			t.Fatalf("Xpath_filestat_set_times fstAtimNow returned %d, want ESUCCESS", errno)
+		}
+
+		fi1, err := os.Stat(hostPath)
+		if err != nil {
+			t.Fatal(err)
+		}
+
+		atimAfter := getAtimeFromStat(fi1)
+		mtimeAfter := fi1.ModTime()
+
+		// atime should be close to now
+		if time.Since(atimAfter) > 10*time.Second {
+			t.Errorf("atime = %v, not close to now (since=%v)", atimAfter, time.Since(atimAfter))
+		}
+
+		// mtime should be unchanged
+		if !mtimeAfter.Equal(mtimeBefore) {
+			t.Errorf("mtime changed: before=%v after=%v", mtimeBefore, mtimeAfter)
 		}
 	})
 }
