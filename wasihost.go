@@ -1053,6 +1053,9 @@ func (s *State) Xfd_read(fd int32, iovsPtr int32, iovsCount int32, nreadPtr int3
 	if entry.file == nil {
 		return wasiEBadf
 	}
+	if entry.fdType == fdDir {
+		return wasiEIsdir
+	}
 	if errno := errnoIfFDRightsMissing(entry.rightsBase, rightFDRead); errno != 0 {
 		return errno
 	}
@@ -1136,6 +1139,9 @@ func (s *State) Xfd_write(fd int32, iovsPtr int32, iovsCount int32, nwrittenPtr 
 	}
 	if entry.file == nil {
 		return wasiEBadf
+	}
+	if entry.fdType == fdDir {
+		return wasiEIsdir
 	}
 	if errno := errnoIfFDRightsMissing(entry.rightsBase, rightFDWrite); errno != 0 {
 		return errno
@@ -1688,6 +1694,9 @@ func (s *State) Xfd_pread(fd, iovsPtr, iovsCount int32, offset int64, nreadPtr i
 	if entry.file == nil {
 		return wasiEBadf
 	}
+	if entry.fdType == fdDir {
+		return wasiEIsdir
+	}
 	if errno := errnoIfFDRightsMissing(entry.rightsBase, rightFDRead); errno != 0 {
 		return errno
 	}
@@ -1741,6 +1750,9 @@ func (s *State) Xfd_pwrite(fd, iovsPtr, iovsCount int32, offset int64, nwrittenP
 	entry := s.fds[fd]
 	if entry.file == nil {
 		return wasiEBadf
+	}
+	if entry.fdType == fdDir {
+		return wasiEIsdir
 	}
 	if errno := errnoIfFDRightsMissing(entry.rightsBase, rightFDWrite); errno != 0 {
 		return errno
