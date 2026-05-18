@@ -519,8 +519,11 @@ func (s *State) Xfd_prestat_dir_name(fd, pathPtr, pathLen int32) int32 {
 	if entry.isUnused() {
 		return wasiEBadf
 	}
-	mem := s.mem()
 	name := entry.path
+	if int(pathLen) < len(name) {
+		return wasiEInval
+	}
+	mem := s.mem()
 	copy(mem[pathPtr:], name)
 	return wasiESuccess
 }
