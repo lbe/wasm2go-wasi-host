@@ -1818,6 +1818,9 @@ func (s *State) Xfd_tell(fd, offsetPtr int32) int32 {
 	if entry.file == nil && entry.fdType == 0 {
 		return wasiEBadf
 	}
+	if errno := errnoForDirectoryFDOp(entry); errno != 0 {
+		return errno
+	}
 	binary.LittleEndian.PutUint64(s.mem()[offsetPtr:], uint64(entry.offset))
 	return wasiESuccess
 }
@@ -1878,9 +1881,22 @@ func (s *State) Xfd_fdstat_set_flags(fd, flags int32) int32 {
 // silently ignored.
 func (s *State) Xfd_advise(fd int32, offset, length int64, advice int32) int32 { return wasiESuccess }
 
-// Xfd_allocate implements fd_allocate (fallocate). Always returns ESUCCESS.
-// Disk-space pre-reservation is advisory; this is an intentional no-op.
-func (s *State) Xfd_allocate(fd int32, offset, length int64) int32 { return wasiESuccess }
+// Xfd_allocate implements fd_allocate (fallocate). Returns EISDIR for
+// directory fds. For regular files, disk-space pre-reservation is advisory;
+// this is an intentional no-op.
+func (s *State) Xfd_allocate(fd int32, offset, length int64) int32 {
+	if fd < 0 || int(fd) >= len(s.fds) {
+		return wasiEBadf
+	}
+	entry := s.fds[fd]
+	if entry.file == nil && entry.fdType == 0 {
+		return wasiEBadf
+	}
+	if errno := errnoForDirectoryFDOp(entry); errno != 0 {
+		return errno
+	}
+	return wasiESuccess
+}
 
 func (s *State) Xfd_fdstat_set_rights(fd int32, base, inheriting int64) int32 {
 	s.assertSingleOwner()
@@ -1927,6 +1943,9 @@ func (s *State) Xfd_filestat_set_size(fd int32, size int64) int32 {
 	entry := s.fds[fd]
 	if entry.fdType == 0 {
 		return wasiEBadf
+	}
+	if errno := errnoForDirectoryFDOp(entry); errno != 0 {
+		return errno
 	}
 	if of, ok := entry.file.(*osFile); ok {
 		if errno := errnoIfFDRightsMissing(entry.rightsBase, rightFDFilestatSetSize); errno != 0 {
