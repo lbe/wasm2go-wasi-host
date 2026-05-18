@@ -137,21 +137,16 @@ flowchart TD
 
 ---
 
-### Group 2 — Directory FD semantics + preopen close
+### Group 2 — Directory FD semantics + preopen close ✓
 
 **Tests:** `dir_fd_op_failures`, `directory_seek`, `path_open_dirfd_not_dir`, `close_preopen`
 
-**Likely gaps:**
-
-- `Xfd_close` returns **`EBADF` for preopens**; `close_preopen` expects close to succeed and slot to become invalid.
-- Byte I/O and **seek on directory fds** should return **`EISDIR`** / **`ENOTCAP`** / **`EBADF`** (test allows a set), not success.
-- **`path_open`** when dirfd is not a directory.
-
-**Work:**
-
-1. Allow closing preopen fds; clear slot → subsequent ops `EBADF`.
-2. Reject read/write/pread/pwrite/seek on `fdDir` / `dirFile` entries with correct errno.
-3. Harden `resolveDirfdPath` / `path_open` for file dirfds.
+**Status:** Done on branch `fix-dir-fd-and-close-preopen` (TDD plan
+`.pi/tdd-plans/fix-dir-fd-and-close-preopen.yaml`). Host changes: closable
+preopens, `errnoForDirectoryFDOp` on byte and position/size syscalls, strip
+`FD_SEEK` from directory `fdstat`, `path_open` rejects non-directory dirfds,
+`fd_prestat_dir_name` returns `EINVAL` when the buffer is too small. Verified
+via `group_dir_fd_test.go`, `group_a_fd_test.go`, and `e2e_group2_test.go`.
 
 **Verify:** all four tests. **Good first PR:** `close_preopen` + `fstflags_validate` (Group 6a) before large `fd_readdir` work.
 
@@ -306,7 +301,7 @@ flowchart TD
 | Group | Tests | Done |
 |-------|-------|------|
 | 1 — fd_readdir | `fd_readdir`, `fdopendir-with-access` | ☐ |
-| 2 — dir FD | `dir_fd_op_failures`, `directory_seek`, `path_open_dirfd_not_dir`, `close_preopen` | ☐ |
+| 2 — dir FD | `dir_fd_op_failures`, `directory_seek`, `path_open_dirfd_not_dir`, `close_preopen` | ☑ |
 | 3 — paths | `interesting_paths` | ☐ |
 | 4 — slashes | `unlink_file_trailing_slashes`, `path_symlink_trailing_slashes` | ☐ |
 | 5 — symlinks | `symlink_create`, `symlink_filestat`, `dangling_symlink` | ☐ |

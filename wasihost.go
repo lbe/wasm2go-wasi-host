@@ -1025,11 +1025,6 @@ func (s *State) Xfd_close(fd int32) int32 {
 }
 
 // Xfd_read implements fd_read. For fd 0 (stdin), reads from the
-// io.Reader configured by [WithStdin]. For other fds, uses ReadAt when
-// the underlying file supports it (osFile) to keep the WASI-level offset
-// in sync with WriteAt calls; falls back to Read for fs.FS-backed files.
-// Returns ENOTCAPABLE when FD_READ is not set in the fd's rights_base.
-// Xfd_read implements fd_read. For fd 0 (stdin), reads from the
 // io.Reader configured by [WithStdin]. For other fds, reads via ReadAt
 // at the current fd offset when available, otherwise via Read. Returns
 // EISDIR for directory fds, ENOTCAPABLE when FD_READ is not set in the
@@ -1708,7 +1703,6 @@ func writeStringTable(mem []byte, ptrBase, bufBase int32, items []string) {
 	}
 }
 
-// Xfd_pread implements fd_pread. Reads from fd at the given offset
 // Xfd_pread implements fd_pread. Reads from fd at the given offset
 // without updating the fd's WASI-level offset (entry.offset). Requires
 // the underlying file to implement ReadAt; if it does not, no bytes are
