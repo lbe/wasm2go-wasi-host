@@ -187,6 +187,10 @@ type fdEntry struct {
 	fdFlags          uint16
 }
 
+func (e fdEntry) isUnused() bool {
+	return e.file == nil && e.fdType == 0
+}
+
 // errnoIfFDRightsMissing returns wasiENotCap if rightsBase does not include
 // every bit set in required; otherwise it returns 0.
 func errnoIfFDRightsMissing(rightsBase, required uint64) int32 {
@@ -204,6 +208,18 @@ func errnoIfHostPathNotADirectory(hostPath string) int32 {
 	fi, err := os.Stat(hostPath)
 	if err == nil && !fi.IsDir() {
 		return wasiENotDir
+	}
+	return 0
+}
+
+// errnoForDirectoryFDOp returns EISDIR when the fd entry refers to a
+// directory, because byte-oriented I/O (fd_read, fd_pread, fd_write,
+// fd_pwrite) and position/size operations (fd_seek, fd_tell,
+// fd_allocate, fd_filestat_set_size) are not defined on directories.
+// Returns 0 for non-directory entries.
+func errnoForDirectoryFDOp(entry fdEntry) int32 {
+	if entry.fdType == fdDir {
+		return wasiEIsdir
 	}
 	return 0
 }
@@ -345,7 +361,7 @@ func (s *State) allocFD() int32 {
 	s.assertSingleOwner()
 	start := 3 + len(s.preopens)
 	for i := start; i < len(s.fds); i++ {
-		if s.fds[i].file == nil && s.fds[i].fdType == 0 {
+		if s.fds[i].isUnused() {
 			return int32(i)
 		}
 	}
@@ -474,29 +490,34 @@ func (s *State) Xenviron_get(envPtr, envBufPtr int32) int32 {
 }
 
 // Xfd_prestat_get implements fd_prestat_get. Returns the prestat struct
-// for the preopen directory at fd. Returns EBADF if fd is beyond the
-// last preopen.
+// for the preopen directory at fd. Returns EBADF if fd is not a valid,
+// in-use preopen.
 func (s *State) Xfd_prestat_get(fd, prestatPtr int32) int32 {
-	idx := fd - 3
-	if idx < 0 || idx >= int32(len(s.preopens)) {
+	entry, ok := s.preopenEntryByFD(fd)
+	if !ok {
 		return wasiEBadf
 	}
 	mem := s.mem()
-	pathLen := uint32(len(s.preopens[idx].path))
+	pathLen := uint32(len(entry.path))
 	binary.LittleEndian.PutUint32(mem[prestatPtr:], 0)
 	binary.LittleEndian.PutUint32(mem[prestatPtr+4:], pathLen)
 	return wasiESuccess
 }
 
 // Xfd_prestat_dir_name implements fd_prestat_dir_name. Writes the guest
-// path string for the preopen directory at fd into guest memory.
+// path string for the preopen directory at fd into guest memory. Returns
+// EBADF if fd is not a valid, in-use preopen, or EINVAL when pathLen is
+// smaller than the preopen path length.
 func (s *State) Xfd_prestat_dir_name(fd, pathPtr, pathLen int32) int32 {
-	idx := fd - 3
-	if idx < 0 || idx >= int32(len(s.preopens)) {
+	entry, ok := s.preopenEntryByFD(fd)
+	if !ok {
 		return wasiEBadf
 	}
+	name := entry.path
+	if int(pathLen) < len(name) {
+		return wasiEInval
+	}
 	mem := s.mem()
-	name := s.preopens[idx].path
 	copy(mem[pathPtr:], name)
 	return wasiESuccess
 }
@@ -510,7 +531,7 @@ func (s *State) Xfd_fdstat_get(fd, statPtr int32) int32 {
 		return wasiEBadf
 	}
 	entry := s.fds[fd]
-	if entry.file == nil && entry.fdType == 0 {
+	if entry.isUnused() {
 		return wasiEBadf
 	}
 	writeFdstat(s.mem(), statPtr, entry.fdType, entry.fdFlags, entry.rightsBase, entry.rightsInheriting)
@@ -691,7 +712,30 @@ func preopenMountRelEscapes(rel string) bool {
 // preopenMountRelEscapes). Matches the guard used before host-backed path
 // operations in resolveWritable, Xpath_open, and Xpath_filestat_get.
 func (s *State) preopenDirfdLexicallyEscapes(dirfd int32, mountRel string) bool {
-	return dirfd >= 0 && int(dirfd) < len(s.fds) && s.fds[dirfd].preopen && preopenMountRelEscapes(mountRel)
+	entry, ok := s.fdEntry(dirfd)
+	return ok && entry.preopen && preopenMountRelEscapes(mountRel)
+}
+
+// fdEntry returns the fdEntry for dirfd if it is in bounds.
+func (s *State) fdEntry(dirfd int32) (fdEntry, bool) {
+	if dirfd < 0 || int(dirfd) >= len(s.fds) {
+		return fdEntry{}, false
+	}
+	return s.fds[dirfd], true
+}
+
+// preopenEntryByFD returns the fdEntry for preopen fd if it is valid and
+// in use. The ok bool is false when fd is not a preopen or the slot is unused.
+func (s *State) preopenEntryByFD(fd int32) (fdEntry, bool) {
+	idx := fd - 3
+	if idx < 0 || idx >= int32(len(s.preopens)) {
+		return fdEntry{}, false
+	}
+	entry := s.preopens[idx]
+	if entry.isUnused() {
+		return fdEntry{}, false
+	}
+	return entry, true
 }
 
 // joinWritableHostPathForLookup joins hostRoot with a mount-relative path for a
@@ -808,14 +852,14 @@ func writableHostSymlinkFollowConfinementErrno(hostRoot, hostPath string) int32 
 // Non-preopen directory fds join the relative path against the absolute
 // guest path stored in the fd entry, enabling correct nested path_open
 // resolution during directory recursion.
+// Non-directory fds (including regular files) yield a nil mount.
 func (s *State) resolveDirfdPath(dirfd, pathPtr, pathLen int32) (*mountEntry, string) {
 	pathBytes := s.readBytes(pathPtr, pathLen)
 	guestPath := string(pathBytes)
 	if strings.HasPrefix(guestPath, "/") {
 		return s.resolvePath(guestPath)
 	}
-	if dirfd >= 0 && int(dirfd) < len(s.fds) {
-		entry := s.fds[dirfd]
+	if entry, ok := s.fdEntry(dirfd); ok {
 		if entry.preopen && entry.mount >= 0 && entry.mount < len(s.mounts) {
 			return &s.mounts[entry.mount], guestPath
 		}
@@ -963,38 +1007,35 @@ func (s *State) Xpath_link(oldDirfd, oldFlags, oldPathPtr, oldPathLen, newDirfd,
 }
 
 // Xfd_close implements fd_close. Closes the file associated with fd and
-// clears the fd-table slot. Returns EBADF if fd is invalid or a preopen
-// directory fd (preopen fds cannot be closed).
+// clears the fd-table slot. Returns EBADF if fd is invalid.
 func (s *State) Xfd_close(fd int32) int32 {
 	s.assertSingleOwner()
 	if fd < 0 || int(fd) >= len(s.fds) {
 		return wasiEBadf
 	}
-	if s.fds[fd].preopen {
+	entry := s.fds[fd]
+	if entry.isUnused() {
 		return wasiEBadf
 	}
-	if s.fds[fd].file == nil && s.fds[fd].fdType == 0 {
-		return wasiEBadf
-	}
-	if s.fds[fd].file != nil {
-		s.fds[fd].file.Close()
+	if entry.file != nil {
+		entry.file.Close()
 	}
 	s.fds[fd] = fdEntry{}
 	return wasiESuccess
 }
 
 // Xfd_read implements fd_read. For fd 0 (stdin), reads from the
-// io.Reader configured by [WithStdin]. For other fds, uses ReadAt when
-// the underlying file supports it (osFile) to keep the WASI-level offset
-// in sync with WriteAt calls; falls back to Read for fs.FS-backed files.
-// Returns ENOTCAPABLE when FD_READ is not set in the fd's rights_base.
+// io.Reader configured by [WithStdin]. For other fds, reads via ReadAt
+// at the current fd offset when available, otherwise via Read. Returns
+// EISDIR for directory fds, ENOTCAPABLE when FD_READ is not set in the
+// fd's rights_base.
 func (s *State) Xfd_read(fd int32, iovsPtr int32, iovsCount int32, nreadPtr int32) int32 {
 	s.assertSingleOwner()
 	if fd < 0 || int(fd) >= len(s.fds) {
 		return wasiEBadf
 	}
 	entry := s.fds[fd]
-	if entry.file == nil && entry.fdType == 0 {
+	if entry.isUnused() {
 		return wasiEBadf
 	}
 	mem := s.mem()
@@ -1034,6 +1075,9 @@ func (s *State) Xfd_read(fd int32, iovsPtr int32, iovsCount int32, nreadPtr int3
 	}
 	if entry.file == nil {
 		return wasiEBadf
+	}
+	if errno := errnoForDirectoryFDOp(entry); errno != 0 {
+		return errno
 	}
 	if errno := errnoIfFDRightsMissing(entry.rightsBase, rightFDRead); errno != 0 {
 		return errno
@@ -1077,8 +1121,8 @@ func (s *State) Xfd_read(fd int32, iovsPtr int32, iovsCount int32, nreadPtr int3
 // Xfd_write implements fd_write. For fd 1 and 2 (stdout/stderr), writes
 // to the io.Writers configured by [WithStdout] and [WithStderr]. For
 // other fds, uses WriteAt with the current fd offset; only osFile-backed
-// entries support writes. Returns ENOTCAPABLE when FD_WRITE is not set in
-// the fd's rights_base.
+// entries support writes. Returns EISDIR for directory fds, ENOTCAPABLE
+// when FD_WRITE is not set in the fd's rights_base.
 func (s *State) Xfd_write(fd int32, iovsPtr int32, iovsCount int32, nwrittenPtr int32) int32 {
 	s.assertSingleOwner()
 	if fd < 0 || int(fd) >= len(s.fds) {
@@ -1118,6 +1162,9 @@ func (s *State) Xfd_write(fd int32, iovsPtr int32, iovsCount int32, nwrittenPtr 
 	}
 	if entry.file == nil {
 		return wasiEBadf
+	}
+	if errno := errnoForDirectoryFDOp(entry); errno != 0 {
+		return errno
 	}
 	if errno := errnoIfFDRightsMissing(entry.rightsBase, rightFDWrite); errno != 0 {
 		return errno
@@ -1169,8 +1216,8 @@ func (s *State) Xfd_seek(fd int32, offset int64, whence, newOffsetPtr int32) int
 	if entry.file == nil || entry.preopen {
 		return wasiEBadf
 	}
-	if entry.fdType == fdDir {
-		return wasiEIsdir
+	if errno := errnoForDirectoryFDOp(entry); errno != 0 {
+		return errno
 	}
 	sk, ok := entry.file.(io.Seeker)
 	if !ok {
@@ -1350,28 +1397,31 @@ func (s *State) Xpath_filestat_get(dirfd, flags, pathPtr, pathLen, bufPtr int32)
 func fileRightsForOpen(parentInh, req uint64) (base uint64, inheriting uint64) {
 	inheriting = parentInh
 	maxFile := rightsRegularFile & parentInh
-	if (req&rightFDRead) != 0 && (req&rightFDWrite) != 0 {
-		return maxFile, inheriting
+	effective := req
+	switch req & (rightFDRead | rightFDWrite) {
+	case rightFDRead | rightFDWrite:
+		effective = rightsRegularFile
+	case rightFDRead:
+		effective = rightFDRead
+	case rightFDWrite:
+		effective = rightFDWrite
 	}
-	if (req&rightFDRead) != 0 && (req&rightFDWrite) == 0 {
-		return rightFDRead & maxFile, inheriting
-	}
-	if (req&rightFDWrite) != 0 && (req&rightFDRead) == 0 {
-		return rightFDWrite & maxFile, inheriting
-	}
-	return req & maxFile, inheriting
+	return effective & maxFile, inheriting
 }
 
-// pathOpenStoredRights returns rights_base and rights_inheriting for an fd created
-// by path_open. fdRightsBase and fdRightsInheriting are each ANDed with parentInh
-// (the directory fd's rights_inheriting) so bits the parent cannot pass on are
-// dropped; path_open still succeeds. Regular files then run fileRightsForOpen on
-// that clamped base so the stored base matches the regular-file capability bundle.
+// pathOpenStoredRights returns the rights_base and rights_inheriting actually
+// stored for an fd created by path_open. fdRightsBase and fdRightsInheriting are
+// clamped to parentInh so bits the parent cannot pass on are dropped without
+// failing the open. Regular files are further reduced via fileRightsForOpen.
+// Directories have FD_SEEK stripped because seek/tell are not defined on them.
 func pathOpenStoredRights(parentInh uint64, openedType byte, fdRightsBase, fdRightsInheriting int64) (base uint64, inheriting uint64) {
 	base = uint64(fdRightsBase) & parentInh
 	inheriting = uint64(fdRightsInheriting) & parentInh
-	if openedType == fdFile {
+	switch openedType {
+	case fdFile:
 		base, inheriting = fileRightsForOpen(parentInh, base)
+	case fdDir:
+		base &^= rightFDSeek
 	}
 	return base, inheriting
 }
@@ -1406,11 +1456,14 @@ func (s *State) Xpath_open(dirfd int32, lookupFlags int32, pathPtr int32, pathLe
 	}
 	mount, relPath := s.resolveDirfdPath(dirfd, pathPtr, pathLen)
 	if mount == nil {
+		if entry, ok := s.fdEntry(dirfd); ok && entry.fdType == fdFile && !strings.HasPrefix(guestPath, "/") {
+			return wasiENotDir
+		}
 		return wasiENoEnt
 	}
 	parentInh := uint64(0)
-	if dirfd >= 0 && int(dirfd) < len(s.fds) {
-		parentInh = s.fds[dirfd].rightsInheriting
+	if entry, ok := s.fdEntry(dirfd); ok {
+		parentInh = entry.rightsInheriting
 	}
 
 	if mount.readonly {
@@ -1524,11 +1577,8 @@ func (s *State) Xpath_open(dirfd int32, lookupFlags int32, pathPtr int32, pathLe
 	fd := s.allocFD()
 	savedPath := guestPath
 	if !strings.HasPrefix(savedPath, "/") {
-		if dirfd >= 0 && int(dirfd) < len(s.fds) {
-			parent := s.fds[dirfd]
-			if parent.path != "" {
-				savedPath = path.Join(parent.path, guestPath)
-			}
+		if entry, ok := s.fdEntry(dirfd); ok && entry.path != "" {
+			savedPath = path.Join(entry.path, guestPath)
 		}
 	}
 	rb, ri := pathOpenStoredRights(parentInh, fdType, fdRightsBase, fdRightsInheriting)
@@ -1656,9 +1706,9 @@ func writeStringTable(mem []byte, ptrBase, bufBase int32, items []string) {
 // Xfd_pread implements fd_pread. Reads from fd at the given offset
 // without updating the fd's WASI-level offset (entry.offset). Requires
 // the underlying file to implement ReadAt; if it does not, no bytes are
-// read. Returns EINVAL for fds 0–2 (positioned reads on stdio are not
-// defined by WASI). Returns ENOTCAPABLE when FD_READ is not set in the fd's
-// rights_base.
+// read and ENOTSUP is returned. Returns EINVAL for fds 0–2 (positioned
+// reads on stdio are not defined by WASI). Returns EISDIR for directory
+// fds, ENOTCAPABLE when FD_READ is not set in the fd's rights_base.
 func (s *State) Xfd_pread(fd, iovsPtr, iovsCount int32, offset int64, nreadPtr int32) int32 {
 	if fd <= 2 {
 		return wasiEInval
@@ -1669,6 +1719,9 @@ func (s *State) Xfd_pread(fd, iovsPtr, iovsCount int32, offset int64, nreadPtr i
 	entry := s.fds[fd]
 	if entry.file == nil {
 		return wasiEBadf
+	}
+	if errno := errnoForDirectoryFDOp(entry); errno != 0 {
+		return errno
 	}
 	if errno := errnoIfFDRightsMissing(entry.rightsBase, rightFDRead); errno != 0 {
 		return errno
@@ -1711,8 +1764,8 @@ func (s *State) Xfd_pread(fd, iovsPtr, iovsCount int32, offset int64, nreadPtr i
 // written and ENOTSUP is returned. If WriteAt returns an error, fd_pwrite
 // returns EIO and preserves the partial byte count in guest memory.
 // Returns EINVAL for fds 0–2 (positioned writes on stdio are not
-// defined by WASI). Returns ENOTCAPABLE when FD_WRITE is not set in the fd's
-// rights_base.
+// defined by WASI). Returns EISDIR for directory fds, ENOTCAPABLE when
+// FD_WRITE is not set in the fd's rights_base.
 func (s *State) Xfd_pwrite(fd, iovsPtr, iovsCount int32, offset int64, nwrittenPtr int32) int32 {
 	if fd <= 2 {
 		return wasiEInval
@@ -1723,6 +1776,9 @@ func (s *State) Xfd_pwrite(fd, iovsPtr, iovsCount int32, offset int64, nwrittenP
 	entry := s.fds[fd]
 	if entry.file == nil {
 		return wasiEBadf
+	}
+	if errno := errnoForDirectoryFDOp(entry); errno != 0 {
+		return errno
 	}
 	if errno := errnoIfFDRightsMissing(entry.rightsBase, rightFDWrite); errno != 0 {
 		return errno
@@ -1762,14 +1818,17 @@ func (s *State) Xfd_pwrite(fd, iovsPtr, iovsCount int32, offset int64, nwrittenP
 // (entry.offset) rather than the kernel file position. This is necessary
 // because fd_write uses WriteAt, which does not advance the kernel
 // position; reading it back via Seek(0, SeekCurrent) would return a
-// stale value.
+// stale value. Returns EISDIR for directory fds.
 func (s *State) Xfd_tell(fd, offsetPtr int32) int32 {
 	if fd < 0 || int(fd) >= len(s.fds) {
 		return wasiEBadf
 	}
 	entry := s.fds[fd]
-	if entry.file == nil && entry.fdType == 0 {
+	if entry.isUnused() {
 		return wasiEBadf
+	}
+	if errno := errnoForDirectoryFDOp(entry); errno != 0 {
+		return errno
 	}
 	binary.LittleEndian.PutUint64(s.mem()[offsetPtr:], uint64(entry.offset))
 	return wasiESuccess
@@ -1831,9 +1890,22 @@ func (s *State) Xfd_fdstat_set_flags(fd, flags int32) int32 {
 // silently ignored.
 func (s *State) Xfd_advise(fd int32, offset, length int64, advice int32) int32 { return wasiESuccess }
 
-// Xfd_allocate implements fd_allocate (fallocate). Always returns ESUCCESS.
-// Disk-space pre-reservation is advisory; this is an intentional no-op.
-func (s *State) Xfd_allocate(fd int32, offset, length int64) int32 { return wasiESuccess }
+// Xfd_allocate implements fd_allocate (fallocate). Returns EISDIR for
+// directory fds. For regular files, disk-space pre-reservation is advisory;
+// this is an intentional no-op.
+func (s *State) Xfd_allocate(fd int32, offset, length int64) int32 {
+	if fd < 0 || int(fd) >= len(s.fds) {
+		return wasiEBadf
+	}
+	entry := s.fds[fd]
+	if entry.isUnused() {
+		return wasiEBadf
+	}
+	if errno := errnoForDirectoryFDOp(entry); errno != 0 {
+		return errno
+	}
+	return wasiESuccess
+}
 
 func (s *State) Xfd_fdstat_set_rights(fd int32, base, inheriting int64) int32 {
 	s.assertSingleOwner()
@@ -1868,18 +1940,21 @@ func (s *State) Xsock_recv(fd, iovsPtr, iovsLen, riFlags, nreadPtr, roFlagsPtr i
 func (s *State) Xsock_send(fd, iovsPtr, iovsLen, siFlags, nsentPtr int32) int32 { return wasiENoSys }
 func (s *State) Xsock_shutdown(fd, how int32) int32                             { return wasiENoSys }
 
-// Xfd_filestat_set_size implements fd_filestat_set_size. For osFile-backed
-// fds, truncates the file to size bytes via (*os.File).Truncate when
-// FD_FILESTAT_SET_SIZE is set in rights_base; otherwise returns ENOTCAPABLE.
-// For fs.FS-backed fds, returns ESUCCESS without mutation (embedded files are
-// read-only by construction).
+// Xfd_filestat_set_size implements fd_filestat_set_size. Returns EISDIR
+// for directory fds. For osFile-backed fds, truncates the file to size bytes
+// via (*os.File).Truncate when FD_FILESTAT_SET_SIZE is set in rights_base;
+// otherwise returns ENOTCAPABLE. For fs.FS-backed fds, returns ESUCCESS
+// without mutation (embedded files are read-only by construction).
 func (s *State) Xfd_filestat_set_size(fd int32, size int64) int32 {
 	if fd < 0 || int(fd) >= len(s.fds) {
 		return wasiEBadf
 	}
 	entry := s.fds[fd]
-	if entry.fdType == 0 {
+	if entry.isUnused() {
 		return wasiEBadf
+	}
+	if errno := errnoForDirectoryFDOp(entry); errno != 0 {
+		return errno
 	}
 	if of, ok := entry.file.(*osFile); ok {
 		if errno := errnoIfFDRightsMissing(entry.rightsBase, rightFDFilestatSetSize); errno != 0 {

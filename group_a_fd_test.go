@@ -180,10 +180,35 @@ func TestFdClose(t *testing.T) {
 		}
 	})
 
-	t.Run("preopen cannot be closed", func(t *testing.T) {
-		s, _, _ := newWMState(t)
-		if errno := s.Xfd_close(3); errno != wasiEBadf {
-			t.Errorf("close preopen = %d, want EBADF", errno)
+	t.Run("preopen directory can be closed and invalidated", func(t *testing.T) {
+		s, buf, tmpDir := newWMState(t)
+
+		copy(buf[pathOff:], ".")
+		if errno := s.Xpath_open(dirfd, 0, pathOff, 1, int32(oflagDir),
+			int64(rightsWritableDirPreopen), int64(rightFDRead), 0, fdPtr); errno != wasiESuccess {
+			t.Fatalf("Xpath_open(scratch dir) = %d, want ESUCCESS", errno)
+		}
+		scratchFD := int32(binary.LittleEndian.Uint32(buf[fdPtr : fdPtr+4]))
+
+		if errno := s.Xfd_close(3); errno != wasiESuccess {
+			t.Fatalf("Xfd_close(preopen) = %d, want ESUCCESS", errno)
+		}
+
+		const statPtr = 4000
+		if errno := s.Xfd_fdstat_get(3, statPtr); errno != wasiEBadf {
+			t.Fatalf("Xfd_fdstat_get(closed preopen) = %d, want EBADF", errno)
+		}
+
+		if err := os.WriteFile(filepath.Join(tmpDir, "still-open.txt"), []byte("ok"), 0o644); err != nil {
+			t.Fatal(err)
+		}
+		copy(buf[2000:], "still-open.txt")
+		if errno := s.Xpath_open(scratchFD, 0, 2000, int32(len("still-open.txt")), 0, int64(rightFDRead), 0, 0, 5000); errno != wasiESuccess {
+			t.Fatalf("Xpath_open(still-open.txt via scratch fd) = %d, want ESUCCESS", errno)
+		}
+		fd := int32(binary.LittleEndian.Uint32(buf[5000 : 5000+4]))
+		if errno := s.Xfd_fdstat_get(fd, statPtr); errno != wasiESuccess {
+			t.Fatalf("Xfd_fdstat_get(other fd) = %d, want ESUCCESS", errno)
 		}
 	})
 
@@ -1084,4 +1109,39 @@ func TestXpollOneoff(t *testing.T) {
 			t.Errorf("nevents = %d, want 2", n)
 		}
 	})
+}
+
+// TestPathOpenRejectsNonDirectoryBaseFd verifies that path_open with a regular
+// file fd as dirfd returns ENOTDIR or ENOTCAPABLE, not ENOENT.
+func TestPathOpenRejectsNonDirectoryBaseFd(t *testing.T) {
+	t.Parallel()
+	const (
+		pathOff = 1000
+		fdPtr   = 2000
+	)
+
+	s, buf, tmpDir := newWMState(t)
+
+	// Create a regular file under the writable preopen via path_open.
+	copy(buf[pathOff:], "file")
+	errno := s.Xpath_open(dirfd, 0, pathOff, 4, int32(oflagCreat), 0, 0, 0, fdPtr)
+	if errno != wasiESuccess {
+		t.Fatalf("Xpath_open(create file) = %d, want ESUCCESS", errno)
+	}
+	fileFd := int32(binary.LittleEndian.Uint32(buf[fdPtr : fdPtr+4]))
+
+	// Attempt to open a relative path using the regular file fd as dirfd.
+	copy(buf[pathOff:], "foo")
+	errno = s.Xpath_open(fileFd, 0, pathOff, 3, int32(oflagCreat), 0, 0, 0, fdPtr)
+	if errno != wasiENotDir && errno != wasiENotCap {
+		t.Fatalf("Xpath_open with file as dirfd = %d, want ENOTDIR (%d) or ENOTCAPABLE (%d)", errno, wasiENotDir, wasiENotCap)
+	}
+
+	// Cleanup.
+	if errno := s.Xfd_close(fileFd); errno != wasiESuccess {
+		t.Fatalf("Xfd_close = %d", errno)
+	}
+	if err := os.Remove(filepath.Join(tmpDir, "file")); err != nil {
+		t.Fatalf("remove file: %v", err)
+	}
 }

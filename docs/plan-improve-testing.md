@@ -163,7 +163,11 @@ The 64-byte filestat struct layout is tested via `Xfd_filestat_get`:
 - Open a file via `Xpath_open`; assert returned fd > 0.
 - Call `Xfd_close(fd)`; assert `wasiESuccess`.
 - Call `Xfd_close(fd)` again; assert `wasiEBadf` (slot cleared).
-- Call `Xfd_close(3)` (preopen); assert `wasiEBadf` (preopens cannot close).
+- Call `Xfd_close(3)` (preopen); assert `wasiESuccess` (preopens may be closed per
+  wasi-testsuite `close_preopen`).
+- Call `Xfd_fdstat_get(3, ...)`; assert `wasiEBadf` (closed preopen slot invalid).
+- Open another path via a scratch directory fd opened before closing the preopen;
+  assert subsequent `Xpath_open` / `Xfd_fdstat_get` on that fd still succeed.
 - Call `Xfd_close(-1)`; assert `wasiEBadf`.
 
 ### Test function: `TestFdRead`
