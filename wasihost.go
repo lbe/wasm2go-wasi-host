@@ -91,9 +91,13 @@ const (
 	// Excludes fd_poll and fd_sock at 27–28. Used as rights_inheriting for writable dir preopens.
 	rightsDirectoryInherited uint64 = (1 << 27) - (1 << 9)
 	// WASI filestat_set_times flags.
+	// Note: the wasi-testsuite Rust tests were compiled with the wasi 0.11.0
+	// crate where ATIM_NOW is bit 1 and MTIM is bit 2 (swapped vs the final
+	// snapshot-preview1 spec). We match the guest layout so that e2e tests
+	// pass with the precompiled wasm binaries.
 	fstAtim    int32 = 1 << 0
-	fstMtim    int32 = 1 << 1
-	fstAtimNow int32 = 1 << 2
+	fstAtimNow int32 = 1 << 1
+	fstMtim    int32 = 1 << 2
 	fstMtimNow int32 = 1 << 3
 
 	// __wasi_lookupflags_t bit: follow symlinks when resolving a path (e.g.
@@ -197,7 +201,7 @@ func errnoIfFDRightsMissing(rightsBase, required uint64) int32 {
 	if (rightsBase & required) != required {
 		return wasiENotCap
 	}
-	return 0
+	return wasiESuccess
 }
 
 // errnoIfHostPathNotADirectory is the path_open O_DIRECTORY pre-check for a
@@ -210,6 +214,19 @@ func errnoIfHostPathNotADirectory(hostPath string) int32 {
 		return wasiENotDir
 	}
 	return 0
+}
+
+// errnoIfContradictoryFstFlags returns wasiEInval when fstFlags contains both
+// ATIM and ATIM_NOW or both MTIM and MTIM_NOW; otherwise it returns
+// wasiESuccess.
+func errnoIfContradictoryFstFlags(fstFlags int32) int32 {
+	if fstFlags&(fstAtim|fstAtimNow) == fstAtim|fstAtimNow {
+		return wasiEInval
+	}
+	if fstFlags&(fstMtim|fstMtimNow) == fstMtim|fstMtimNow {
+		return wasiEInval
+	}
+	return wasiESuccess
 }
 
 // errnoForDirectoryFDOp returns EISDIR when the fd entry refers to a
@@ -1970,11 +1987,16 @@ func (s *State) Xfd_filestat_set_size(fd int32, size int64) int32 {
 // Xfd_filestat_set_times implements fd_filestat_set_times.
 //
 // For osFile-backed fds, calls os.Chtimes with the specified nanosecond
-// values. Honors ATIM, MTIM, ATIM_NOW, and MTIM_NOW flags. For
-// fs.FS-backed fds, returns ESUCCESS without mutation.
+// values. Honors ATIM, MTIM, ATIM_NOW, and MTIM_NOW flags. Rejects
+// contradictory flag combinations (ATIM together with ATIM_NOW, or MTIM
+// together with MTIM_NOW) with EINVAL. For fs.FS-backed fds, returns
+// ESUCCESS without mutation.
 func (s *State) Xfd_filestat_set_times(fd int32, atim, mtim int64, fstFlags int32) int32 {
 	if fstFlags&(fstAtim|fstMtim|fstAtimNow|fstMtimNow) == 0 {
 		return wasiESuccess
+	}
+	if errno := errnoIfContradictoryFstFlags(fstFlags); errno != 0 {
+		return errno
 	}
 	if fd < 0 || int(fd) >= len(s.fds) {
 		return wasiEBadf
@@ -2020,14 +2042,18 @@ func computeTargetTimes(fi fs.FileInfo, atim, mtim int64, fstFlags int32) (time.
 
 // Xpath_filestat_set_times implements path_filestat_set_times.
 //
-// ATIM (bit 0), MTIM (bit 1), ATIM_NOW (bit 2), and MTIM_NOW (bit 3) flags
-// are acted upon. Resolves paths with resolveWritable (including ENOTCAPABLE
-// when a directory preopen path lexically escapes the mount) and calls
-// os.Chtimes. Returns EROFS when the path is read-only or cannot be resolved
-// to a writable host path.
+// ATIM (bit 0), ATIM_NOW (bit 1), MTIM (bit 2), and MTIM_NOW (bit 3) flags
+// are acted upon. Rejects contradictory flag combinations (ATIM together with
+// ATIM_NOW, or MTIM together with MTIM_NOW) with EINVAL. Resolves paths with
+// resolveWritable (including ENOTCAPABLE when a directory preopen path
+// lexically escapes the mount) and calls os.Chtimes. Returns EROFS when the
+// path is read-only or cannot be resolved to a writable host path.
 func (s *State) Xpath_filestat_set_times(dirfd, flags, pathPtr, pathLen int32, atim, mtim int64, fstFlags int32) int32 {
 	if fstFlags&(fstAtim|fstMtim|fstAtimNow|fstMtimNow) == 0 {
 		return wasiESuccess
+	}
+	if errno := errnoIfContradictoryFstFlags(fstFlags); errno != 0 {
+		return errno
 	}
 	primary, werrno := s.resolveWritable(dirfd, pathPtr, pathLen)
 	if werrno != wasiESuccess {
