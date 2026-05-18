@@ -214,8 +214,9 @@ func errnoIfHostPathNotADirectory(hostPath string) int32 {
 
 // errnoForDirectoryFDOp returns EISDIR when the fd entry refers to a
 // directory, because byte-oriented I/O (fd_read, fd_pread, fd_write,
-// fd_pwrite) is not defined on directories. Returns 0 for non-directory
-// entries.
+// fd_pwrite) and position/size operations (fd_seek, fd_tell,
+// fd_allocate, fd_filestat_set_size) are not defined on directories.
+// Returns 0 for non-directory entries.
 func errnoForDirectoryFDOp(entry fdEntry) int32 {
 	if entry.fdType == fdDir {
 		return wasiEIsdir
@@ -1209,8 +1210,8 @@ func (s *State) Xfd_seek(fd int32, offset int64, whence, newOffsetPtr int32) int
 	if entry.file == nil || entry.preopen {
 		return wasiEBadf
 	}
-	if entry.fdType == fdDir {
-		return wasiEIsdir
+	if errno := errnoForDirectoryFDOp(entry); errno != 0 {
+		return errno
 	}
 	sk, ok := entry.file.(io.Seeker)
 	if !ok {
@@ -1809,13 +1810,13 @@ func (s *State) Xfd_pwrite(fd, iovsPtr, iovsCount int32, offset int64, nwrittenP
 // (entry.offset) rather than the kernel file position. This is necessary
 // because fd_write uses WriteAt, which does not advance the kernel
 // position; reading it back via Seek(0, SeekCurrent) would return a
-// stale value.
+// stale value. Returns EISDIR for directory fds.
 func (s *State) Xfd_tell(fd, offsetPtr int32) int32 {
 	if fd < 0 || int(fd) >= len(s.fds) {
 		return wasiEBadf
 	}
 	entry := s.fds[fd]
-	if entry.file == nil && entry.fdType == 0 {
+	if entry.isUnused() {
 		return wasiEBadf
 	}
 	if errno := errnoForDirectoryFDOp(entry); errno != 0 {
@@ -1889,7 +1890,7 @@ func (s *State) Xfd_allocate(fd int32, offset, length int64) int32 {
 		return wasiEBadf
 	}
 	entry := s.fds[fd]
-	if entry.file == nil && entry.fdType == 0 {
+	if entry.isUnused() {
 		return wasiEBadf
 	}
 	if errno := errnoForDirectoryFDOp(entry); errno != 0 {
@@ -1931,17 +1932,17 @@ func (s *State) Xsock_recv(fd, iovsPtr, iovsLen, riFlags, nreadPtr, roFlagsPtr i
 func (s *State) Xsock_send(fd, iovsPtr, iovsLen, siFlags, nsentPtr int32) int32 { return wasiENoSys }
 func (s *State) Xsock_shutdown(fd, how int32) int32                             { return wasiENoSys }
 
-// Xfd_filestat_set_size implements fd_filestat_set_size. For osFile-backed
-// fds, truncates the file to size bytes via (*os.File).Truncate when
-// FD_FILESTAT_SET_SIZE is set in rights_base; otherwise returns ENOTCAPABLE.
-// For fs.FS-backed fds, returns ESUCCESS without mutation (embedded files are
-// read-only by construction).
+// Xfd_filestat_set_size implements fd_filestat_set_size. Returns EISDIR
+// for directory fds. For osFile-backed fds, truncates the file to size bytes
+// via (*os.File).Truncate when FD_FILESTAT_SET_SIZE is set in rights_base;
+// otherwise returns ENOTCAPABLE. For fs.FS-backed fds, returns ESUCCESS
+// without mutation (embedded files are read-only by construction).
 func (s *State) Xfd_filestat_set_size(fd int32, size int64) int32 {
 	if fd < 0 || int(fd) >= len(s.fds) {
 		return wasiEBadf
 	}
 	entry := s.fds[fd]
-	if entry.fdType == 0 {
+	if entry.isUnused() {
 		return wasiEBadf
 	}
 	if errno := errnoForDirectoryFDOp(entry); errno != 0 {
