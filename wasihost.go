@@ -481,8 +481,12 @@ func (s *State) Xfd_prestat_get(fd, prestatPtr int32) int32 {
 	if idx < 0 || idx >= int32(len(s.preopens)) {
 		return wasiEBadf
 	}
+	entry := s.preopens[idx]
+	if entry.file == nil && entry.fdType == 0 {
+		return wasiEBadf
+	}
 	mem := s.mem()
-	pathLen := uint32(len(s.preopens[idx].path))
+	pathLen := uint32(len(entry.path))
 	binary.LittleEndian.PutUint32(mem[prestatPtr:], 0)
 	binary.LittleEndian.PutUint32(mem[prestatPtr+4:], pathLen)
 	return wasiESuccess
@@ -495,8 +499,12 @@ func (s *State) Xfd_prestat_dir_name(fd, pathPtr, pathLen int32) int32 {
 	if idx < 0 || idx >= int32(len(s.preopens)) {
 		return wasiEBadf
 	}
+	entry := s.preopens[idx]
+	if entry.file == nil && entry.fdType == 0 {
+		return wasiEBadf
+	}
 	mem := s.mem()
-	name := s.preopens[idx].path
+	name := entry.path
 	copy(mem[pathPtr:], name)
 	return wasiESuccess
 }
@@ -963,14 +971,10 @@ func (s *State) Xpath_link(oldDirfd, oldFlags, oldPathPtr, oldPathLen, newDirfd,
 }
 
 // Xfd_close implements fd_close. Closes the file associated with fd and
-// clears the fd-table slot. Returns EBADF if fd is invalid or a preopen
-// directory fd (preopen fds cannot be closed).
+// clears the fd-table slot. Returns EBADF if fd is invalid.
 func (s *State) Xfd_close(fd int32) int32 {
 	s.assertSingleOwner()
 	if fd < 0 || int(fd) >= len(s.fds) {
-		return wasiEBadf
-	}
-	if s.fds[fd].preopen {
 		return wasiEBadf
 	}
 	if s.fds[fd].file == nil && s.fds[fd].fdType == 0 {
