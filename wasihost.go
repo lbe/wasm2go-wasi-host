@@ -703,7 +703,16 @@ func preopenMountRelEscapes(rel string) bool {
 // preopenMountRelEscapes). Matches the guard used before host-backed path
 // operations in resolveWritable, Xpath_open, and Xpath_filestat_get.
 func (s *State) preopenDirfdLexicallyEscapes(dirfd int32, mountRel string) bool {
-	return dirfd >= 0 && int(dirfd) < len(s.fds) && s.fds[dirfd].preopen && preopenMountRelEscapes(mountRel)
+	entry, ok := s.fdEntry(dirfd)
+	return ok && entry.preopen && preopenMountRelEscapes(mountRel)
+}
+
+// fdEntry returns the fdEntry for dirfd if it is in bounds.
+func (s *State) fdEntry(dirfd int32) (fdEntry, bool) {
+	if dirfd < 0 || int(dirfd) >= len(s.fds) {
+		return fdEntry{}, false
+	}
+	return s.fds[dirfd], true
 }
 
 // joinWritableHostPathForLookup joins hostRoot with a mount-relative path for a
@@ -820,14 +829,14 @@ func writableHostSymlinkFollowConfinementErrno(hostRoot, hostPath string) int32 
 // Non-preopen directory fds join the relative path against the absolute
 // guest path stored in the fd entry, enabling correct nested path_open
 // resolution during directory recursion.
+// Non-directory fds (including regular files) yield a nil mount.
 func (s *State) resolveDirfdPath(dirfd, pathPtr, pathLen int32) (*mountEntry, string) {
 	pathBytes := s.readBytes(pathPtr, pathLen)
 	guestPath := string(pathBytes)
 	if strings.HasPrefix(guestPath, "/") {
 		return s.resolvePath(guestPath)
 	}
-	if dirfd >= 0 && int(dirfd) < len(s.fds) {
-		entry := s.fds[dirfd]
+	if entry, ok := s.fdEntry(dirfd); ok {
 		if entry.preopen && entry.mount >= 0 && entry.mount < len(s.mounts) {
 			return &s.mounts[entry.mount], guestPath
 		}
@@ -1415,14 +1424,14 @@ func (s *State) Xpath_open(dirfd int32, lookupFlags int32, pathPtr int32, pathLe
 	}
 	mount, relPath := s.resolveDirfdPath(dirfd, pathPtr, pathLen)
 	if mount == nil {
-		if dirfd >= 0 && int(dirfd) < len(s.fds) && s.fds[dirfd].fdType == fdFile && !strings.HasPrefix(guestPath, "/") {
+		if entry, ok := s.fdEntry(dirfd); ok && entry.fdType == fdFile && !strings.HasPrefix(guestPath, "/") {
 			return wasiENotDir
 		}
 		return wasiENoEnt
 	}
 	parentInh := uint64(0)
-	if dirfd >= 0 && int(dirfd) < len(s.fds) {
-		parentInh = s.fds[dirfd].rightsInheriting
+	if entry, ok := s.fdEntry(dirfd); ok {
+		parentInh = entry.rightsInheriting
 	}
 
 	if mount.readonly {
@@ -1536,11 +1545,8 @@ func (s *State) Xpath_open(dirfd int32, lookupFlags int32, pathPtr int32, pathLe
 	fd := s.allocFD()
 	savedPath := guestPath
 	if !strings.HasPrefix(savedPath, "/") {
-		if dirfd >= 0 && int(dirfd) < len(s.fds) {
-			parent := s.fds[dirfd]
-			if parent.path != "" {
-				savedPath = path.Join(parent.path, guestPath)
-			}
+		if entry, ok := s.fdEntry(dirfd); ok && entry.path != "" {
+			savedPath = path.Join(entry.path, guestPath)
 		}
 	}
 	rb, ri := pathOpenStoredRights(parentInh, fdType, fdRightsBase, fdRightsInheriting)
