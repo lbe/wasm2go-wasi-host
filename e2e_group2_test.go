@@ -1,6 +1,7 @@
 package wasihost_test
 
 import (
+	"errors"
 	"os"
 	"os/exec"
 	"path/filepath"
@@ -36,7 +37,6 @@ func TestGroup2WasiTestsuiteInventoryPasses(t *testing.T) {
 
 	cases := []struct {
 		name     string
-		wasmFile string
 		wantPass bool
 	}{
 		// Group 2 inventory (must pass).
@@ -70,18 +70,19 @@ func TestGroup2WasiTestsuiteInventoryPasses(t *testing.T) {
 			out, err := cmd.CombinedOutput()
 			exitCode := 0
 			if err != nil {
-				if exitErr, ok := err.(*exec.ExitError); ok {
+				var exitErr *exec.ExitError
+				if errors.As(err, &exitErr) {
 					exitCode = exitErr.ExitCode()
 				} else {
-					t.Fatalf("failed to run %s: %v", tc.name, err)
+					t.Fatalf("failed to run: %v", err)
 				}
 			}
 
 			if tc.wantPass && exitCode != 0 {
-				t.Errorf("%s exited %d, want 0\nstderr:\n%s", tc.name, exitCode, strings.TrimSpace(string(out)))
+				t.Errorf("exited %d, want 0\nstderr:\n%s", exitCode, strings.TrimSpace(string(out)))
 			}
 			if !tc.wantPass && exitCode == 0 {
-				t.Errorf("%s exited 0, want non-zero", tc.name)
+				t.Errorf("exited 0, want non-zero")
 			}
 		})
 	}

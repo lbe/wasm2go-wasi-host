@@ -490,15 +490,11 @@ func (s *State) Xenviron_get(envPtr, envBufPtr int32) int32 {
 }
 
 // Xfd_prestat_get implements fd_prestat_get. Returns the prestat struct
-// for the preopen directory at fd. Returns EBADF if fd is beyond the
-// last preopen.
+// for the preopen directory at fd. Returns EBADF if fd is not a valid,
+// in-use preopen.
 func (s *State) Xfd_prestat_get(fd, prestatPtr int32) int32 {
-	idx := fd - 3
-	if idx < 0 || idx >= int32(len(s.preopens)) {
-		return wasiEBadf
-	}
-	entry := s.preopens[idx]
-	if entry.isUnused() {
+	entry, ok := s.preopenEntryByFD(fd)
+	if !ok {
 		return wasiEBadf
 	}
 	mem := s.mem()
@@ -509,14 +505,12 @@ func (s *State) Xfd_prestat_get(fd, prestatPtr int32) int32 {
 }
 
 // Xfd_prestat_dir_name implements fd_prestat_dir_name. Writes the guest
-// path string for the preopen directory at fd into guest memory.
+// path string for the preopen directory at fd into guest memory. Returns
+// EBADF if fd is not a valid, in-use preopen, or EINVAL when pathLen is
+// smaller than the preopen path length.
 func (s *State) Xfd_prestat_dir_name(fd, pathPtr, pathLen int32) int32 {
-	idx := fd - 3
-	if idx < 0 || idx >= int32(len(s.preopens)) {
-		return wasiEBadf
-	}
-	entry := s.preopens[idx]
-	if entry.isUnused() {
+	entry, ok := s.preopenEntryByFD(fd)
+	if !ok {
 		return wasiEBadf
 	}
 	name := entry.path
@@ -728,6 +722,20 @@ func (s *State) fdEntry(dirfd int32) (fdEntry, bool) {
 		return fdEntry{}, false
 	}
 	return s.fds[dirfd], true
+}
+
+// preopenEntryByFD returns the fdEntry for preopen fd if it is valid and
+// in use. The ok bool is false when fd is not a preopen or the slot is unused.
+func (s *State) preopenEntryByFD(fd int32) (fdEntry, bool) {
+	idx := fd - 3
+	if idx < 0 || idx >= int32(len(s.preopens)) {
+		return fdEntry{}, false
+	}
+	entry := s.preopens[idx]
+	if entry.isUnused() {
+		return fdEntry{}, false
+	}
+	return entry, true
 }
 
 // joinWritableHostPathForLookup joins hostRoot with a mount-relative path for a
