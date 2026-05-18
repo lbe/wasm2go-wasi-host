@@ -1391,23 +1391,23 @@ func (s *State) Xpath_filestat_get(dirfd, flags, pathPtr, pathLen, bufPtr int32)
 func fileRightsForOpen(parentInh, req uint64) (base uint64, inheriting uint64) {
 	inheriting = parentInh
 	maxFile := rightsRegularFile & parentInh
-	if (req&rightFDRead) != 0 && (req&rightFDWrite) != 0 {
-		return maxFile, inheriting
+	effective := req
+	switch req & (rightFDRead | rightFDWrite) {
+	case rightFDRead | rightFDWrite:
+		effective = rightsRegularFile
+	case rightFDRead:
+		effective = rightFDRead
+	case rightFDWrite:
+		effective = rightFDWrite
 	}
-	if (req&rightFDRead) != 0 && (req&rightFDWrite) == 0 {
-		return rightFDRead & maxFile, inheriting
-	}
-	if (req&rightFDWrite) != 0 && (req&rightFDRead) == 0 {
-		return rightFDWrite & maxFile, inheriting
-	}
-	return req & maxFile, inheriting
+	return effective & maxFile, inheriting
 }
 
-// pathOpenStoredRights returns rights_base and rights_inheriting for an fd created
-// by path_open. fdRightsBase and fdRightsInheriting are each ANDed with parentInh
-// (the directory fd's rights_inheriting) so bits the parent cannot pass on are
-// dropped; path_open still succeeds. Regular files then run fileRightsForOpen on
-// that clamped base so the stored base matches the regular-file capability bundle.
+// pathOpenStoredRights returns the rights_base and rights_inheriting actually
+// stored for an fd created by path_open. fdRightsBase and fdRightsInheriting are
+// clamped to parentInh so bits the parent cannot pass on are dropped without
+// failing the open. Regular files are further reduced via fileRightsForOpen.
+// Directories have FD_SEEK stripped because seek/tell are not defined on them.
 func pathOpenStoredRights(parentInh uint64, openedType byte, fdRightsBase, fdRightsInheriting int64) (base uint64, inheriting uint64) {
 	base = uint64(fdRightsBase) & parentInh
 	inheriting = uint64(fdRightsInheriting) & parentInh

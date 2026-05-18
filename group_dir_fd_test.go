@@ -7,6 +7,22 @@ import (
 	"testing"
 )
 
+// openSubdirViaPathOpen creates "subdir" under tmpDir, opens it via path_open
+// with O_DIRECTORY and rightsWritableDirPreopen, and returns the resulting fd.
+// It writes the path name into buf at pathOff and stores the fd at fdPtr.
+func openSubdirViaPathOpen(t *testing.T, s *State, buf []byte, tmpDir string, pathOff, fdPtr int32) int32 {
+	t.Helper()
+	if err := os.Mkdir(filepath.Join(tmpDir, "subdir"), 0o755); err != nil {
+		t.Fatal(err)
+	}
+	copy(buf[pathOff:], "subdir")
+	errno := s.Xpath_open(dirfd, 0, pathOff, 6, int32(oflagDir), int64(rightsWritableDirPreopen), 0, 0, fdPtr)
+	if errno != wasiESuccess {
+		t.Fatalf("Xpath_open(subdir) = %d, want ESUCCESS", errno)
+	}
+	return int32(binary.LittleEndian.Uint32(buf[fdPtr : fdPtr+4]))
+}
+
 // TestPositionAndSizeOpsOnDirectoryFDsRejected verifies that fd_seek,
 // fd_tell, fd_allocate, and fd_filestat_set_size on directory file
 // descriptors return EISDIR, EBADF, ENOTCAP, or EINVAL rather than ESUCCESS.
@@ -101,19 +117,9 @@ func TestPositionAndSizeOpsOnDirectoryFDsRejected(t *testing.T) {
 		t.Run(tc.name, func(t *testing.T) {
 			t.Parallel()
 			s, buf, tmpDir := newWMState(t)
+			subdirFD := openSubdirViaPathOpen(t, s, buf, tmpDir, pathOff, fdPtr)
 
-			if err := os.Mkdir(filepath.Join(tmpDir, "subdir"), 0o755); err != nil {
-				t.Fatal(err)
-			}
-
-			copy(buf[pathOff:], "subdir")
-			errno := s.Xpath_open(dirfd, 0, pathOff, 6, int32(oflagDir), int64(rightsWritableDirPreopen), 0, 0, fdPtr)
-			if errno != wasiESuccess {
-				t.Fatalf("Xpath_open(subdir) = %d, want ESUCCESS", errno)
-			}
-			subdirFD := int32(binary.LittleEndian.Uint32(buf[fdPtr : fdPtr+4]))
-
-			errno = tc.syscall(s, subdirFD)
+			errno := tc.syscall(s, subdirFD)
 			if errno == wasiESuccess {
 				t.Errorf("%s = ESUCCESS, want one of EISDIR (%d), EBADF (%d), ENOTCAP (%d), EINVAL (%d)",
 					tc.name, wasiEIsdir, wasiEBadf, wasiENotCap, wasiEInval)
@@ -291,19 +297,9 @@ func TestByteIOOnDirectoryFDsRejected(t *testing.T) {
 		t.Run(tc.name, func(t *testing.T) {
 			t.Parallel()
 			s, buf, tmpDir := newWMState(t)
+			subdirFD := openSubdirViaPathOpen(t, s, buf, tmpDir, pathOff, fdPtr)
 
-			if err := os.Mkdir(filepath.Join(tmpDir, "subdir"), 0o755); err != nil {
-				t.Fatal(err)
-			}
-
-			copy(buf[pathOff:], "subdir")
-			errno := s.Xpath_open(dirfd, 0, pathOff, 6, int32(oflagDir), int64(rightsWritableDirPreopen), 0, 0, fdPtr)
-			if errno != wasiESuccess {
-				t.Fatalf("Xpath_open(subdir) = %d, want ESUCCESS", errno)
-			}
-			subdirFD := int32(binary.LittleEndian.Uint32(buf[fdPtr : fdPtr+4]))
-
-			errno = s.Xfd_readdir(dirfd, rdBufPtr, rdBufLen, 0, usedPtr)
+			errno := s.Xfd_readdir(dirfd, rdBufPtr, rdBufLen, 0, usedPtr)
 			if errno != wasiESuccess {
 				t.Fatalf("Xfd_readdir(preopen) = %d, want ESUCCESS", errno)
 			}
