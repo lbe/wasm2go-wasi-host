@@ -122,6 +122,55 @@ func TestPositionAndSizeOpsOnDirectoryFDsRejected(t *testing.T) {
 	}
 }
 
+// TestDirectoryFdOpenedViaPathOpenOmitsFDSeekInFdstat verifies that a directory
+// fd opened via path_open with O_DIRECTORY and FD_SEEK requested succeeds, but
+// fd_fdstat_get on the new fd reports DIRECTORY type with FD_SEEK absent from
+// rights_base, and fd_seek still fails with EISDIR.
+func TestDirectoryFdOpenedViaPathOpenOmitsFDSeekInFdstat(t *testing.T) {
+	t.Parallel()
+	const (
+		pathOff   = 1000
+		fdPtr     = 2000
+		fdstatPtr = 3000
+		resultPtr = 4000
+	)
+
+	s, buf, tmpDir := newWMState(t)
+
+	if err := os.Mkdir(filepath.Join(tmpDir, "subdir"), 0o755); err != nil {
+		t.Fatal(err)
+	}
+
+	// Open directory with O_DIRECTORY and request FD_SEEK.
+	copy(buf[pathOff:], "subdir")
+	errno := s.Xpath_open(dirfd, 0, pathOff, 6, int32(oflagDir), int64(rightFDSeek), 0, 0, fdPtr)
+	if errno != wasiESuccess {
+		t.Fatalf("Xpath_open(subdir, O_DIRECTORY, FD_SEEK) = %d, want ESUCCESS", errno)
+	}
+	fd := int32(binary.LittleEndian.Uint32(buf[fdPtr : fdPtr+4]))
+
+	// fd_fdstat_get must succeed.
+	if errno := s.Xfd_fdstat_get(fd, fdstatPtr); errno != wasiESuccess {
+		t.Fatalf("Xfd_fdstat_get(dir fd) = %d, want ESUCCESS", errno)
+	}
+
+	// fs_filetype must be DIRECTORY.
+	if ft := buf[fdstatPtr]; ft != fdDir {
+		t.Errorf("fd_fdstat_get.fs_filetype = %d, want DIRECTORY (%d)", ft, fdDir)
+	}
+
+	// rights_base must NOT contain FD_SEEK.
+	rightsBase := binary.LittleEndian.Uint64(buf[fdstatPtr+8 : fdstatPtr+16])
+	if rightsBase&uint64(rightFDSeek) != 0 {
+		t.Errorf("rights_base has FD_SEEK set (0x%x); expected it to be absent", rightsBase)
+	}
+
+	// fd_seek must still fail with EISDIR (cycle 4 behavior).
+	if errno := s.Xfd_seek(fd, 0, 0, resultPtr); errno != wasiEIsdir {
+		t.Errorf("fd_seek on directory fd = %d, want EISDIR (%d)", errno, wasiEIsdir)
+	}
+}
+
 // TestByteIOOnDirectoryFDsRejected verifies that fd_read, fd_pread, fd_write,
 // and fd_pwrite on directory file descriptors return EISDIR, EBADF, or ENOTCAP
 // rather than treating the fd as a regular file.
