@@ -187,6 +187,10 @@ type fdEntry struct {
 	fdFlags          uint16
 }
 
+func (e fdEntry) isUnused() bool {
+	return e.file == nil && e.fdType == 0
+}
+
 // errnoIfFDRightsMissing returns wasiENotCap if rightsBase does not include
 // every bit set in required; otherwise it returns 0.
 func errnoIfFDRightsMissing(rightsBase, required uint64) int32 {
@@ -345,7 +349,7 @@ func (s *State) allocFD() int32 {
 	s.assertSingleOwner()
 	start := 3 + len(s.preopens)
 	for i := start; i < len(s.fds); i++ {
-		if s.fds[i].file == nil && s.fds[i].fdType == 0 {
+		if s.fds[i].isUnused() {
 			return int32(i)
 		}
 	}
@@ -482,7 +486,7 @@ func (s *State) Xfd_prestat_get(fd, prestatPtr int32) int32 {
 		return wasiEBadf
 	}
 	entry := s.preopens[idx]
-	if entry.file == nil && entry.fdType == 0 {
+	if entry.isUnused() {
 		return wasiEBadf
 	}
 	mem := s.mem()
@@ -500,7 +504,7 @@ func (s *State) Xfd_prestat_dir_name(fd, pathPtr, pathLen int32) int32 {
 		return wasiEBadf
 	}
 	entry := s.preopens[idx]
-	if entry.file == nil && entry.fdType == 0 {
+	if entry.isUnused() {
 		return wasiEBadf
 	}
 	mem := s.mem()
@@ -518,7 +522,7 @@ func (s *State) Xfd_fdstat_get(fd, statPtr int32) int32 {
 		return wasiEBadf
 	}
 	entry := s.fds[fd]
-	if entry.file == nil && entry.fdType == 0 {
+	if entry.isUnused() {
 		return wasiEBadf
 	}
 	writeFdstat(s.mem(), statPtr, entry.fdType, entry.fdFlags, entry.rightsBase, entry.rightsInheriting)
@@ -977,11 +981,12 @@ func (s *State) Xfd_close(fd int32) int32 {
 	if fd < 0 || int(fd) >= len(s.fds) {
 		return wasiEBadf
 	}
-	if s.fds[fd].file == nil && s.fds[fd].fdType == 0 {
+	entry := s.fds[fd]
+	if entry.isUnused() {
 		return wasiEBadf
 	}
-	if s.fds[fd].file != nil {
-		s.fds[fd].file.Close()
+	if entry.file != nil {
+		entry.file.Close()
 	}
 	s.fds[fd] = fdEntry{}
 	return wasiESuccess
