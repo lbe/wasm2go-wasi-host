@@ -180,10 +180,35 @@ func TestFdClose(t *testing.T) {
 		}
 	})
 
-	t.Run("preopen cannot be closed", func(t *testing.T) {
-		s, _, _ := newWMState(t)
-		if errno := s.Xfd_close(3); errno != wasiEBadf {
-			t.Errorf("close preopen = %d, want EBADF", errno)
+	t.Run("preopen directory can be closed and invalidated", func(t *testing.T) {
+		s, buf, tmpDir := newWMState(t)
+
+		copy(buf[pathOff:], ".")
+		if errno := s.Xpath_open(dirfd, 0, pathOff, 1, int32(oflagDir),
+			int64(rightsWritableDirPreopen), int64(rightFDRead), 0, fdPtr); errno != wasiESuccess {
+			t.Fatalf("Xpath_open(scratch dir) = %d, want ESUCCESS", errno)
+		}
+		scratchFD := int32(binary.LittleEndian.Uint32(buf[fdPtr : fdPtr+4]))
+
+		if errno := s.Xfd_close(3); errno != wasiESuccess {
+			t.Fatalf("Xfd_close(preopen) = %d, want ESUCCESS", errno)
+		}
+
+		const statPtr = 4000
+		if errno := s.Xfd_fdstat_get(3, statPtr); errno != wasiEBadf {
+			t.Fatalf("Xfd_fdstat_get(closed preopen) = %d, want EBADF", errno)
+		}
+
+		if err := os.WriteFile(filepath.Join(tmpDir, "still-open.txt"), []byte("ok"), 0o644); err != nil {
+			t.Fatal(err)
+		}
+		copy(buf[2000:], "still-open.txt")
+		if errno := s.Xpath_open(scratchFD, 0, 2000, int32(len("still-open.txt")), 0, int64(rightFDRead), 0, 0, 5000); errno != wasiESuccess {
+			t.Fatalf("Xpath_open(still-open.txt via scratch fd) = %d, want ESUCCESS", errno)
+		}
+		fd := int32(binary.LittleEndian.Uint32(buf[5000 : 5000+4]))
+		if errno := s.Xfd_fdstat_get(fd, statPtr); errno != wasiESuccess {
+			t.Fatalf("Xfd_fdstat_get(other fd) = %d, want ESUCCESS", errno)
 		}
 	})
 
