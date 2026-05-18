@@ -212,6 +212,17 @@ func errnoIfHostPathNotADirectory(hostPath string) int32 {
 	return 0
 }
 
+// errnoForDirectoryFDOp returns EISDIR when the fd entry refers to a
+// directory, because byte-oriented I/O (fd_read, fd_pread, fd_write,
+// fd_pwrite) is not defined on directories. Returns 0 for non-directory
+// entries.
+func errnoForDirectoryFDOp(entry fdEntry) int32 {
+	if entry.fdType == fdDir {
+		return wasiEIsdir
+	}
+	return 0
+}
+
 // mountEntry maps a guest path prefix to a host filesystem. If writable
 // is true and hostRoot is set, write operations (os.Create, os.Remove,
 // os.Mkdir, os.Rename, etc.) are applied to the host filesystem rooted at
@@ -1006,13 +1017,18 @@ func (s *State) Xfd_close(fd int32) int32 {
 // the underlying file supports it (osFile) to keep the WASI-level offset
 // in sync with WriteAt calls; falls back to Read for fs.FS-backed files.
 // Returns ENOTCAPABLE when FD_READ is not set in the fd's rights_base.
+// Xfd_read implements fd_read. For fd 0 (stdin), reads from the
+// io.Reader configured by [WithStdin]. For other fds, reads via ReadAt
+// at the current fd offset when available, otherwise via Read. Returns
+// EISDIR for directory fds, ENOTCAPABLE when FD_READ is not set in the
+// fd's rights_base.
 func (s *State) Xfd_read(fd int32, iovsPtr int32, iovsCount int32, nreadPtr int32) int32 {
 	s.assertSingleOwner()
 	if fd < 0 || int(fd) >= len(s.fds) {
 		return wasiEBadf
 	}
 	entry := s.fds[fd]
-	if entry.file == nil && entry.fdType == 0 {
+	if entry.isUnused() {
 		return wasiEBadf
 	}
 	mem := s.mem()
@@ -1053,8 +1069,8 @@ func (s *State) Xfd_read(fd int32, iovsPtr int32, iovsCount int32, nreadPtr int3
 	if entry.file == nil {
 		return wasiEBadf
 	}
-	if entry.fdType == fdDir {
-		return wasiEIsdir
+	if errno := errnoForDirectoryFDOp(entry); errno != 0 {
+		return errno
 	}
 	if errno := errnoIfFDRightsMissing(entry.rightsBase, rightFDRead); errno != 0 {
 		return errno
@@ -1098,8 +1114,8 @@ func (s *State) Xfd_read(fd int32, iovsPtr int32, iovsCount int32, nreadPtr int3
 // Xfd_write implements fd_write. For fd 1 and 2 (stdout/stderr), writes
 // to the io.Writers configured by [WithStdout] and [WithStderr]. For
 // other fds, uses WriteAt with the current fd offset; only osFile-backed
-// entries support writes. Returns ENOTCAPABLE when FD_WRITE is not set in
-// the fd's rights_base.
+// entries support writes. Returns EISDIR for directory fds, ENOTCAPABLE
+// when FD_WRITE is not set in the fd's rights_base.
 func (s *State) Xfd_write(fd int32, iovsPtr int32, iovsCount int32, nwrittenPtr int32) int32 {
 	s.assertSingleOwner()
 	if fd < 0 || int(fd) >= len(s.fds) {
@@ -1140,8 +1156,8 @@ func (s *State) Xfd_write(fd int32, iovsPtr int32, iovsCount int32, nwrittenPtr 
 	if entry.file == nil {
 		return wasiEBadf
 	}
-	if entry.fdType == fdDir {
-		return wasiEIsdir
+	if errno := errnoForDirectoryFDOp(entry); errno != 0 {
+		return errno
 	}
 	if errno := errnoIfFDRightsMissing(entry.rightsBase, rightFDWrite); errno != 0 {
 		return errno
@@ -1678,11 +1694,12 @@ func writeStringTable(mem []byte, ptrBase, bufBase int32, items []string) {
 }
 
 // Xfd_pread implements fd_pread. Reads from fd at the given offset
+// Xfd_pread implements fd_pread. Reads from fd at the given offset
 // without updating the fd's WASI-level offset (entry.offset). Requires
 // the underlying file to implement ReadAt; if it does not, no bytes are
-// read. Returns EINVAL for fds 0–2 (positioned reads on stdio are not
-// defined by WASI). Returns ENOTCAPABLE when FD_READ is not set in the fd's
-// rights_base.
+// read and ENOTSUP is returned. Returns EINVAL for fds 0–2 (positioned
+// reads on stdio are not defined by WASI). Returns EISDIR for directory
+// fds, ENOTCAPABLE when FD_READ is not set in the fd's rights_base.
 func (s *State) Xfd_pread(fd, iovsPtr, iovsCount int32, offset int64, nreadPtr int32) int32 {
 	if fd <= 2 {
 		return wasiEInval
@@ -1694,8 +1711,8 @@ func (s *State) Xfd_pread(fd, iovsPtr, iovsCount int32, offset int64, nreadPtr i
 	if entry.file == nil {
 		return wasiEBadf
 	}
-	if entry.fdType == fdDir {
-		return wasiEIsdir
+	if errno := errnoForDirectoryFDOp(entry); errno != 0 {
+		return errno
 	}
 	if errno := errnoIfFDRightsMissing(entry.rightsBase, rightFDRead); errno != 0 {
 		return errno
@@ -1738,8 +1755,8 @@ func (s *State) Xfd_pread(fd, iovsPtr, iovsCount int32, offset int64, nreadPtr i
 // written and ENOTSUP is returned. If WriteAt returns an error, fd_pwrite
 // returns EIO and preserves the partial byte count in guest memory.
 // Returns EINVAL for fds 0–2 (positioned writes on stdio are not
-// defined by WASI). Returns ENOTCAPABLE when FD_WRITE is not set in the fd's
-// rights_base.
+// defined by WASI). Returns EISDIR for directory fds, ENOTCAPABLE when
+// FD_WRITE is not set in the fd's rights_base.
 func (s *State) Xfd_pwrite(fd, iovsPtr, iovsCount int32, offset int64, nwrittenPtr int32) int32 {
 	if fd <= 2 {
 		return wasiEInval
@@ -1751,8 +1768,8 @@ func (s *State) Xfd_pwrite(fd, iovsPtr, iovsCount int32, offset int64, nwrittenP
 	if entry.file == nil {
 		return wasiEBadf
 	}
-	if entry.fdType == fdDir {
-		return wasiEIsdir
+	if errno := errnoForDirectoryFDOp(entry); errno != 0 {
+		return errno
 	}
 	if errno := errnoIfFDRightsMissing(entry.rightsBase, rightFDWrite); errno != 0 {
 		return errno

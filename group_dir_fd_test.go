@@ -32,15 +32,13 @@ func TestByteIOOnDirectoryFDsRejected(t *testing.T) {
 
 	cases := []struct {
 		name       string
-		op         string
 		syscall    func(s *State, buf []byte, subdirFD int32) int32
 		resultOff  int32
 		resultName string
 	}{
 		{
 			name: "fd_read on writable preopen dir fd",
-			op:   "fd_read",
-			syscall: func(s *State, buf []byte, subdirFD int32) int32 {
+			syscall: func(s *State, buf []byte, _ int32) int32 {
 				binary.LittleEndian.PutUint32(buf[iovsOff:], uint32(dataBuf))
 				binary.LittleEndian.PutUint32(buf[iovsOff+4:], 4)
 				return s.Xfd_read(dirfd, iovsOff, 1, nreadOff)
@@ -50,8 +48,7 @@ func TestByteIOOnDirectoryFDsRejected(t *testing.T) {
 		},
 		{
 			name: "fd_pread on writable preopen dir fd",
-			op:   "fd_pread",
-			syscall: func(s *State, buf []byte, subdirFD int32) int32 {
+			syscall: func(s *State, buf []byte, _ int32) int32 {
 				binary.LittleEndian.PutUint32(buf[iovsOff:], uint32(dataBuf))
 				binary.LittleEndian.PutUint32(buf[iovsOff+4:], 4)
 				return s.Xfd_pread(dirfd, iovsOff, 1, 0, nreadOff)
@@ -61,8 +58,7 @@ func TestByteIOOnDirectoryFDsRejected(t *testing.T) {
 		},
 		{
 			name: "fd_write on writable preopen dir fd",
-			op:   "fd_write",
-			syscall: func(s *State, buf []byte, subdirFD int32) int32 {
+			syscall: func(s *State, buf []byte, _ int32) int32 {
 				copy(buf[dataBuf:], "test")
 				binary.LittleEndian.PutUint32(buf[iovsOff:], uint32(dataBuf))
 				binary.LittleEndian.PutUint32(buf[iovsOff+4:], 4)
@@ -73,8 +69,7 @@ func TestByteIOOnDirectoryFDsRejected(t *testing.T) {
 		},
 		{
 			name: "fd_pwrite on writable preopen dir fd",
-			op:   "fd_pwrite",
-			syscall: func(s *State, buf []byte, subdirFD int32) int32 {
+			syscall: func(s *State, buf []byte, _ int32) int32 {
 				copy(buf[dataBuf:], "test")
 				binary.LittleEndian.PutUint32(buf[iovsOff:], uint32(dataBuf))
 				binary.LittleEndian.PutUint32(buf[iovsOff+4:], 4)
@@ -85,7 +80,6 @@ func TestByteIOOnDirectoryFDsRejected(t *testing.T) {
 		},
 		{
 			name: "fd_read on directory fd opened via path_open O_DIRECTORY",
-			op:   "fd_read",
 			syscall: func(s *State, buf []byte, subdirFD int32) int32 {
 				binary.LittleEndian.PutUint32(buf[iovsOff:], uint32(dataBuf))
 				binary.LittleEndian.PutUint32(buf[iovsOff+4:], 4)
@@ -96,7 +90,6 @@ func TestByteIOOnDirectoryFDsRejected(t *testing.T) {
 		},
 		{
 			name: "fd_pread on directory fd opened via path_open O_DIRECTORY",
-			op:   "fd_pread",
 			syscall: func(s *State, buf []byte, subdirFD int32) int32 {
 				binary.LittleEndian.PutUint32(buf[iovsOff:], uint32(dataBuf))
 				binary.LittleEndian.PutUint32(buf[iovsOff+4:], 4)
@@ -107,7 +100,6 @@ func TestByteIOOnDirectoryFDsRejected(t *testing.T) {
 		},
 		{
 			name: "fd_write on directory fd opened via path_open O_DIRECTORY",
-			op:   "fd_write",
 			syscall: func(s *State, buf []byte, subdirFD int32) int32 {
 				copy(buf[dataBuf:], "test")
 				binary.LittleEndian.PutUint32(buf[iovsOff:], uint32(dataBuf))
@@ -119,7 +111,6 @@ func TestByteIOOnDirectoryFDsRejected(t *testing.T) {
 		},
 		{
 			name: "fd_pwrite on directory fd opened via path_open O_DIRECTORY",
-			op:   "fd_pwrite",
 			syscall: func(s *State, buf []byte, subdirFD int32) int32 {
 				copy(buf[dataBuf:], "test")
 				binary.LittleEndian.PutUint32(buf[iovsOff:], uint32(dataBuf))
@@ -158,7 +149,7 @@ func TestByteIOOnDirectoryFDsRejected(t *testing.T) {
 			errno = tc.syscall(s, buf, subdirFD)
 			if !allowed[errno] {
 				t.Errorf("%s = %d, want one of EISDIR (%d), EBADF (%d), ENOTCAP (%d)",
-					tc.op, errno, wasiEIsdir, wasiEBadf, wasiENotCap)
+					tc.name, errno, wasiEIsdir, wasiEBadf, wasiENotCap)
 			}
 		})
 	}
