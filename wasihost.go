@@ -1411,8 +1411,11 @@ func fileRightsForOpen(parentInh, req uint64) (base uint64, inheriting uint64) {
 func pathOpenStoredRights(parentInh uint64, openedType byte, fdRightsBase, fdRightsInheriting int64) (base uint64, inheriting uint64) {
 	base = uint64(fdRightsBase) & parentInh
 	inheriting = uint64(fdRightsInheriting) & parentInh
-	if openedType == fdFile {
+	switch openedType {
+	case fdFile:
 		base, inheriting = fileRightsForOpen(parentInh, base)
+	case fdDir:
+		base &^= rightFDSeek
 	}
 	return base, inheriting
 }
