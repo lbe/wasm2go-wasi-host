@@ -1110,3 +1110,39 @@ func TestXpollOneoff(t *testing.T) {
 		}
 	})
 }
+
+
+// TestPathOpenRejectsNonDirectoryBaseFd verifies that path_open with a regular
+// file fd as dirfd returns ENOTDIR or ENOTCAPABLE, not ENOENT.
+func TestPathOpenRejectsNonDirectoryBaseFd(t *testing.T) {
+	t.Parallel()
+	const (
+		pathOff = 1000
+		fdPtr   = 2000
+	)
+
+	s, buf, tmpDir := newWMState(t)
+
+	// Create a regular file under the writable preopen via path_open.
+	copy(buf[pathOff:], "file")
+	errno := s.Xpath_open(dirfd, 0, pathOff, 4, int32(oflagCreat), 0, 0, 0, fdPtr)
+	if errno != wasiESuccess {
+		t.Fatalf("Xpath_open(create file) = %d, want ESUCCESS", errno)
+	}
+	fileFd := int32(binary.LittleEndian.Uint32(buf[fdPtr : fdPtr+4]))
+
+	// Attempt to open a relative path using the regular file fd as dirfd.
+	copy(buf[pathOff:], "foo")
+	errno = s.Xpath_open(fileFd, 0, pathOff, 3, int32(oflagCreat), 0, 0, 0, fdPtr)
+	if errno != wasiENotDir && errno != wasiENotCap {
+		t.Fatalf("Xpath_open with file as dirfd = %d, want ENOTDIR (%d) or ENOTCAPABLE (%d)", errno, wasiENotDir, wasiENotCap)
+	}
+
+	// Cleanup.
+	if errno := s.Xfd_close(fileFd); errno != wasiESuccess {
+		t.Fatalf("Xfd_close = %d", errno)
+	}
+	if err := os.Remove(filepath.Join(tmpDir, "file")); err != nil {
+		t.Fatalf("remove file: %v", err)
+	}
+}
