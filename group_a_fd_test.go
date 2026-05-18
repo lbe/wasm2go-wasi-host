@@ -1111,7 +1111,6 @@ func TestXpollOneoff(t *testing.T) {
 	})
 }
 
-
 // TestPathOpenRejectsNonDirectoryBaseFd verifies that path_open with a regular
 // file fd as dirfd returns ENOTDIR or ENOTCAPABLE, not ENOENT.
 func TestPathOpenRejectsNonDirectoryBaseFd(t *testing.T) {

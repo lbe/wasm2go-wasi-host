@@ -1415,6 +1415,9 @@ func (s *State) Xpath_open(dirfd int32, lookupFlags int32, pathPtr int32, pathLe
 	}
 	mount, relPath := s.resolveDirfdPath(dirfd, pathPtr, pathLen)
 	if mount == nil {
+		if dirfd >= 0 && int(dirfd) < len(s.fds) && s.fds[dirfd].fdType == fdFile && !strings.HasPrefix(guestPath, "/") {
+			return wasiENotDir
+		}
 		return wasiENoEnt
 	}
 	parentInh := uint64(0)
