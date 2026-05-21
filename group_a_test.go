@@ -4,6 +4,7 @@ import (
 	"encoding/binary"
 	"io"
 	"io/fs"
+	"reflect"
 	"testing"
 )
 
@@ -181,10 +182,10 @@ func TestGroupAFoundation(t *testing.T) {
 		if errno != 0 {
 			t.Fatalf("expected ESUCCESS, got %d", errno)
 		}
-		if s.fds[6] != original {
+		if !reflect.DeepEqual(s.fds[6], original) {
 			t.Errorf("fd 6 does not match original")
 		}
-		if (s.fds[5] != fdEntry{}) {
+		if !reflect.DeepEqual(s.fds[5], fdEntry{}) {
 			t.Errorf("fd 5 is not empty after renumber")
 		}
 	})

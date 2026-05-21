@@ -18,8 +18,9 @@ type wasiTestsuiteCase struct {
 
 // runWasiTestsuiteCases builds wasm2go-run and executes each case as a
 // sub-test. Every case runs the wasm binary named <name>.wasm from the
-// wasi-testsuite rust testsuite against fs-tests.dir.
-func runWasiTestsuiteCases(t *testing.T, cases []wasiTestsuiteCase) {
+// wasi-testsuite testsuite identified by suiteDir (e.g. "rust" or "c")
+// against fs-tests.dir.
+func runWasiTestsuiteCases(t *testing.T, suiteDir string, cases []wasiTestsuiteCase) {
 	t.Helper()
 
 	if runtime.GOOS != "linux" && runtime.GOOS != "darwin" {
@@ -39,8 +40,8 @@ func runWasiTestsuiteCases(t *testing.T, cases []wasiTestsuiteCase) {
 		t.Fatalf("failed to build wasm2go-run: %v\n%s", err, string(out))
 	}
 
-	fsTestsDir := filepath.Join(repoRoot, "wasi-testsuite", "tests", "rust", "testsuite", "wasm32-wasip1", "fs-tests.dir")
-	testsDir := filepath.Join(repoRoot, "wasi-testsuite", "tests", "rust", "testsuite", "wasm32-wasip1")
+	testsDir := filepath.Join(repoRoot, "wasi-testsuite", "tests", suiteDir, "testsuite", "wasm32-wasip1")
+	fsTestsDir := filepath.Join(testsDir, "fs-tests.dir")
 
 	for _, tc := range cases {
 		tc := tc

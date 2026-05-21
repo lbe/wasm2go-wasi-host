@@ -86,9 +86,9 @@ const (
 	rightFDFilestatSetSize  uint64 = 1 << 22 // __WASI_RIGHT_FD_FILESTAT_SET_SIZE
 	rightFDFilestatSetTimes uint64 = 1 << 23 // __WASI_RIGHT_FD_FILESTAT_SET_TIMES
 
-	// rightsDirectoryInherited is every path_* capability in bits 9–26 of __wasi_rights_t
+	// rightsDirectoryInherited is every path_* capability in bits 9-26 of __wasi_rights_t
 	// (path_create_directory through path_unlink_file per snapshot-preview1), i.e. (1<<27)-(1<<9).
-	// Excludes fd_poll and fd_sock at 27–28. Used as rights_inheriting for writable dir preopens.
+	// Excludes fd_poll and fd_sock at 27-28. Used as rights_inheriting for writable dir preopens.
 	rightsDirectoryInherited uint64 = (1 << 27) - (1 << 9)
 	// WASI filestat_set_times flags.
 	// Note: the wasi-testsuite Rust tests were compiled with the wasi 0.11.0
@@ -174,7 +174,7 @@ type fsFile interface {
 // used by fd_read, fd_write, fd_filestat_set_size, and fd_datasync.
 type osFile struct{ *os.File }
 
-// fdEntry is one slot in the WASI file-descriptor table. Slots 0–2 are
+// fdEntry is one slot in the WASI file-descriptor table. Slots 0-2 are
 // stdin, stdout, and stderr (fdCharDev). Slots 3 through 3+len(mounts)-1
 // are preopen directory entries. Higher slots are allocated dynamically
 // by path_open and freed by fd_close.
@@ -186,6 +186,7 @@ type fdEntry struct {
 	mount            int
 	preopen          bool
 	dirFile          fs.ReadDirFile
+	readdirSnapshot  []fs.DirEntry
 	rightsBase       uint64
 	rightsInheriting uint64
 	fdFlags          uint16
@@ -415,7 +416,7 @@ func (s *State) assertSingleOwner() {
 
 // currentGID returns the numeric ID of the calling goroutine by parsing
 // the output of runtime.Stack. There is no public Go API for goroutine IDs;
-// this approach is intentionally fragile by design — it is only used for
+// this approach is intentionally fragile by design - it is only used for
 // debugging assertions, not for correctness logic.
 func currentGID() uint64 {
 	var b [64]byte
@@ -448,6 +449,14 @@ func (wasiDirInfo) Mode() fs.FileMode  { return fs.ModeDir | 0o555 }
 func (wasiDirInfo) ModTime() time.Time { return time.Time{} }
 func (wasiDirInfo) IsDir() bool        { return true }
 func (wasiDirInfo) Sys() any           { return nil }
+
+// synthDirEntry is a minimal fs.DirEntry for synthetic . and .. entries.
+type synthDirEntry struct{ name string }
+
+func (e synthDirEntry) Name() string               { return e.name }
+func (e synthDirEntry) IsDir() bool                { return true }
+func (e synthDirEntry) Type() fs.FileMode          { return fs.ModeDir }
+func (e synthDirEntry) Info() (fs.FileInfo, error) { return wasiDirInfo{}, nil }
 
 // DirEntriesFile adapts a []fs.DirEntry to the fs.ReadDirFile interface.
 // It is used internally by fd_readdir to serve preopen directory listings
@@ -540,7 +549,7 @@ func (s *State) Xfd_prestat_dir_name(fd, pathPtr, pathLen int32) int32 {
 }
 
 // Xfd_fdstat_get implements fd_fdstat_get. Writes a 24-byte fdstat struct
-// at statPtr. fds 0–2 are reported as character devices; all others use
+// at statPtr. fds 0-2 are reported as character devices; all others use
 // the type recorded in the fd table.
 func (s *State) Xfd_fdstat_get(fd, statPtr int32) int32 {
 	s.assertSingleOwner()
@@ -567,16 +576,25 @@ func writeFdstat(mem []byte, statPtr int32, fdType byte, fdFlags uint16, rightsB
 	copy(mem[statPtr:], buf[:])
 }
 
+// statDevIno extracts dev and ino from an fs.FileInfo's underlying syscall.Stat_t.
+// Returns zero values if the underlying type is not *syscall.Stat_t.
+func statDevIno(fi fs.FileInfo) (dev uint64, ino uint64) {
+	if st, ok := fi.Sys().(*syscall.Stat_t); ok {
+		return uint64(st.Dev), st.Ino
+	}
+	return 0, 0
+}
+
 // writeFilestat writes a 64-byte WASI filestat struct at bufPtr in mem.
 // Layout: dev(8) + ino(8) + filetype(8) + nlink(8) + size(8) + atim(8) + mtim(8) + ctim(8).
 // fdType is a WASI snapshot-preview1 filetype tag (same values as fdstat.fs_filetype),
 // e.g. fdDir, fdFile, fdSymlink.
 // atim, mtim, and ctim are all set to mtimeNs; this host does not track
 // separate access times.
-func writeFilestat(mem []byte, bufPtr int32, fdType byte, size int64, mtimeNs int64) {
+func writeFilestat(mem []byte, bufPtr int32, fdType byte, size int64, mtimeNs int64, dev uint64, ino uint64) {
 	var buf [64]byte
-	binary.LittleEndian.PutUint64(buf[0:], 0)
-	binary.LittleEndian.PutUint64(buf[8:], 0)
+	binary.LittleEndian.PutUint64(buf[0:], dev)
+	binary.LittleEndian.PutUint64(buf[8:], ino)
 	binary.LittleEndian.PutUint64(buf[16:], uint64(fdType))
 	binary.LittleEndian.PutUint64(buf[24:], 1)
 	binary.LittleEndian.PutUint64(buf[32:], uint64(size))
@@ -811,8 +829,8 @@ func filestatFdTypeFromInfo(fi fs.FileInfo) byte {
 // ENOTCAPABLE when symlink steps would reach outside the root, and ENOENT when
 // symlink resolution fails (non-ErrNotExist errors) or the root cannot be resolved.
 //
-// When the final path component is missing—as with O_CREAT while following
-// symlinks—EvalSymlinks returns ErrNotExist for the full path. The implementation
+// When the final path component is missing-as with O_CREAT while following
+// symlinks-EvalSymlinks returns ErrNotExist for the full path. The implementation
 // then walks up with filepath.Dir, re-running EvalSymlinks on each parent, until
 // it finds an existing prefix. That preserves confinement checks for symlink
 // chains that point outside the preopen followed by a non-existent trailing name.
@@ -1260,74 +1278,163 @@ func (s *State) Xfd_readdir(fd int32, bufPtr int32, bufLen int32, cookie int64, 
 		return wasiEBadf
 	}
 	entry := &s.fds[fd]
+	if entry.isUnused() {
+		return wasiEBadf
+	}
 	mem := s.mem()
-	// Cache listing on first call for preopens or any directory fd.
-	if entry.dirFile == nil {
-		if entry.preopen {
-			if entry.mount < 0 || entry.mount >= len(s.mounts) {
-				return wasiEBadf
+
+	// cookie=0 invalidates the per-fd listing snapshot so the next call
+	// re-reads from the host. cookie>0 uses the warm snapshot without
+	// touching the host (stable across host directory mutations).
+	if cookie == 0 {
+		entry.readdirSnapshot = nil
+		entry.dirFile = nil
+		if _, ok := entry.file.(*DirEntriesFile); ok {
+			entry.file = nil
+		}
+	}
+
+	// If a snapshot already exists (from a prior cookie=0 call), use it
+	// instead of re-reading from the host.
+	if entry.readdirSnapshot == nil {
+		// Cache listing on first call for preopens or any directory fd.
+		if entry.dirFile == nil {
+			if entry.preopen {
+				if entry.mount < 0 || entry.mount >= len(s.mounts) {
+					return wasiEBadf
+				}
+				if entry.file == nil {
+					if d, ok := s.mounts[entry.mount].root.(fs.ReadDirFS); ok {
+						entries, err := d.ReadDir(".")
+						if err != nil {
+							return wasiEIo
+						}
+						entry.file = &DirEntriesFile{Entries: entries}
+					}
+				}
 			}
 			if entry.file == nil {
-				if d, ok := s.mounts[entry.mount].root.(fs.ReadDirFS); ok {
-					entries, err := d.ReadDir(".")
-					if err != nil {
-						return wasiEIo
-					}
-					entry.file = &DirEntriesFile{Entries: entries}
+				return wasiEBadf
+			}
+			var df fs.ReadDirFile
+			switch f := entry.file.(type) {
+			case fs.ReadDirFile:
+				df = f
+			case *FSFileWrap:
+				df, _ = f.File.(fs.ReadDirFile)
+			}
+			if df == nil {
+				return wasiENotDir
+			}
+			entry.dirFile = df
+		}
+
+		// Seek back to the start before reading: ReadDir(-1) returns all
+		// entries from the current file offset. A non-zero offset would
+		// produce a truncated listing.
+		if seeker, ok := entry.file.(io.Seeker); ok {
+			// os.File (writable host paths) always supports seeking;
+			// a Seek error on those is a genuine fault.  FSFileWrap
+			// may fail Seek when the underlying fs.FS doesn't support
+			// it — that is benign for ReadDir.
+			if _, seekErr := seeker.Seek(0, io.SeekStart); seekErr != nil {
+				if _, isWrap := entry.file.(*FSFileWrap); !isWrap {
+					return wasiEIo
 				}
 			}
 		}
-		if entry.file == nil {
-			return wasiEBadf
+		rawEntries, err := entry.dirFile.ReadDir(-1)
+		if err != nil && err != io.EOF {
+			return wasiEIo
 		}
-		df, ok := entry.file.(fs.ReadDirFile)
-		if !ok {
-			return wasiENotDir
+
+		// Restore entries to the file if it's our own DirEntriesFile adapter,
+		// so that subsequent calls with cookies can still access them.
+		if de, ok := entry.file.(*DirEntriesFile); ok {
+			de.idx = 0
 		}
-		entry.dirFile = df
+
+		// Prepend synthetic . and .. entries and store the full listing
+		// as the per-fd snapshot.
+		entries := make([]fs.DirEntry, 0, 2+len(rawEntries))
+		entries = append(entries, synthDirEntry{"."}, synthDirEntry{".."})
+		entries = append(entries, rawEntries...)
+		entry.readdirSnapshot = entries
 	}
 
-	entries, err := entry.dirFile.ReadDir(-1)
-	if err != nil && err != io.EOF {
-		return wasiEIo
-	}
-	// Restore entries to the file if it's our own DirEntriesFile adapter,
-	// so that subsequent calls with cookies can still access them.
-	if de, ok := entry.file.(*DirEntriesFile); ok {
-		de.idx = 0
+	entries := entry.readdirSnapshot
+
+	// Pre-compute inodes for synthetic . and .. entries.
+	var selfIno, parentIno uint64
+	if m := entry.mount; m >= 0 && m < len(s.mounts) && s.mounts[m].writable && s.mounts[m].hostRoot != "" {
+		if entry.preopen {
+			if fi, err := os.Stat(s.mounts[m].hostRoot); err == nil {
+				_, selfIno = statDevIno(fi)
+			}
+			if fi, err := os.Stat(filepath.Dir(s.mounts[m].hostRoot)); err == nil {
+				_, parentIno = statDevIno(fi)
+			}
+		} else {
+			if fi, err := entry.file.Stat(); err == nil {
+				_, selfIno = statDevIno(fi)
+			}
+			parentPath := filepath.Dir(filepath.Join(s.mounts[m].hostRoot, entry.path))
+			if fi, err := os.Stat(parentPath); err == nil {
+				_, parentIno = statDevIno(fi)
+			}
+		}
 	}
 
-	if cookie > 0 && int(cookie) >= len(entries) {
+	if int(cookie) >= len(entries) {
 		binary.LittleEndian.PutUint32(mem[bufUsedPtr:], 0)
 		return wasiESuccess
 	}
-	if len(entries) == 0 {
-		binary.LittleEndian.PutUint32(mem[bufUsedPtr:], 0)
-		return wasiESuccess
-	}
-	var dUsed uint32
-	for i := int(cookie); i < len(entries); i++ {
+	var bufUsed uint32
+	var i int
+	for i = int(cookie); i < len(entries); i++ {
 		name := entries[i].Name()
-		dNameLen := uint32(len(name))
-		dEntryLen := uint32(24 + dNameLen)
-		if dUsed+dEntryLen > uint32(bufLen) {
-			break
-		}
-		off := bufPtr + int32(dUsed)
-		binary.LittleEndian.PutUint64(mem[off:], uint64(i+1))
-		binary.LittleEndian.PutUint64(mem[off+8:], 0)
-		binary.LittleEndian.PutUint32(mem[off+16:], dNameLen)
 		var ftype byte
 		if entries[i].IsDir() {
 			ftype = fdDir
 		} else {
 			ftype = fdFile
 		}
+		nameLen := uint32(len(name))
+		entryLen := uint32(24 + nameLen)
+		if bufUsed+entryLen > uint32(bufLen) {
+			break
+		}
+		off := bufPtr + int32(bufUsed)
+		binary.LittleEndian.PutUint64(mem[off:], uint64(i+1))
+		var ino uint64
+		switch i {
+		case 0:
+			// Synthetic "." entry: use the directory's own inode.
+			ino = selfIno
+		case 1:
+			// Synthetic ".." entry: use the parent directory inode.
+			ino = parentIno
+		default:
+			// Real entries: extract ino from DirEntry.Info().Sys() when available.
+			if info, err := entries[i].Info(); err == nil {
+				if st, ok := info.Sys().(*syscall.Stat_t); ok {
+					ino = st.Ino
+				}
+			}
+		}
+		binary.LittleEndian.PutUint64(mem[off+8:], ino)
+		binary.LittleEndian.PutUint32(mem[off+16:], nameLen)
 		binary.LittleEndian.PutUint32(mem[off+20:], uint32(ftype))
 		copy(mem[off+24:], name)
-		dUsed += dEntryLen
+		bufUsed += entryLen
 	}
-	binary.LittleEndian.PutUint32(mem[bufUsedPtr:], dUsed)
+	// WASI cookie-based resume: when more entries remain but the last one did
+	// not fit in buf, report bufLen in bufUsed. The caller detects this and
+	// resumes via the cookie (otherwise it would think the directory is done).
+	if i < len(entries) && bufUsed > 0 && bufUsed < uint32(bufLen) {
+		bufUsed = uint32(bufLen)
+	}
+	binary.LittleEndian.PutUint32(mem[bufUsedPtr:], bufUsed)
 	return wasiESuccess
 }
 
@@ -1344,11 +1451,21 @@ func (s *State) Xfd_filestat_get(fd, bufPtr int32) int32 {
 		if entry.mount < 0 || entry.mount >= len(s.mounts) {
 			return wasiEBadf
 		}
-		fi, err := fs.Stat(s.mounts[entry.mount].root, ".")
-		if err != nil {
-			return wasiEIo
+		mnt := s.mounts[entry.mount]
+		if mnt.writable && mnt.hostRoot != "" {
+			hostFi, err := os.Stat(mnt.hostRoot)
+			if err != nil {
+				return wasiEIo
+			}
+			dev, ino := statDevIno(hostFi)
+			writeFilestat(s.mem(), bufPtr, fdDir, hostFi.Size(), hostFi.ModTime().UnixNano(), dev, ino)
+		} else {
+			fi, err := fs.Stat(mnt.root, ".")
+			if err != nil {
+				return wasiEIo
+			}
+			writeFilestat(s.mem(), bufPtr, fdDir, fi.Size(), fi.ModTime().UnixNano(), 0, 0)
 		}
-		writeFilestat(s.mem(), bufPtr, fdDir, fi.Size(), fi.ModTime().UnixNano())
 		return wasiESuccess
 	}
 	if entry.file == nil {
@@ -1358,7 +1475,8 @@ func (s *State) Xfd_filestat_get(fd, bufPtr int32) int32 {
 	if err != nil {
 		return wasiEIo
 	}
-	writeFilestat(s.mem(), bufPtr, entry.fdType, fi.Size(), fi.ModTime().UnixNano())
+	dev, ino := statDevIno(fi)
+	writeFilestat(s.mem(), bufPtr, entry.fdType, fi.Size(), fi.ModTime().UnixNano(), dev, ino)
 	return wasiESuccess
 }
 
@@ -1402,7 +1520,8 @@ func (s *State) Xpath_filestat_get(dirfd, flags, pathPtr, pathLen, bufPtr int32)
 			return wasiENoEnt
 		}
 	}
-	writeFilestat(s.mem(), bufPtr, filestatFdTypeFromInfo(fi), fi.Size(), fi.ModTime().UnixNano())
+	dev, ino := statDevIno(fi)
+	writeFilestat(s.mem(), bufPtr, filestatFdTypeFromInfo(fi), fi.Size(), fi.ModTime().UnixNano(), dev, ino)
 	return wasiESuccess
 }
 
@@ -1723,7 +1842,7 @@ func writeStringTable(mem []byte, ptrBase, bufBase int32, items []string) {
 // Xfd_pread implements fd_pread. Reads from fd at the given offset
 // without updating the fd's WASI-level offset (entry.offset). Requires
 // the underlying file to implement ReadAt; if it does not, no bytes are
-// read and ENOTSUP is returned. Returns EINVAL for fds 0–2 (positioned
+// read and ENOTSUP is returned. Returns EINVAL for fds 0-2 (positioned
 // reads on stdio are not defined by WASI). Returns EISDIR for directory
 // fds, ENOTCAPABLE when FD_READ is not set in the fd's rights_base.
 func (s *State) Xfd_pread(fd, iovsPtr, iovsCount int32, offset int64, nreadPtr int32) int32 {
@@ -1780,7 +1899,7 @@ func (s *State) Xfd_pread(fd, iovsPtr, iovsCount int32, offset int64, nreadPtr i
 // the underlying file to implement WriteAt; if it does not, no bytes are
 // written and ENOTSUP is returned. If WriteAt returns an error, fd_pwrite
 // returns EIO and preserves the partial byte count in guest memory.
-// Returns EINVAL for fds 0–2 (positioned writes on stdio are not
+// Returns EINVAL for fds 0-2 (positioned writes on stdio are not
 // defined by WASI). Returns EISDIR for directory fds, ENOTCAPABLE when
 // FD_WRITE is not set in the fd's rights_base.
 func (s *State) Xfd_pwrite(fd, iovsPtr, iovsCount int32, offset int64, nwrittenPtr int32) int32 {

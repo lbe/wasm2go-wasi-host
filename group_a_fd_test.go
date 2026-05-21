@@ -549,8 +549,8 @@ func TestFdReaddir(t *testing.T) {
 			t.Fatal("first dirent nameLen = 0")
 		}
 		name := string(buf[rdBufPtr+24 : rdBufPtr+24+int32(nameLen)])
-		if name != "a.txt" && name != "b.txt" {
-			t.Errorf("first entry = %q, want a.txt or b.txt", name)
+		if name != "." && name != ".." && name != "a.txt" && name != "b.txt" {
+			t.Errorf("first entry = %q, want ., .., a.txt, or b.txt", name)
 		}
 	})
 

@@ -6,7 +6,7 @@ import "testing"
 // wasi-testsuite test (fstflags_validate) passes end-to-end via the built
 // wasm2go-run binary, and that smoke tests do not regress.
 func TestGroup6aWasiTestsuiteInventoryPasses(t *testing.T) {
-	runWasiTestsuiteCases(t, []wasiTestsuiteCase{
+	runWasiTestsuiteCases(t, "rust", []wasiTestsuiteCase{
 		// Group 6a inventory (must pass).
 		{name: "fstflags_validate", wantPass: true},
 		// Smoke tests (must not regress).

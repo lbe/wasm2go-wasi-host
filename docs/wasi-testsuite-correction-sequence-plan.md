@@ -300,7 +300,7 @@ via `group_dir_fd_test.go`, `group_a_fd_test.go`, and `e2e_group2_test.go`.
 
 | Group | Tests | Done |
 |-------|-------|------|
-| 1 — fd_readdir | `fd_readdir`, `fdopendir-with-access` | ☐ |
+| 1 — fd_readdir | `fd_readdir`, `fdopendir-with-access` | ☑ |
 | 2 — dir FD | `dir_fd_op_failures`, `directory_seek`, `path_open_dirfd_not_dir`, `close_preopen` | ☑ |
 | 3 — paths | `interesting_paths` | ☐ |
 | 4 — slashes | `unlink_file_trailing_slashes`, `path_symlink_trailing_slashes` | ☐ |

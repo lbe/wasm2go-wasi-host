@@ -1,6 +1,7 @@
 package wasihost
 
 import (
+	"encoding/binary"
 	"errors"
 	"io"
 	"io/fs"
@@ -239,6 +240,41 @@ func TestFsFileWrapSeekNoSeeker(t *testing.T) {
 	if err.Error() != "seek not supported" {
 		t.Errorf("Seek error = %q, want %q", err.Error(), "seek not supported")
 	}
+}
+
+// ReaddirDirent represents a single parsed WASI dirent entry.
+type ReaddirDirent struct {
+	Name   string
+	Ino    uint64
+	Type   byte
+	Namlen uint32
+	Next   uint64
+}
+
+// parseReaddirDirents parses a buffer of WASI dirent structs.
+// Each dirent is: 8-byte d_next (uint64) + 8-byte d_ino (uint64) +
+// 4-byte d_namlen (uint32) + 4-byte d_type (uint32) + name bytes.
+// Stride per entry: 24 + d_namlen.
+func parseReaddirDirents(buf []byte, bufUsed uint32, bufPtr int32) []ReaddirDirent {
+	var entries []ReaddirDirent
+	off := int(bufPtr)
+	end := off + int(bufUsed)
+	for off+24 <= end {
+		dIno := binary.LittleEndian.Uint64(buf[off+8 : off+16])
+		dNamlen := binary.LittleEndian.Uint32(buf[off+16 : off+20])
+		dType := binary.LittleEndian.Uint32(buf[off+20 : off+24])
+		name := string(buf[off+24 : off+24+int(dNamlen)])
+		dNext := binary.LittleEndian.Uint64(buf[off : off+8])
+		entries = append(entries, ReaddirDirent{
+			Name:   name,
+			Ino:    dIno,
+			Type:   byte(dType),
+			Namlen: dNamlen,
+			Next:   dNext,
+		})
+		off += 24 + int(dNamlen)
+	}
+	return entries
 }
 
 // errorFS is a test [fs.FS] used to assert errno propagation from path_open:

@@ -7,7 +7,7 @@ import "testing"
 // path_open_dirfd_not_dir) pass end-to-end via the built wasm2go-run binary,
 // and that smoke tests do not regress.
 func TestGroup2WasiTestsuiteInventoryPasses(t *testing.T) {
-	runWasiTestsuiteCases(t, []wasiTestsuiteCase{
+	runWasiTestsuiteCases(t, "rust", []wasiTestsuiteCase{
 		// Group 2 inventory (must pass).
 		{name: "close_preopen", wantPass: true},
 		{name: "dir_fd_op_failures", wantPass: true},
