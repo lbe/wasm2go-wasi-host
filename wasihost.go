@@ -44,6 +44,8 @@ import (
 	"sync"
 	"syscall"
 	"time"
+
+	"golang.org/x/sys/unix"
 )
 
 // WASI snapshot-preview1 errno values. Names and numeric values follow
@@ -304,9 +306,9 @@ func New(mem func() []byte, opts ...Option) *State {
 	}
 	// Initialize fd table
 	s.fds = make([]fdEntry, 3+len(s.mounts), 8+len(s.mounts))
-	s.fds[0] = fdEntry{fdType: fdCharDev, path: "stdin", rightsBase: rightsCharDev, rightsInheriting: 0}
-	s.fds[1] = fdEntry{fdType: fdCharDev, path: "stdout", rightsBase: rightsCharDev, rightsInheriting: 0}
-	s.fds[2] = fdEntry{fdType: fdCharDev, path: "stderr", rightsBase: rightsCharDev, rightsInheriting: 0}
+	s.fds[StdinFD] = fdEntry{fdType: fdCharDev, path: "stdin", rightsBase: rightsCharDev, rightsInheriting: 0}
+	s.fds[StdoutFD] = fdEntry{fdType: fdCharDev, path: "stdout", rightsBase: rightsCharDev, rightsInheriting: 0}
+	s.fds[StderrFD] = fdEntry{fdType: fdCharDev, path: "stderr", rightsBase: rightsCharDev, rightsInheriting: 0}
 
 	for i := range s.mounts {
 		rights := rightsWritableDirPreopen
@@ -729,6 +731,15 @@ func (s *State) readBytes(ptr, length int32) []byte {
 	return s.mem()[ptr : ptr+length]
 }
 
+// pathHasTrailingSlash reports whether the guest path at (ptr, len) ends
+// with '/'. This checks the raw guest bytes before any host resolution so
+// that trailing-slash semantics are preserved exactly as the guest expressed
+// them.
+func (s *State) pathHasTrailingSlash(ptr, length int32) bool {
+	b := s.readBytes(ptr, length)
+	return len(b) > 0 && b[len(b)-1] == '/'
+}
+
 // resolvePath resolves a guest-absolute path to the best-matching mount
 // and a mount-relative path string using longest-prefix matching.
 // Returns (nil, "") if no mount covers the path.
@@ -856,11 +867,11 @@ func (s *State) preopenEntryByFD(fd int32) (fdEntry, bool) {
 }
 
 // joinWritableHostPathForLookup joins hostRoot with a mount-relative path for a
-// host directory preopen. When symlink following is not requested and the final
-// path component exists and is a symlink, it returns ELOOP (WASI snapshot-preview1),
-// matching O_NOFOLLOW-style path open behavior. When symlink following is
-// requested, it runs writableHostSymlinkFollowConfinementErrno so resolution
-// cannot escape hostRoot.
+// host directory preopen. When symlink following is not requested, it Lstats the
+// host path and returns ELOOP if the final component is a symlink (matching
+// O_NOFOLLOW-style behavior); other Lstat errors are ignored so the caller can
+// surface them. When symlink following is requested, it evaluates symlinks and
+// returns ENOTCAPABLE if resolution would escape hostRoot.
 func joinWritableHostPathForLookup(hostRoot, relPath string, lookupFlags int32) (hostPath string, errno int32) {
 	hostPath = filepath.Join(hostRoot, filepath.FromSlash(relPath))
 	if lookupFlags&wasiLookupSymlinkFollow == 0 {
@@ -879,17 +890,24 @@ func joinWritableHostPathForLookup(hostRoot, relPath string, lookupFlags int32) 
 // followFinalSymlink), and if that fails tries fs.Stat on overlay at relPath.
 // Used for writable mounts where some paths exist only in the overlay fs.FS.
 func statHostPathOrOverlay(hostPath string, overlay fs.FS, relPath string, followFinalSymlink bool) (fs.FileInfo, error) {
-	var fi fs.FileInfo
-	var err error
+	stat := os.Lstat
 	if followFinalSymlink {
-		fi, err = os.Stat(hostPath)
-	} else {
-		fi, err = os.Lstat(hostPath)
+		stat = os.Stat
 	}
+	fi, err := stat(hostPath)
 	if err != nil {
 		return fs.Stat(overlay, relPath)
 	}
 	return fi, nil
+}
+
+// statPath returns FileInfo for path. When follow is true it follows symlinks
+// (os.Stat); when false it returns info for the symlink itself (os.Lstat).
+func statPath(path string, follow bool) (fs.FileInfo, error) {
+	if follow {
+		return os.Stat(path)
+	}
+	return os.Lstat(path)
 }
 
 // filestatFdTypeFromInfo maps os.FileInfo / fs.FileInfo to a WASI preview1
@@ -911,31 +929,39 @@ func filestatFdTypeFromInfo(fi fs.FileInfo) byte {
 // ENOTCAPABLE when symlink steps would reach outside the root, and ENOENT when
 // symlink resolution fails (non-ErrNotExist errors) or the root cannot be resolved.
 //
-// When the final path component is missing-as with O_CREAT while following
-// symlinks-EvalSymlinks returns ErrNotExist for the full path. The implementation
-// then walks up with filepath.Dir, re-running EvalSymlinks on each parent, until
-// it finds an existing prefix. That preserves confinement checks for symlink
-// chains that point outside the preopen followed by a non-existent trailing name.
+// When the final path component is missing (as with O_CREAT while following
+// symlinks), EvalSymlinks returns ErrNotExist for the full path. The
+// implementation then walks up with filepath.Dir, re-running EvalSymlinks on
+// each parent, until it finds an existing prefix. That preserves confinement
+// checks for symlink chains that point outside the preopen followed by a
+// non-existent trailing name.
 func writableHostSymlinkFollowConfinementErrno(hostRoot, hostPath string) int32 {
-	p := filepath.Clean(hostPath)
+	tryPath := filepath.Clean(hostPath)
 	var resolved string
 	for {
 		var err error
-		resolved, err = filepath.EvalSymlinks(p)
+		resolved, err = filepath.EvalSymlinks(tryPath)
 		if err == nil {
 			break
 		}
 		if errors.Is(err, fs.ErrNotExist) {
-			parent := filepath.Dir(p)
-			if parent == p {
+			parent := filepath.Dir(tryPath)
+			if parent == tryPath {
 				return wasiESuccess
 			}
-			p = parent
+			tryPath = parent
 			continue
 		}
 		return wasiENoEnt
 	}
-	rootReal, err := filepath.EvalSymlinks(hostRoot)
+	return resolvedPathConfinementErrno(resolved, hostRoot)
+}
+
+// resolvedPathConfinementErrno returns ESUCCESS when resolvedPath is inside or
+// equal to root, ENOTCAPABLE when it escapes upward, and ENOENT/EIO for
+// filesystem errors encountered while canonicalizing root.
+func resolvedPathConfinementErrno(resolvedPath, root string) int32 {
+	rootReal, err := filepath.EvalSymlinks(root)
 	if err != nil {
 		return wasiENoEnt
 	}
@@ -943,7 +969,7 @@ func writableHostSymlinkFollowConfinementErrno(hostRoot, hostPath string) int32 
 	if err != nil {
 		return wasiEIo
 	}
-	resAbs, err := filepath.Abs(resolved)
+	resAbs, err := filepath.Abs(resolvedPath)
 	if err != nil {
 		return wasiEIo
 	}
@@ -954,8 +980,7 @@ func writableHostSymlinkFollowConfinementErrno(hostRoot, hostPath string) int32 
 	if rel == "." {
 		return wasiESuccess
 	}
-	sep := string(filepath.Separator)
-	if rel == ".." || strings.HasPrefix(rel, ".."+sep) {
+	if rel == ".." || strings.HasPrefix(rel, ".."+string(filepath.Separator)) {
 		return wasiENotCap
 	}
 	return wasiESuccess
@@ -1054,8 +1079,11 @@ func (s *State) Xpath_remove_directory(dirfd, pathPtr, pathLen int32) int32 {
 
 // Xpath_unlink_file implements path_unlink_file. Removes a file at the
 // resolved host path. Returns EROFS if the mount is read-only, EISDIR if
-// the target is a directory, ENOENT if the file does not exist.
+// the target is a directory, ENOENT if the file does not exist, and ENOTDIR
+// if the path has a trailing slash but the target is not a directory.
 func (s *State) Xpath_unlink_file(dirfd, pathPtr, pathLen int32) int32 {
+	hasTrailingSlash := s.pathHasTrailingSlash(pathPtr, pathLen)
+
 	path, errno := s.resolveWritable(dirfd, pathPtr, pathLen)
 	if errno != wasiESuccess {
 		return errno
@@ -1066,6 +1094,9 @@ func (s *State) Xpath_unlink_file(dirfd, pathPtr, pathLen int32) int32 {
 	}
 	if fi.IsDir() {
 		return wasiEIsdir
+	}
+	if hasTrailingSlash {
+		return wasiENotDir
 	}
 	if err := os.Remove(path); err != nil {
 		return mapOSError(err)
@@ -1092,17 +1123,50 @@ func (s *State) Xpath_readlink(dirfd, pathPtr, pathLen, bufPtr, bufLen, nreadPtr
 	return wasiESuccess
 }
 
+// symlinkTargetErrno returns EINVAL when oldPath is the root absolute path
+// "/", which would escape any preopen sandbox. It returns ESUCCESS for all
+// other targets, leaving further validation to the host symlink layer.
+func symlinkTargetErrno(oldPath string) int32 {
+	if oldPath == "/" {
+		return wasiEInval
+	}
+	return wasiESuccess
+}
+
 // Xpath_symlink implements path_symlink. Creates a symbolic link at the
 // resolved host path for newPath pointing to the raw string oldPath.
-// Returns EROFS if the mount is read-only, EEXIST if the link path already
-// exists.
+// Returns EROFS if the mount is read-only, EINVAL if oldPath is the absolute
+// root path "/", EEXIST if the link path already exists, ENOENT if newPath
+// has a trailing slash and does not exist, and ENOTDIR if newPath has a
+// trailing slash but names a non-directory.
 func (s *State) Xpath_symlink(oldPathPtr, oldPathLen, dirfd, newPathPtr, newPathLen int32) int32 {
-	target := string(s.readBytes(oldPathPtr, oldPathLen))
+	oldPath := string(s.readBytes(oldPathPtr, oldPathLen))
+	hasTrailingSlash := s.pathHasTrailingSlash(newPathPtr, newPathLen)
+
+	if errno := symlinkTargetErrno(oldPath); errno != wasiESuccess {
+		return errno
+	}
+
 	path, errno := s.resolveWritable(dirfd, newPathPtr, newPathLen)
 	if errno != wasiESuccess {
 		return errno
 	}
-	if err := os.Symlink(target, path); err != nil {
+
+	if hasTrailingSlash {
+		fi, err := os.Lstat(path)
+		if err != nil {
+			if os.IsNotExist(err) {
+				return wasiENoEnt
+			}
+			return mapOSError(err)
+		}
+		if fi.IsDir() {
+			return wasiEExist
+		}
+		return wasiENotDir
+	}
+
+	if err := os.Symlink(oldPath, path); err != nil {
 		return mapOSError(err)
 	}
 	return wasiESuccess
@@ -1159,7 +1223,7 @@ func (s *State) Xfd_read(fd int32, iovsPtr int32, iovsCount int32, nreadPtr int3
 		return wasiEBadf
 	}
 	mem := s.mem()
-	if fd == 0 {
+	if fd == StdinFD {
 		if errno := errnoIfFDRightsMissing(entry.rightsBase, rightFDRead); errno != 0 {
 			return errno
 		}
@@ -1250,7 +1314,7 @@ func (s *State) Xfd_write(fd int32, iovsPtr int32, iovsCount int32, nwrittenPtr 
 	}
 	entry := s.fds[fd]
 	mem := s.mem()
-	if fd == 1 || fd == 2 {
+	if fd == StdoutFD || fd == StderrFD {
 		if errno := errnoIfFDRightsMissing(entry.rightsBase, rightFDWrite); errno != 0 {
 			return errno
 		}
@@ -1262,7 +1326,7 @@ func (s *State) Xfd_write(fd int32, iovsPtr int32, iovsCount int32, nwrittenPtr 
 			data := mem[bufPtr : bufPtr+bufLen]
 			var n int
 			var err error
-			if fd == 1 {
+			if fd == StdoutFD {
 				if s.stdout != nil {
 					n, err = s.stdout.Write(data)
 				}
@@ -1586,16 +1650,18 @@ func (s *State) Xpath_filestat_get(dirfd, flags, pathPtr, pathLen, bufPtr int32)
 		if s.preopenDirfdLexicallyEscapes(dirfd, relPath) {
 			return wasiENotCap
 		}
-		if flags&wasiLookupSymlinkFollow == 0 {
-			hostPath := filepath.Join(mount.hostRoot, filepath.FromSlash(relPath))
-			fi, err = statHostPathOrOverlay(hostPath, mount.root, relPath, false)
-		} else {
-			hostPath, errno := joinWritableHostPathForLookup(mount.hostRoot, relPath, flags)
+		follow := flags&wasiLookupSymlinkFollow != 0
+		var hostPath string
+		if follow {
+			var errno int32
+			hostPath, errno = joinWritableHostPathForLookup(mount.hostRoot, relPath, flags)
 			if errno != wasiESuccess {
 				return errno
 			}
-			fi, err = statHostPathOrOverlay(hostPath, mount.root, relPath, true)
+		} else {
+			hostPath = filepath.Join(mount.hostRoot, filepath.FromSlash(relPath))
 		}
+		fi, err = statHostPathOrOverlay(hostPath, mount.root, relPath, follow)
 		if err != nil {
 			return wasiENoEnt
 		}
@@ -1660,7 +1726,9 @@ func pathOpenStoredRights(parentInh uint64, openedType byte, fdRightsBase, fdRig
 // fd_rights_inheriting are clamped to the directory fd's rights_inheriting
 // when recording the new fd (bits outside that mask are dropped). Other
 // checks still return ENOTCAPABLE, e.g. write on a read-only mount or sandbox
-// escape on a preopen directory.
+// escape on a preopen directory. Symlink following is controlled by lookupFlags:
+// without SYMLINK_FOLLOW, a final-component symlink yields ELOOP; with it,
+// symlinks are resolved and confined to the preopen root.
 //
 // FS open errors (overlay fallback after a missing host file, embedded fs.FS
 // mounts, and read-only preopens) are passed through [mapOSError], so well-known
@@ -1881,7 +1949,7 @@ func writeStringTable(mem []byte, ptrBase, bufBase int32, items []string) {
 // reads on stdio are not defined by WASI). Returns EISDIR for directory
 // fds, ENOTCAPABLE when FD_READ is not set in the fd's rights_base.
 func (s *State) Xfd_pread(fd, iovsPtr, iovsCount int32, offset int64, nreadPtr int32) int32 {
-	if fd <= 2 {
+	if fd <= StderrFD {
 		return wasiEInval
 	}
 	if fd < 0 || int(fd) >= len(s.fds) {
@@ -1938,7 +2006,7 @@ func (s *State) Xfd_pread(fd, iovsPtr, iovsCount int32, offset int64, nreadPtr i
 // defined by WASI). Returns EISDIR for directory fds, ENOTCAPABLE when
 // FD_WRITE is not set in the fd's rights_base.
 func (s *State) Xfd_pwrite(fd, iovsPtr, iovsCount int32, offset int64, nwrittenPtr int32) int32 {
-	if fd <= 2 {
+	if fd <= StderrFD {
 		return wasiEInval
 	}
 	if fd < 0 || int(fd) >= len(s.fds) {
@@ -2194,14 +2262,30 @@ func computeTargetTimes(fi fs.FileInfo, atim, mtim int64, fstFlags int32) (time.
 	return targetAtim, targetMtim
 }
 
+// setTimesAtPath sets the access and modification times on path. When follow
+// is true it follows symlinks (os.Chtimes); when false it sets times on the
+// symlink inode itself (unix.UtimesNanoAt with AT_SYMLINK_NOFOLLOW).
+func setTimesAtPath(path string, atim, mtim time.Time, follow bool) error {
+	if follow {
+		return os.Chtimes(path, atim, mtim)
+	}
+	ts := []unix.Timespec{
+		unix.NsecToTimespec(atim.UnixNano()),
+		unix.NsecToTimespec(mtim.UnixNano()),
+	}
+	return unix.UtimesNanoAt(unix.AT_FDCWD, path, ts, unix.AT_SYMLINK_NOFOLLOW)
+}
+
 // Xpath_filestat_set_times implements path_filestat_set_times.
 //
 // ATIM (bit 0), ATIM_NOW (bit 1), MTIM (bit 2), and MTIM_NOW (bit 3) flags
 // are acted upon. Rejects contradictory flag combinations (ATIM together with
 // ATIM_NOW, or MTIM together with MTIM_NOW) with EINVAL. Resolves paths with
 // resolveWritable (including ENOTCAPABLE when a directory preopen path
-// lexically escapes the mount) and calls os.Chtimes. Returns EROFS when the
-// path is read-only or cannot be resolved to a writable host path.
+// lexically escapes the mount). When LOOKUPFLAGS_SYMLINK_FOLLOW is set in
+// flags, follows symlinks in the final path component; otherwise sets times on
+// the symlink inode itself. Returns EROFS when the path is read-only or cannot
+// be resolved to a writable host path.
 func (s *State) Xpath_filestat_set_times(dirfd, flags, pathPtr, pathLen int32, atim, mtim int64, fstFlags int32) int32 {
 	if fstFlags&(fstAtim|fstMtim|fstAtimNow|fstMtimNow) == 0 {
 		return wasiESuccess
@@ -2214,14 +2298,15 @@ func (s *State) Xpath_filestat_set_times(dirfd, flags, pathPtr, pathLen int32, a
 		return werrno
 	}
 
-	fi, err := os.Stat(primary)
+	follow := flags&wasiLookupSymlinkFollow != 0
+	fi, err := statPath(primary, follow)
 	if err != nil {
 		return mapOSError(err)
 	}
 
 	targetAtim, targetMtim := computeTargetTimes(fi, atim, mtim, fstFlags)
 
-	if err := os.Chtimes(primary, targetAtim, targetMtim); err != nil {
+	if err := setTimesAtPath(primary, targetAtim, targetMtim, follow); err != nil {
 		return mapOSError(err)
 	}
 	return wasiESuccess
@@ -2284,3 +2369,9 @@ func mapOSError(err error) int32 {
 	}
 	return wasiEIo
 }
+
+const (
+	StdinFD  = 0
+	StdoutFD = 1
+	StderrFD = 2
+)
