@@ -66,6 +66,7 @@ const (
 	wasiEROFS     int32 = 66
 	wasiEXdev     int32 = 75
 	wasiENotCap   int32 = 76
+	wasiEIlseq    int32 = 84 // __WASI_ERRNO_ILSEQ: illegal byte sequence
 
 	// WASI file descriptor type tags, written into fdstat and filestat structs.
 	fdCharDev byte = 2 // character device (stdin, stdout, stderr, /dev/null)
@@ -215,6 +216,15 @@ func errnoIfHostPathNotADirectory(hostPath string) int32 {
 		return wasiENotDir
 	}
 	return 0
+}
+
+// fdTypeFromInfo returns fdDir when fi is non-nil and represents a directory;
+// otherwise it returns fdFile.
+func fdTypeFromInfo(fi fs.FileInfo) byte {
+	if fi != nil && fi.IsDir() {
+		return fdDir
+	}
+	return fdFile
 }
 
 // errnoIfContradictoryFstFlags returns wasiEInval when fstFlags contains both
@@ -386,6 +396,31 @@ func (s *State) allocFD() int32 {
 	idx := int32(len(s.fds))
 	s.fds = append(s.fds, fdEntry{})
 	return idx
+}
+
+// storeOpenedFD records an opened file in the fd table, computes stored rights
+// via [pathOpenStoredRights], and writes the allocated fd number to guest
+// memory at fdPtr. If fdType is fdDir and file implements [fs.ReadDirFile],
+// entry.dirFile is set so directory iteration works.
+func (s *State) storeOpenedFD(file fsFile, guestPath string, fdType byte, parentInh uint64, fdRightsBase, fdRightsInheriting int64, fdFlags int32, fdPtr int32) int32 {
+	rb, ri := pathOpenStoredRights(parentInh, fdType, fdRightsBase, fdRightsInheriting)
+	fd := s.allocFD()
+	entry := fdEntry{
+		file:             file,
+		path:             guestPath,
+		fdType:           fdType,
+		rightsBase:       rb,
+		rightsInheriting: ri,
+		fdFlags:          uint16(fdFlags),
+	}
+	if fdType == fdDir {
+		if df, ok := file.(fs.ReadDirFile); ok {
+			entry.dirFile = df
+		}
+	}
+	s.fds[fd] = entry
+	binary.LittleEndian.PutUint32(s.mem()[fdPtr:], uint32(fd))
+	return wasiESuccess
 }
 
 // logTrace writes a formatted line to os.Stdout when tracing is enabled.
@@ -733,6 +768,14 @@ func (s *State) resolvePath(guestPath string) (*mountEntry, string) {
 	return best, bestRel
 }
 
+// mountGuestPath returns the normalized guest-absolute path for a
+// mount-relative path by joining the mount's guest path with relPath
+// and applying path.Clean. For example, mount.guestPath="/data" and
+// relPath="dir/../file" yields "/data/file".
+func mountGuestPath(m *mountEntry, relPath string) string {
+	return path.Clean("/" + m.guestPath + "/" + relPath)
+}
+
 // preopenMountRelEscapes reports whether a mount-relative guest path
 // lexically escapes upward past the preopen root after normalization
 // (for example ".." or "../segment").
@@ -757,6 +800,45 @@ func (s *State) fdEntry(dirfd int32) (fdEntry, bool) {
 		return fdEntry{}, false
 	}
 	return s.fds[dirfd], true
+}
+
+// isNonPreopenDirfd reports whether dirfd refers to an open directory
+// that was not a preopen (i.e. it was opened via path_open).
+func (s *State) isNonPreopenDirfd(dirfd int32) bool {
+	entry, ok := s.fdEntry(dirfd)
+	return ok && !entry.preopen && entry.fdType == fdDir
+}
+
+// guestAbsPathForFDEntry returns the guest-absolute path to store in an fd
+// entry for guestPath opened via dirfd. Absolute paths are returned unchanged;
+// relative paths are joined against the dirfd entry's stored guest-absolute
+// path (preopen or nested directory).
+func (s *State) guestAbsPathForFDEntry(dirfd int32, guestPath string) string {
+	if strings.HasPrefix(guestPath, "/") {
+		return guestPath
+	}
+	if entry, ok := s.fdEntry(dirfd); ok && entry.path != "" {
+		return path.Join(entry.path, guestPath)
+	}
+	return guestPath
+}
+
+// nonPreopenDirfdResolvedPathEscapes reports whether resolving relPath
+// through the given mount produces a guest-absolute path that falls
+// outside the subtree of a non-preopen directory fd. This prevents
+// path_open from accessing paths above the dirfd's resolved directory
+// using ".." segments.
+func (s *State) nonPreopenDirfdResolvedPathEscapes(dirfd int32, mount *mountEntry, relPath string) bool {
+	if !s.isNonPreopenDirfd(dirfd) {
+		return false
+	}
+	resolvedGuest := mountGuestPath(mount, relPath)
+	dirEntry, ok := s.fdEntry(dirfd)
+	if !ok || dirEntry.path == "" {
+		return false
+	}
+	prefix := dirEntry.path
+	return resolvedGuest != prefix && !strings.HasPrefix(resolvedGuest, prefix+"/")
 }
 
 // preopenEntryByFD returns the fdEntry for preopen fd if it is valid and
@@ -892,6 +974,9 @@ func (s *State) resolveDirfdPath(dirfd, pathPtr, pathLen int32) (*mountEntry, st
 	pathBytes := s.readBytes(pathPtr, pathLen)
 	guestPath := string(pathBytes)
 	if strings.HasPrefix(guestPath, "/") {
+		if s.isNonPreopenDirfd(dirfd) {
+			return nil, ""
+		}
 		return s.resolvePath(guestPath)
 	}
 	if entry, ok := s.fdEntry(dirfd); ok {
@@ -1567,13 +1652,15 @@ func pathOpenStoredRights(parentInh uint64, openedType byte, fdRightsBase, fdRig
 // fdRightsBase to determine OS open flags; falls back to the overlay
 // fs.FS for read-only opens that do not create or truncate. When O_DIRECTORY
 // is set on a writable host-backed path, an existing non-directory returns
-// ENOTDIR before open. The special path "/dev/null" is handled as a
-// character-device fd without mount resolution. Absolute guest paths stored
-// on directory fds enable correct nested resolution during directory recursion.
-// fd_rights_base and fd_rights_inheriting are clamped to the directory fd's
-// rights_inheriting when recording the new fd (bits outside that mask are dropped).
-// Other checks still return ENOTCAPABLE, e.g. write on a read-only mount or
-// sandbox escape on a preopen directory.
+// ENOTDIR before open. Trailing slashes in the guest path are preserved on
+// the host path so the OS returns ENOTDIR when the final component is a file.
+// The special path "/dev/null" is handled as a character-device fd without
+// mount resolution. Absolute guest paths stored on directory fds enable
+// correct nested resolution during directory recursion. fd_rights_base and
+// fd_rights_inheriting are clamped to the directory fd's rights_inheriting
+// when recording the new fd (bits outside that mask are dropped). Other
+// checks still return ENOTCAPABLE, e.g. write on a read-only mount or sandbox
+// escape on a preopen directory.
 //
 // FS open errors (overlay fallback after a missing host file, embedded fs.FS
 // mounts, and read-only preopens) are passed through [mapOSError], so well-known
@@ -1582,6 +1669,11 @@ func pathOpenStoredRights(parentInh uint64, openedType byte, fdRightsBase, fdRig
 func (s *State) Xpath_open(dirfd int32, lookupFlags int32, pathPtr int32, pathLen int32, oflags int32, fdRightsBase int64, fdRightsInheriting int64, fdFlags int32, fdPtr int32) int32 {
 	s.assertSingleOwner()
 	pathBytes := s.readBytes(pathPtr, pathLen)
+	for _, b := range pathBytes {
+		if b == 0 {
+			return wasiEInval
+		}
+	}
 	guestPath := string(pathBytes)
 	mem := s.mem()
 	if guestPath == "/dev/null" {
@@ -1594,6 +1686,9 @@ func (s *State) Xpath_open(dirfd int32, lookupFlags int32, pathPtr int32, pathLe
 	if mount == nil {
 		if entry, ok := s.fdEntry(dirfd); ok && entry.fdType == fdFile && !strings.HasPrefix(guestPath, "/") {
 			return wasiENotDir
+		}
+		if s.isNonPreopenDirfd(dirfd) && strings.HasPrefix(guestPath, "/") {
+			return wasiEPerm
 		}
 		return wasiENoEnt
 	}
@@ -1609,6 +1704,9 @@ func (s *State) Xpath_open(dirfd int32, lookupFlags int32, pathPtr int32, pathLe
 	}
 
 	if s.preopenDirfdLexicallyEscapes(dirfd, relPath) {
+		return wasiENotCap
+	}
+	if s.nonPreopenDirfdResolvedPathEscapes(dirfd, mount, relPath) {
 		return wasiENotCap
 	}
 	var f fs.File
@@ -1641,6 +1739,12 @@ func (s *State) Xpath_open(dirfd int32, lookupFlags int32, pathPtr int32, pathLe
 		if wantDirectory {
 			osFlags = os.O_RDONLY
 		}
+		// If the guest path ends with a slash, the final component must be a
+		// directory. Preserve the trailing slash in the host path so the OS
+		// returns ENOTDIR for non-directories.
+		if strings.HasSuffix(guestPath, "/") {
+			hostPath += string(filepath.Separator)
+		}
 		hostFile, osErr := os.OpenFile(hostPath, osFlags, 0o666)
 		if osErr != nil {
 			if uint32(oflags)&(oflagCreat|oflagTrunc|oflagExcl) == 0 &&
@@ -1651,54 +1755,12 @@ func (s *State) Xpath_open(dirfd int32, lookupFlags int32, pathPtr int32, pathLe
 					return mapOSError(err)
 				}
 				fi, _ := f.Stat()
-				fdType := fdFile
-				if fi != nil && fi.IsDir() {
-					fdType = fdDir
-				}
-				fd := s.allocFD()
-				entryPath := guestPath
-				if fdType == fdDir {
-					entryPath = path.Clean("/" + mount.guestPath + "/" + relPath)
-				}
-				rb, ri := pathOpenStoredRights(parentInh, fdType, fdRightsBase, fdRightsInheriting)
-				entry := fdEntry{
-					file:             &FSFileWrap{File: f},
-					path:             entryPath,
-					fdType:           fdType,
-					rightsBase:       rb,
-					rightsInheriting: ri,
-					fdFlags:          uint16(fdFlags),
-				}
-				if fdType == fdDir {
-					if df, ok := f.(fs.ReadDirFile); ok {
-						entry.dirFile = df
-					}
-				}
-				s.fds[fd] = entry
-				binary.LittleEndian.PutUint32(mem[fdPtr:], uint32(fd))
-				return wasiESuccess
+				return s.storeOpenedFD(&FSFileWrap{File: f}, mountGuestPath(mount, relPath), fdTypeFromInfo(fi), parentInh, fdRightsBase, fdRightsInheriting, fdFlags, fdPtr)
 			}
 			return mapOSError(osErr)
 		}
 		fi, _ := hostFile.Stat()
-		fd := s.allocFD()
-		entryPath := guestPath
-		finalType := fdFile
-		if fi != nil && fi.IsDir() {
-			entryPath = path.Clean("/" + mount.guestPath + "/" + relPath)
-			finalType = fdDir
-		}
-		rb, ri := pathOpenStoredRights(parentInh, finalType, fdRightsBase, fdRightsInheriting)
-		s.fds[fd] = fdEntry{
-			file:             &osFile{File: hostFile},
-			path:             entryPath,
-			fdType:           finalType,
-			rightsBase:       rb,
-			rightsInheriting: ri,
-			fdFlags:          uint16(fdFlags),
-		}
-		binary.LittleEndian.PutUint32(mem[fdPtr:], uint32(fd))
-		return wasiESuccess
+		return s.storeOpenedFD(&osFile{File: hostFile}, mountGuestPath(mount, relPath), fdTypeFromInfo(fi), parentInh, fdRightsBase, fdRightsInheriting, fdFlags, fdPtr)
 	}
 	f, err = mount.root.Open(relPath)
 	if err != nil {
@@ -1706,34 +1768,7 @@ func (s *State) Xpath_open(dirfd int32, lookupFlags int32, pathPtr int32, pathLe
 		return mapOSError(err)
 	}
 	fi, _ := f.Stat()
-	fdType := fdFile
-	if fi != nil && fi.IsDir() {
-		fdType = fdDir
-	}
-	fd := s.allocFD()
-	savedPath := guestPath
-	if !strings.HasPrefix(savedPath, "/") {
-		if entry, ok := s.fdEntry(dirfd); ok && entry.path != "" {
-			savedPath = path.Join(entry.path, guestPath)
-		}
-	}
-	rb, ri := pathOpenStoredRights(parentInh, fdType, fdRightsBase, fdRightsInheriting)
-	entry := fdEntry{
-		file:             &FSFileWrap{File: f},
-		path:             savedPath,
-		fdType:           fdType,
-		rightsBase:       rb,
-		rightsInheriting: ri,
-		fdFlags:          uint16(fdFlags),
-	}
-	if fdType == fdDir {
-		if df, ok := f.(fs.ReadDirFile); ok {
-			entry.dirFile = df
-		}
-	}
-	s.fds[fd] = entry
-	binary.LittleEndian.PutUint32(mem[fdPtr:], uint32(fd))
-	return wasiESuccess
+	return s.storeOpenedFD(&FSFileWrap{File: f}, s.guestAbsPathForFDEntry(dirfd, guestPath), fdTypeFromInfo(fi), parentInh, fdRightsBase, fdRightsInheriting, fdFlags, fdPtr)
 }
 
 // Xpath_rename implements path_rename. Resolves both old and new paths
