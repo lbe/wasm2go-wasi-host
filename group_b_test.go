@@ -9,17 +9,30 @@ import (
 
 const dirfd = int32(3)
 
+// setupMountAtDirfd installs mount on preopen fd 3 with the given rights masks.
+func setupMountAtDirfd(t *testing.T, s *State, mount mountEntry, rightsBase, rightsInheriting uint64) {
+	t.Helper()
+	s.mounts = []mountEntry{mount}
+	s.preopens = []fdEntry{{path: "tmp", fdType: 3, mount: 0, preopen: true}}
+	for len(s.fds) < 4 {
+		s.fds = append(s.fds, fdEntry{})
+	}
+	s.fds[3] = fdEntry{
+		path:             "tmp",
+		fdType:           3,
+		mount:            0,
+		preopen:          true,
+		rightsBase:       rightsBase,
+		rightsInheriting: rightsInheriting,
+	}
+}
+
 // setupWritableMount sets up a writable mount at guest path "tmp" on dirfd=3.
 // Returns the host directory path (= t.TempDir()).
 func setupWritableMount(t *testing.T, s *State, buf []byte) string {
 	t.Helper()
 	dir := t.TempDir()
-	s.mounts = []mountEntry{{guestPath: "tmp", writable: true, hostRoot: dir}}
-	s.preopens = []fdEntry{{path: "tmp", fdType: 3, mount: 0, preopen: true}}
-	for len(s.fds) < 4 {
-		s.fds = append(s.fds, fdEntry{})
-	}
-	s.fds[3] = fdEntry{path: "tmp", fdType: 3, mount: 0, preopen: true}
+	setupMountAtDirfd(t, s, mountEntry{guestPath: "tmp", writable: true, hostRoot: dir}, rightsWritableDirPreopenBase, rightsWritableDirPreopenInheriting)
 	_ = buf
 	return dir
 }
@@ -27,12 +40,7 @@ func setupWritableMount(t *testing.T, s *State, buf []byte) string {
 // setupReadOnlyMount sets up a read-only mount at guest path "tmp" on dirfd=3.
 func setupReadOnlyMount(t *testing.T, s *State, buf []byte, dir string) {
 	t.Helper()
-	s.mounts = []mountEntry{{guestPath: "tmp", writable: false}}
-	s.preopens = []fdEntry{{path: "tmp", fdType: 3, mount: 0, preopen: true}}
-	for len(s.fds) < 4 {
-		s.fds = append(s.fds, fdEntry{})
-	}
-	s.fds[3] = fdEntry{path: "tmp", fdType: 3, mount: 0, preopen: true}
+	setupMountAtDirfd(t, s, mountEntry{guestPath: "tmp", writable: false}, rightsReadOnlyDirPreopen, rightsReadOnlyDirPreopen)
 	_ = buf
 	_ = dir
 }

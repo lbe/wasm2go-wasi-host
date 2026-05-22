@@ -256,27 +256,14 @@ func TestWasiIOAndPathOpenRejectRightsBeyondFdAndParent(t *testing.T) {
 	}
 }
 
-// TestPathOpenClampsRightsAbsentFromPreopenInheriting reproduces the actual
-// wasi-testsuite failure mode: wasi-libc compiled binaries call path_open
-// requesting rights that include bits absent from the preopen's inheriting
-// mask (FD_DATASYNC=1<<0, FD_SYNC=1<<4, FD_TELL=1<<5, FD_ADVISE=1<<7,
-// FD_ALLOCATE=1<<8). A correct runtime succeeds and returns an fd with those
-// absent bits clamped away; the fd must still be usable for the rights it
-// does have.
+// TestPathOpenClampsRightsAbsentFromPreopenInheriting verifies path_open clamps
+// requested rights to the preopen's inheriting superset (path_open_preopen.rs
+// directory_inheriting_rights). Bits inside the superset (e.g. FD_DATASYNC) are
+// retained; bits outside it (e.g. SOCK_SHUTDOWN) are stripped.
 func TestPathOpenClampsRightsAbsentFromPreopenInheriting(t *testing.T) {
 	t.Parallel()
 
-	// Bits present in every wasi-libc open request that are absent from
-	// rightsWritableDirPreopen (and thus from the preopen's inheriting mask).
-	const (
-		rightFDDatasync uint64 = 1 << 0 // __WASI_RIGHT_FD_DATASYNC
-		rightFDSync     uint64 = 1 << 4 // __WASI_RIGHT_FD_SYNC
-		rightFDTell     uint64 = 1 << 5 // __WASI_RIGHT_FD_TELL
-		rightFDAdvise   uint64 = 1 << 7 // __WASI_RIGHT_FD_ADVISE
-		rightFDAllocate uint64 = 1 << 8 // __WASI_RIGHT_FD_ALLOCATE
-
-		absentBits = rightFDDatasync | rightFDSync | rightFDTell | rightFDAdvise | rightFDAllocate
-	)
+	const testRightSockShutdown uint64 = 1 << 28 // __WASI_RIGHT_SOCK_SHUTDOWN — outside directory_inheriting_rights
 
 	const (
 		fdPtr    = 6000
@@ -295,15 +282,16 @@ func TestPathOpenClampsRightsAbsentFromPreopenInheriting(t *testing.T) {
 	}
 	copy(buf[pathOff:], fileName)
 
-	// Request rights that include bits absent from the preopen's inheriting mask.
-	// This is exactly what wasi-libc does: request everything, rely on runtime to cap.
-	requestedBase := uint64(rightFDRead) | uint64(rightFDWrite) | absentBits
+	inheritingMask := wasiTestsuiteDirectoryInheritingRightsMask()
+
+	// Request rights inside and outside the preopen inheriting superset.
+	requestedBase := uint64(rightFDRead) | uint64(rightFDWrite) | rightFDDatasync | testRightSockShutdown
+	requestedInh := rightFDDatasync | testRightSockShutdown
 	errno := s.Xpath_open(dirfd, 0, pathOff, int32(len(fileName)), 0,
-		int64(requestedBase), int64(absentBits), 0, fdPtr)
+		int64(requestedBase), int64(requestedInh), 0, fdPtr)
 	if errno != wasiESuccess {
-		t.Fatalf("path_open with rights absent from preopen inheriting = %d (%#x requested), want ESUCCESS; "+
-			"absent bits %#x not in rightsWritableDirPreopen; runtime must clamp, not reject",
-			errno, requestedBase, absentBits)
+		t.Fatalf("path_open with mixed in/out superset rights = %d (%#x requested), want ESUCCESS",
+			errno, requestedBase)
 	}
 
 	newFD := int32(binary.LittleEndian.Uint32(buf[fdPtr : fdPtr+4]))
@@ -314,29 +302,20 @@ func TestPathOpenClampsRightsAbsentFromPreopenInheriting(t *testing.T) {
 	}
 	gotBase := binary.LittleEndian.Uint64(buf[statOff+8:])
 
-	// All absent bits must have been clamped away.
-	for _, tc := range []struct {
-		name string
-		bit  uint64
-	}{
-		{"FD_DATASYNC (1<<0)", rightFDDatasync},
-		{"FD_SYNC (1<<4)", rightFDSync},
-		{"FD_TELL (1<<5)", rightFDTell},
-		{"FD_ADVISE (1<<7)", rightFDAdvise},
-		{"FD_ALLOCATE (1<<8)", rightFDAllocate},
-	} {
-		if gotBase&tc.bit != 0 {
-			t.Errorf("fd rights_base has %s set (%#x); expected clamped away (not in preopen inheriting)",
-				tc.name, gotBase)
-		}
+	if gotBase&testRightSockShutdown != 0 {
+		t.Errorf("fd rights_base has SOCK_SHUTDOWN set (%#x); expected clamped away (outside inheriting superset)", gotBase)
+	}
+	if gotBase&rightFDDatasync == 0 {
+		t.Errorf("fd rights_base missing FD_DATASYNC (%#x); bit is in directory_inheriting_rights and must be retained", gotBase)
+	}
+	if gotBase&^inheritingMask != 0 {
+		t.Errorf("fd rights_base %#x has bits outside inheriting superset %#x", gotBase, inheritingMask)
 	}
 
-	// The fd must still carry FD_READ so it is usable.
 	if gotBase&uint64(rightFDRead) == 0 {
 		t.Errorf("fd rights_base missing FD_READ after clamping (%#x); fd should be usable for reads", gotBase)
 	}
 
-	// Confirm the fd is actually usable: a read must succeed.
 	binary.LittleEndian.PutUint32(buf[iovsOff:], uint32(dataOff))
 	binary.LittleEndian.PutUint32(buf[iovsOff+4:], 5)
 	errno = s.Xfd_pread(newFD, iovsOff, 1, 0, nreadOff)
@@ -382,11 +361,8 @@ func TestFdFdstatGetReportsWASIPreview1RightsBits(t *testing.T) {
 		wasiRightsFDFilestatSetTimes  = uint64(1 << 23)
 	)
 
-	var expectedWritableDirPreopen uint64
-	expectedWritableDirPreopen |= wasiRightsFDRead | wasiRightsFDSeek | wasiRightsFDFdstatSetFlags | wasiRightsFDWrite
-	for shift := 9; shift <= 26; shift++ {
-		expectedWritableDirPreopen |= uint64(1) << shift
-	}
+	expectedWritableDirPreopenBase := wasiTestsuiteDirectoryBaseRightsMask()
+	expectedWritableDirPreopenInheriting := wasiTestsuiteDirectoryInheritingRightsMask()
 
 	errno := s.Xfd_fdstat_get(dirfd, statPtr)
 	if errno != wasiESuccess {
@@ -394,11 +370,14 @@ func TestFdFdstatGetReportsWASIPreview1RightsBits(t *testing.T) {
 	}
 	gotPreBase := binary.LittleEndian.Uint64(buf[statPtr+8 : statPtr+16])
 	gotPreInh := binary.LittleEndian.Uint64(buf[statPtr+16 : statPtr+24])
-	if gotPreBase != expectedWritableDirPreopen {
-		t.Errorf("preopen fd_fdstat_get rights_base = %#x, want %#x (WASI preview1 bit positions)", gotPreBase, expectedWritableDirPreopen)
+	if gotPreBase != expectedWritableDirPreopenBase {
+		t.Errorf("preopen fd_fdstat_get rights_base = %#x, want %#x (path_open_preopen directory_base_rights)", gotPreBase, expectedWritableDirPreopenBase)
 	}
-	if gotPreInh != expectedWritableDirPreopen {
-		t.Errorf("preopen fd_fdstat_get rights_inheriting = %#x, want %#x (WASI preview1 bit positions)", gotPreInh, expectedWritableDirPreopen)
+	if gotPreInh != expectedWritableDirPreopenInheriting {
+		t.Errorf("preopen fd_fdstat_get rights_inheriting = %#x, want %#x (path_open_preopen directory_inheriting_rights)", gotPreInh, expectedWritableDirPreopenInheriting)
+	}
+	if gotPreBase&wasiRightsFDFilestatSetSize != 0 {
+		t.Errorf("preopen rights_base has FD_FILESTAT_SET_SIZE (bit 22); directories must omit it (got %#x)", gotPreBase)
 	}
 
 	// Read-only fs.FS preopen: directory bundle is read/stat/readdir only (no write or path mutation).
@@ -462,7 +441,7 @@ func TestFdFdstatGetReportsWASIPreview1RightsBits(t *testing.T) {
 	if gotFileBase != expectedRegularFile {
 		t.Errorf("file fd_fdstat_get rights_base = %#x, want %#x (spec mask after opening with legacy request %#x)", gotFileBase, expectedRegularFile, legacyOpenRights)
 	}
-	if gotFileInh != expectedWritableDirPreopen {
-		t.Errorf("file fd_fdstat_get rights_inheriting = %#x, want %#x", gotFileInh, expectedWritableDirPreopen)
+	if gotFileInh != expectedWritableDirPreopenInheriting {
+		t.Errorf("file fd_fdstat_get rights_inheriting = %#x, want %#x", gotFileInh, expectedWritableDirPreopenInheriting)
 	}
 }

@@ -7,6 +7,7 @@ import (
 	"path/filepath"
 	"runtime"
 	"strings"
+	"sync"
 	"testing"
 )
 
@@ -15,6 +16,11 @@ type wasiTestsuiteCase struct {
 	name     string
 	wantPass bool
 }
+
+var (
+	wasiTestsuiteOnce sync.Once
+	wasm2goRunPath    string
+)
 
 // runWasiTestsuiteCases builds wasm2go-run and executes each case as a
 // sub-test. Every case runs the wasm binary named <name>.wasm from the
@@ -32,13 +38,17 @@ func runWasiTestsuiteCases(t *testing.T, suiteDir string, cases []wasiTestsuiteC
 		t.Fatalf("failed to get working directory: %v", err)
 	}
 
-	// Ensure the wasm2go-run binary is built.
-	binPath := filepath.Join(repoRoot, "bin", "wasm2go-run")
-	buildCmd := exec.Command("go", "build", "-o", binPath, "./cmd/wasm2go-run")
-	buildCmd.Dir = repoRoot
-	if out, err := buildCmd.CombinedOutput(); err != nil {
-		t.Fatalf("failed to build wasm2go-run: %v\n%s", err, string(out))
-	}
+	// Ensure the wasm2go-run binary is built only once.
+	var binPath string
+	wasiTestsuiteOnce.Do(func() {
+		wasm2goRunPath = filepath.Join(repoRoot, "bin", "wasm2go-run")
+		buildCmd := exec.Command("go", "build", "-o", wasm2goRunPath, "./cmd/wasm2go-run")
+		buildCmd.Dir = repoRoot
+		if out, err := buildCmd.CombinedOutput(); err != nil {
+			t.Fatalf("failed to build wasm2go-run: %v\n%s", err, string(out))
+		}
+	})
+	binPath = wasm2goRunPath
 
 	testsDir := filepath.Join(repoRoot, "wasi-testsuite", "tests", suiteDir, "testsuite", "wasm32-wasip1")
 	fsTestsDir := filepath.Join(testsDir, "fs-tests.dir")

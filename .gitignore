@@ -43,6 +43,11 @@ dist/
 # Cursor
 .cursor/
 
+# Local only: block Cursor commit attribution (see scripts/setup-git-hooks.sh)
+scripts/git-hooks/
+scripts/setup-git-hooks.sh
+scripts/fix-cursor-cli-attribution.sh
+
 # Project Specific
 /.pi
 wasi-testsuite/

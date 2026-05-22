@@ -306,7 +306,7 @@ via `group_dir_fd_test.go`, `group_a_fd_test.go`, and `e2e_group2_test.go`.
 | 4 — slashes | `unlink_file_trailing_slashes`, `path_symlink_trailing_slashes` | ☐ |
 | 5 — symlinks | `symlink_create`, `symlink_filestat`, `dangling_symlink` | ☐ |
 | 6 — filestat | `path_filestat`, `fd_filestat_set`, `fstflags_validate`, `stat-dev-ino` | ☑ |
-| 7 — rights | `truncation_rights`, `path_open_preopen` | ☐ |
+| 7 — rights | `truncation_rights`, `path_open_preopen` | ☑ |
 | 8 — seek/append | `file_seek_tell`, `file_allocate`, `fd_advise`, `lseek`, `pwrite-with-append` | ☐ |
 | 9 — link/rename | `path_link`, `path_rename` | ☐ |
 | 10 — renumber | `renumber` | ☐ |

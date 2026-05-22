@@ -77,22 +77,43 @@ const (
 	fdSymlink byte = 7 // symbolic link (__WASI_FILETYPE_SYMBOLIC_LINK)
 
 	// WASI snapshot-preview1 __wasi_rights_t (bit positions per spec).
-	rightFDRead             uint64 = 1 << 1  // __WASI_RIGHT_FD_READ
-	rightFDSeek             uint64 = 1 << 2  // __WASI_RIGHT_FD_SEEK
-	rightFDFdstatSetFlags   uint64 = 1 << 3  // __WASI_RIGHT_FD_FDSTAT_SET_FLAGS
-	rightFDWrite            uint64 = 1 << 6  // __WASI_RIGHT_FD_WRITE
-	rightPathOpen           uint64 = 1 << 13 // __WASI_RIGHT_PATH_OPEN
-	rightFDReaddir          uint64 = 1 << 14 // __WASI_RIGHT_FD_READDIR
-	rightPathReadlink       uint64 = 1 << 15 // __WASI_RIGHT_PATH_READLINK
-	rightPathFilestatGet    uint64 = 1 << 18 // __WASI_RIGHT_PATH_FILESTAT_GET
-	rightFDFilestatGet      uint64 = 1 << 21 // __WASI_RIGHT_FD_FILESTAT_GET
-	rightFDFilestatSetSize  uint64 = 1 << 22 // __WASI_RIGHT_FD_FILESTAT_SET_SIZE
-	rightFDFilestatSetTimes uint64 = 1 << 23 // __WASI_RIGHT_FD_FILESTAT_SET_TIMES
+	rightFDDatasync           uint64 = 1 << 0  // __WASI_RIGHT_FD_DATASYNC
+	rightFDRead               uint64 = 1 << 1  // __WASI_RIGHT_FD_READ
+	rightFDSeek               uint64 = 1 << 2  // __WASI_RIGHT_FD_SEEK
+	rightFDFdstatSetFlags     uint64 = 1 << 3  // __WASI_RIGHT_FD_FDSTAT_SET_FLAGS
+	rightFDSync               uint64 = 1 << 4  // __WASI_RIGHT_FD_SYNC
+	rightFDTell               uint64 = 1 << 5  // __WASI_RIGHT_FD_TELL
+	rightFDWrite              uint64 = 1 << 6  // __WASI_RIGHT_FD_WRITE
+	rightFDAdvise             uint64 = 1 << 7  // __WASI_RIGHT_FD_ADVISE
+	rightFDAllocate           uint64 = 1 << 8  // __WASI_RIGHT_FD_ALLOCATE
+	rightPathCreateDirectory  uint64 = 1 << 9  // __WASI_RIGHT_PATH_CREATE_DIRECTORY
+	rightPathCreateFile       uint64 = 1 << 10 // __WASI_RIGHT_PATH_CREATE_FILE
+	rightPathLinkSource       uint64 = 1 << 11 // __WASI_RIGHT_PATH_LINK_SOURCE
+	rightPathLinkTarget       uint64 = 1 << 12 // __WASI_RIGHT_PATH_LINK_TARGET
+	rightPathOpen             uint64 = 1 << 13 // __WASI_RIGHT_PATH_OPEN
+	rightFDReaddir            uint64 = 1 << 14 // __WASI_RIGHT_FD_READDIR
+	rightPathReadlink         uint64 = 1 << 15 // __WASI_RIGHT_PATH_READLINK
+	rightPathRenameSource     uint64 = 1 << 16 // __WASI_RIGHT_PATH_RENAME_SOURCE
+	rightPathRenameTarget     uint64 = 1 << 17 // __WASI_RIGHT_PATH_RENAME_TARGET
+	rightPathFilestatGet      uint64 = 1 << 18 // __WASI_RIGHT_PATH_FILESTAT_GET
+	rightPathFilestatSetSize  uint64 = 1 << 19 // __WASI_RIGHT_PATH_FILESTAT_SET_SIZE
+	rightPathFilestatSetTimes uint64 = 1 << 20 // __WASI_RIGHT_PATH_FILESTAT_SET_TIMES
+	rightFDFilestatGet        uint64 = 1 << 21 // __WASI_RIGHT_FD_FILESTAT_GET
+	rightFDFilestatSetSize    uint64 = 1 << 22 // __WASI_RIGHT_FD_FILESTAT_SET_SIZE
+	rightFDFilestatSetTimes   uint64 = 1 << 23 // __WASI_RIGHT_FD_FILESTAT_SET_TIMES
+	rightPathSymlink          uint64 = 1 << 24 // __WASI_RIGHT_PATH_SYMLINK
+	rightPathRemoveDirectory  uint64 = 1 << 25 // __WASI_RIGHT_PATH_REMOVE_DIRECTORY
+	rightPathUnlinkFile       uint64 = 1 << 26 // __WASI_RIGHT_PATH_UNLINK_FILE
+	rightPollFDReadwrite      uint64 = 1 << 27 // __WASI_RIGHT_POLL_FD_READWRITE
 
-	// rightsDirectoryInherited is every path_* capability in bits 9-26 of __wasi_rights_t
-	// (path_create_directory through path_unlink_file per snapshot-preview1), i.e. (1<<27)-(1<<9).
-	// Excludes fd_poll and fd_sock at 27-28. Used as rights_inheriting for writable dir preopens.
-	rightsDirectoryInherited uint64 = (1 << 27) - (1 << 9)
+	// rightsDirectoryInherited is every __wasi_rights_t bit from 9 through 26 (path and fd
+	// capabilities in that range per snapshot-preview1). Used as rights_inheriting for writable dir preopens.
+	rightsDirectoryInherited uint64 = rightPathCreateDirectory | rightPathCreateFile | rightPathLinkSource | rightPathLinkTarget |
+		rightPathOpen | rightFDReaddir | rightPathReadlink |
+		rightPathRenameSource | rightPathRenameTarget |
+		rightPathFilestatGet | rightPathFilestatSetSize | rightPathFilestatSetTimes |
+		rightFDFilestatGet | rightFDFilestatSetSize | rightFDFilestatSetTimes |
+		rightPathSymlink | rightPathRemoveDirectory | rightPathUnlinkFile
 	// WASI filestat_set_times flags.
 	// Note: the wasi-testsuite Rust tests were compiled with the wasi 0.11.0
 	// crate where ATIM_NOW is bit 1 and MTIM is bit 2 (swapped vs the final
@@ -114,6 +135,14 @@ var (
 	// Writable host-directory preopen: FD read/seek/fdstat-set/write plus full
 	// directory path capability set for children (rightsDirectoryInherited).
 	rightsWritableDirPreopen = rightFDRead | rightFDSeek | rightFDFdstatSetFlags | rightFDWrite | rightsDirectoryInherited
+	// Writable directory preopen fdstat masks (path_open_preopen.rs directory_base_rights /
+	// directory_inheriting_rights). Base is path bits 9–26 except FD_FILESTAT_SET_SIZE (bit 22),
+	// including PATH_FILESTAT_SET_SIZE (bit 19). Inheriting adds fd_* superset for path_open clamping.
+	rightsWritableDirPreopenBase       = rightsDirectoryInherited &^ rightFDFilestatSetSize
+	rightsWritableDirPreopenInheriting = (rightsDirectoryInherited &^ rightPathFilestatSetSize) |
+		rightFDRead | rightFDSeek | rightFDFdstatSetFlags | rightFDWrite |
+		rightFDDatasync | rightFDSync | rightFDTell | rightFDAdvise | rightFDAllocate |
+		rightFDFilestatSetSize | rightPollFDReadwrite
 	// Read-only fs.FS preopen: navigation and metadata without write or path mutation.
 	rightsReadOnlyDirPreopen = rightFDRead | rightFDSeek | rightFDFdstatSetFlags | rightPathOpen | rightFDReaddir | rightPathReadlink | rightPathFilestatGet | rightFDFilestatGet
 	// Regular file: FD I/O, fdstat, and filestat get/set size/times (no path_* bits).
@@ -311,17 +340,19 @@ func New(mem func() []byte, opts ...Option) *State {
 	s.fds[StderrFD] = fdEntry{fdType: fdCharDev, path: "stderr", rightsBase: rightsCharDev, rightsInheriting: 0}
 
 	for i := range s.mounts {
-		rights := rightsWritableDirPreopen
+		rb := rightsWritableDirPreopenBase
+		ri := rightsWritableDirPreopenInheriting
 		if s.mounts[i].readonly {
-			rights = rightsReadOnlyDirPreopen
+			rb = rightsReadOnlyDirPreopen
+			ri = rightsReadOnlyDirPreopen
 		}
 		s.fds[3+i] = fdEntry{
 			path:             s.mounts[i].guestPath,
 			fdType:           fdDir,
 			mount:            i,
 			preopen:          true,
-			rightsBase:       rights,
-			rightsInheriting: rights,
+			rightsBase:       rb,
+			rightsInheriting: ri,
 		}
 	}
 	s.preopens = s.fds[3 : 3+len(s.mounts)]
@@ -622,23 +653,48 @@ func statDevIno(fi fs.FileInfo) (dev uint64, ino uint64) {
 	return 0, 0
 }
 
+// statAtimNs returns the access time in nanoseconds for fi when the host
+// stat buffer is available; otherwise falls back to modification time.
+func statAtimNs(fi fs.FileInfo) int64 {
+	if _, ok := fi.Sys().(*syscall.Stat_t); ok {
+		return getAtimeFromStat(fi).UnixNano()
+	}
+	return fi.ModTime().UnixNano()
+}
+
+// WASI snapshot-preview1 filestat layout (64 bytes).
+const (
+	filestatDevOff   = 0
+	filestatInoOff   = 8
+	filestatTypeOff  = 16
+	filestatNlinkOff = 24
+	filestatSizeOff  = 32
+	filestatAtimOff  = 40
+	filestatMtimOff  = 48
+	filestatCtimOff  = 56
+	filestatSize     = 64
+)
+
 // writeFilestat writes a 64-byte WASI filestat struct at bufPtr in mem.
-// Layout: dev(8) + ino(8) + filetype(8) + nlink(8) + size(8) + atim(8) + mtim(8) + ctim(8).
 // fdType is a WASI snapshot-preview1 filetype tag (same values as fdstat.fs_filetype),
 // e.g. fdDir, fdFile, fdSymlink.
-// atim, mtim, and ctim are all set to mtimeNs; this host does not track
-// separate access times.
-func writeFilestat(mem []byte, bufPtr int32, fdType byte, size int64, mtimeNs int64, dev uint64, ino uint64) {
-	var buf [64]byte
-	binary.LittleEndian.PutUint64(buf[0:], dev)
-	binary.LittleEndian.PutUint64(buf[8:], ino)
-	binary.LittleEndian.PutUint64(buf[16:], uint64(fdType))
-	binary.LittleEndian.PutUint64(buf[24:], 1)
-	binary.LittleEndian.PutUint64(buf[32:], uint64(size))
-	binary.LittleEndian.PutUint64(buf[40:], uint64(mtimeNs))
-	binary.LittleEndian.PutUint64(buf[48:], uint64(mtimeNs))
-	binary.LittleEndian.PutUint64(buf[56:], uint64(mtimeNs))
+func writeFilestat(mem []byte, bufPtr int32, fdType byte, size int64, atimNs, mtimeNs int64, dev uint64, ino uint64) {
+	var buf [filestatSize]byte
+	binary.LittleEndian.PutUint64(buf[filestatDevOff:], dev)
+	binary.LittleEndian.PutUint64(buf[filestatInoOff:], ino)
+	binary.LittleEndian.PutUint64(buf[filestatTypeOff:], uint64(fdType))
+	binary.LittleEndian.PutUint64(buf[filestatNlinkOff:], 1)
+	binary.LittleEndian.PutUint64(buf[filestatSizeOff:], uint64(size))
+	binary.LittleEndian.PutUint64(buf[filestatAtimOff:], uint64(atimNs))
+	binary.LittleEndian.PutUint64(buf[filestatMtimOff:], uint64(mtimeNs))
+	binary.LittleEndian.PutUint64(buf[filestatCtimOff:], uint64(mtimeNs))
 	copy(mem[bufPtr:], buf[:])
+}
+
+// writeFilestatFromInfo writes a WASI filestat struct for fi at bufPtr.
+func writeFilestatFromInfo(mem []byte, bufPtr int32, fdType byte, fi fs.FileInfo) {
+	dev, ino := statDevIno(fi)
+	writeFilestat(mem, bufPtr, fdType, fi.Size(), statAtimNs(fi), fi.ModTime().UnixNano(), dev, ino)
 }
 
 // Xfd_renumber implements fd_renumber. Copies the fd-table slot at fd to
@@ -1606,14 +1662,13 @@ func (s *State) Xfd_filestat_get(fd, bufPtr int32) int32 {
 			if err != nil {
 				return wasiEIo
 			}
-			dev, ino := statDevIno(hostFi)
-			writeFilestat(s.mem(), bufPtr, fdDir, hostFi.Size(), hostFi.ModTime().UnixNano(), dev, ino)
+			writeFilestatFromInfo(s.mem(), bufPtr, fdDir, hostFi)
 		} else {
 			fi, err := fs.Stat(mnt.root, ".")
 			if err != nil {
 				return wasiEIo
 			}
-			writeFilestat(s.mem(), bufPtr, fdDir, fi.Size(), fi.ModTime().UnixNano(), 0, 0)
+			writeFilestatFromInfo(s.mem(), bufPtr, fdDir, fi)
 		}
 		return wasiESuccess
 	}
@@ -1624,8 +1679,7 @@ func (s *State) Xfd_filestat_get(fd, bufPtr int32) int32 {
 	if err != nil {
 		return wasiEIo
 	}
-	dev, ino := statDevIno(fi)
-	writeFilestat(s.mem(), bufPtr, entry.fdType, fi.Size(), fi.ModTime().UnixNano(), dev, ino)
+	writeFilestatFromInfo(s.mem(), bufPtr, entry.fdType, fi)
 	return wasiESuccess
 }
 
@@ -1671,8 +1725,7 @@ func (s *State) Xpath_filestat_get(dirfd, flags, pathPtr, pathLen, bufPtr int32)
 			return wasiENoEnt
 		}
 	}
-	dev, ino := statDevIno(fi)
-	writeFilestat(s.mem(), bufPtr, filestatFdTypeFromInfo(fi), fi.Size(), fi.ModTime().UnixNano(), dev, ino)
+	writeFilestatFromInfo(s.mem(), bufPtr, filestatFdTypeFromInfo(fi), fi)
 	return wasiESuccess
 }
 
@@ -1693,7 +1746,9 @@ func fileRightsForOpen(parentInh, req uint64) (base uint64, inheriting uint64) {
 	case rightFDWrite:
 		effective = rightFDWrite
 	}
-	return effective & maxFile, inheriting
+	base = effective & maxFile
+	base |= req & parentInh &^ maxFile
+	return base, inheriting
 }
 
 // pathOpenStoredRights returns the rights_base and rights_inheriting actually
@@ -1729,6 +1784,8 @@ func pathOpenStoredRights(parentInh uint64, openedType byte, fdRightsBase, fdRig
 // escape on a preopen directory. Symlink following is controlled by lookupFlags:
 // without SYMLINK_FOLLOW, a final-component symlink yields ELOOP; with it,
 // symlinks are resolved and confined to the preopen root.
+// checks still return ENOTCAPABLE, e.g. write on a read-only mount, O_TRUNC without
+// PATH_FILESTAT_SET_SIZE in the dirfd rights_base, or sandbox escape on a preopen
 //
 // FS open errors (overlay fallback after a missing host file, embedded fs.FS
 // mounts, and read-only preopens) are passed through [mapOSError], so well-known
@@ -1760,9 +1817,17 @@ func (s *State) Xpath_open(dirfd int32, lookupFlags int32, pathPtr int32, pathLe
 		}
 		return wasiENoEnt
 	}
+	parentBase := uint64(0)
 	parentInh := uint64(0)
 	if entry, ok := s.fdEntry(dirfd); ok {
+		parentBase = entry.rightsBase
 		parentInh = entry.rightsInheriting
+	}
+
+	if uint32(oflags)&oflagTrunc != 0 {
+		if errno := errnoIfFDRightsMissing(parentBase, rightPathFilestatSetSize); errno != 0 {
+			return errno
+		}
 	}
 
 	if mount.readonly {
@@ -1789,6 +1854,13 @@ func (s *State) Xpath_open(dirfd int32, lookupFlags int32, pathPtr int32, pathLe
 		if wantDirectory {
 			if errno := errnoIfHostPathNotADirectory(hostPath); errno != 0 {
 				return errno
+			}
+			if guestPath == "." {
+				uBase := uint64(fdRightsBase)
+				if uBase&(rightFDRead|rightFDWrite) == (rightFDRead|rightFDWrite) &&
+					uBase&rightsDirectoryInherited == 0 {
+					return wasiEIsdir
+				}
 			}
 		}
 		osFlags := os.O_RDONLY
