@@ -12,6 +12,32 @@ The `wasihost` package provides a **WASI snapshot-preview1** host implementation
 *   **Virtual File System (VFS)**: Manages mappings between guest file descriptors and host files/directories or `fs.FS` instances.
 *   **Memory Access**: Since `wasm2go` transpiles WASM to native Go, `wasihost` accesses guest memory directly via a callback that returns a byte slice.
 
+### Source file map
+
+The `wasihost` implementation is split across `wasihost*.go` files (all `package wasihost`, portable on Linux and Darwin). Use this map to find syscall handlers and helpers:
+
+| Area | File |
+|------|------|
+| `State`, `New`, options, fd table | `wasihost.go` |
+| WASI errno / rights constants | `wasihost_const.go` |
+| `mapOSError` and errno helpers | `wasihost_errno.go` |
+| `fsFile`, `DirEntriesFile`, `FSFileWrap` | `wasihost_adapters.go` |
+| Guest memory / string-table helpers | `wasihost_mem.go` |
+| Path resolution and confinement | `wasihost_path_resolve.go` |
+| `path_open` | `wasihost_open.go` |
+| `path_*` mutations, `path_rename` | `wasihost_path.go` |
+| `fd_read` / `write` / `seek` / `readdir` | `wasihost_fd.go` |
+| `fd_pread` / `pwrite` / stubs | `wasihost_fd_ext.go` |
+| filestat / fdstat | `wasihost_filestat.go` |
+| args / env / clock / poll | `wasihost_misc.go` |
+
+Platform-specific pieces use small build-tagged files instead of tagging the whole package:
+
+| Concern | Linux | Darwin |
+|---------|-------|--------|
+| Access time from `Stat_t` | `atime_linux.go` | `atime_darwin.go` |
+| Hard link to symlink inode (`path_link`) | `path_link_linux.go` | `path_link_darwin.go` |
+
 ### System Call Flow
 
 The following diagram illustrates how a WASI system call is handled:

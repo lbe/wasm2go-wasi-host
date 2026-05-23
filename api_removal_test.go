@@ -2,17 +2,29 @@ package wasihost_test
 
 import (
 	"os"
+	"path/filepath"
 	"strings"
 	"testing"
 )
 
 func TestRemovalOfOldMountAPIsAndUnsafeSemantics(t *testing.T) {
-	// 1. Check for removed public API symbols in wasihost.go
-	data, err := os.ReadFile("wasihost.go")
+	// 1. Check for removed public API symbols in all wasihost package sources.
+	paths, err := filepath.Glob("wasihost*.go")
 	if err != nil {
-		t.Fatalf("failed to read wasihost.go: %v", err)
+		t.Fatalf("glob wasihost*.go: %v", err)
 	}
-	content := string(data)
+	if len(paths) == 0 {
+		t.Fatal("no wasihost*.go files found")
+	}
+	var content strings.Builder
+	for _, p := range paths {
+		data, readErr := os.ReadFile(p)
+		if readErr != nil {
+			t.Fatalf("failed to read %s: %v", p, readErr)
+		}
+		content.Write(data)
+	}
+	source := content.String()
 
 	removedSymbols := []string{
 		"WithMount",
@@ -20,7 +32,7 @@ func TestRemovalOfOldMountAPIsAndUnsafeSemantics(t *testing.T) {
 	}
 
 	for _, symbol := range removedSymbols {
-		if strings.Contains(content, "func "+symbol) {
+		if strings.Contains(source, "func "+symbol) {
 			t.Errorf("public API still contains %s; it should be removed", symbol)
 		}
 	}
@@ -31,7 +43,7 @@ func TestRemovalOfOldMountAPIsAndUnsafeSemantics(t *testing.T) {
 	}
 
 	for _, ref := range unsafeReferences {
-		if strings.Contains(content, ref) {
+		if strings.Contains(source, ref) {
 			t.Errorf("implementation still contains reference to %s; it should be removed/replaced", ref)
 		}
 	}
