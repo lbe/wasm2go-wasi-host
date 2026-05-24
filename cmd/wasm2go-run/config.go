@@ -15,11 +15,13 @@ type DirMount struct {
 	Guest string
 }
 
+// Config holds the runtime configuration for wasm2go-run.
 type Config struct {
 	Env      []string
 	Dirs     []DirMount
 	WasmPath string
 	WasmArgs []string
+	Cache    string
 }
 
 type stringSlice []string
@@ -54,12 +56,14 @@ func (d *dirSlice) Set(value string) error {
 func parseConfig(args []string, stdout io.Writer) (Config, error) {
 	var env stringSlice
 	var dirs dirSlice
+	var cacheMode string
 	var version bool
 
 	fs := flag.NewFlagSet("wasm2go-run", flag.ContinueOnError)
 	fs.SetOutput(io.Discard)
 	fs.Var(&env, "env", "Environment variables")
 	fs.Var(&dirs, "dir", "Directory mounts")
+	fs.StringVar(&cacheMode, "cache", "", "Cache mode")
 	fs.BoolVar(&version, "version", false, "Show version")
 
 	if err := fs.Parse(args); err != nil {
@@ -76,17 +80,16 @@ func parseConfig(args []string, stdout io.Writer) (Config, error) {
 		return Config{}, errors.New("missing wasm path")
 	}
 
-	var cfg Config
-	cfg.WasmPath = remaining[0]
-	cfg.WasmArgs = remaining[1:]
-	if len(env) > 0 {
-		cfg.Env = env
+	wasmArgs := remaining[1:]
+	if len(wasmArgs) == 0 {
+		wasmArgs = nil
 	}
-	if len(dirs) > 0 {
-		cfg.Dirs = dirs
-	}
-	if len(cfg.WasmArgs) == 0 {
-		cfg.WasmArgs = nil
+	cfg := Config{
+		WasmPath: remaining[0],
+		WasmArgs: wasmArgs,
+		Env:      env,
+		Dirs:     dirs,
+		Cache:    cacheMode,
 	}
 	return cfg, nil
 }

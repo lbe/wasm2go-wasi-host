@@ -23,7 +23,15 @@ wasm2go-run [options] <wasm-file> [-- <guest-args>]
 
 - `-dir <host-dir>[:<guest-dir>]`: Mount a host directory into the WASM guest. If guest path is omitted, it defaults to the host path. Multiple `-dir` flags are supported.
 - `-env <key=value>`: Set an environment variable for the guest. Multiple `-env` flags are supported.
+- `-cache off`: Disable tier-1 transpile caching (enabled by default).
 - `-version`: Show version information.
+
+### Environment variables
+
+Tier-1 transpile cache (transpiled `module.go` only; compile still uses a per-run temp directory):
+
+- `WASM2GO_RUN_CACHE`: Set to `0`, `false`, or `off` (case-insensitive) to disable caching.
+- `WASM2GO_RUN_CACHE_DIR`: Override the cache directory (default: `$XDG_CACHE_HOME/wasm2go-run` or `$HOME/.cache/wasm2go-run`).
 
 ### Examples
 
@@ -35,8 +43,8 @@ wasm2go-run -dir ./data:/data -env KEY=VALUE my-app.wasm -- --app-arg1
 
 ## How it works
 
-1. **Transpile**: It uses `wasm2go` (must be in your PATH) to transpile the `.wasm` file into Go source code in a temporary directory.
-2. **Compile**: It generates a `main.go` that wires the transpiled module to the `wasihost` implementation and compiles it using `go build`.
+1. **Transpile**: It uses `wasm2go` (must be in your PATH) to transpile the `.wasm` file into Go source code. When tier-1 caching is enabled, the transpiled `module.go` is stored under the cache directory (keyed by WASM contents and toolchain identity) so repeat runs can skip calling `wasm2go`.
+2. **Compile**: It generates a `main.go` that wires the transpiled module to the `wasihost` implementation and compiles it using `go build` in a temporary directory.
 3. **Execute**: It runs the resulting binary with the specified mounts, environment variables, and arguments.
 4. **Cleanup**: Temporary files are removed after execution.
 
