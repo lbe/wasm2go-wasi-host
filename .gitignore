@@ -51,3 +51,4 @@ scripts/fix-cursor-cli-attribution.sh
 # Project Specific
 /.pi
 wasi-testsuite/
+/.worktrees
