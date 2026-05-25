@@ -69,8 +69,11 @@ jobs:
       - name: Test
         run: go test -v ./... -timeout 15m
 
+  # Tier-2: ubuntu-24.04-{riscv,s390x,ppc64le-p10} need GitHub larger runners.
+  # Default off so workflows do not queue forever. Enable: repo variable
+  # CI_LINUX_OTHER_ARCH=true (Settings → Secrets and variables → Actions).
   test-linux-other:
-    if: github.ref == 'refs/heads/main' || github.event_name == 'workflow_dispatch'
+    if: vars.CI_LINUX_OTHER_ARCH == 'true' && (github.ref == 'refs/heads/main' || github.event_name == 'workflow_dispatch')
     needs: test
     runs-on: ${{ matrix.runs-on }}
     strategy:
