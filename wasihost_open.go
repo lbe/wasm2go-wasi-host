@@ -124,8 +124,8 @@ func (s *State) Xpath_open(dirfd int32, lookupFlags int32, pathPtr int32, pathLe
 	if s.preopenDirfdLexicallyEscapes(dirfd, relPath) {
 		return wasiENotCap
 	}
-	if s.nonPreopenDirfdResolvedPathEscapes(dirfd, mount, relPath) {
-		return wasiENotCap
+	if errno := s.errnoIfNonPreopenDirfdEscapes(dirfd, mount, relPath); errno != 0 {
+		return errno
 	}
 	var f fs.File
 	var err error

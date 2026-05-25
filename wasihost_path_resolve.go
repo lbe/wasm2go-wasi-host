@@ -127,8 +127,8 @@ func (s *State) guestAbsPathForFDEntry(dirfd int32, guestPath string) string {
 // nonPreopenDirfdResolvedPathEscapes reports whether resolving relPath
 // through the given mount produces a guest-absolute path that falls
 // outside the subtree of a non-preopen directory fd. This prevents
-// path_open from accessing paths above the dirfd's resolved directory
-// using ".." segments.
+// path_open and resolveWritable from accessing paths above the dirfd's
+// resolved directory using ".." segments.
 func (s *State) nonPreopenDirfdResolvedPathEscapes(dirfd int32, mount *mountEntry, relPath string) bool {
 	if !s.isNonPreopenDirfd(dirfd) {
 		return false
@@ -140,6 +140,13 @@ func (s *State) nonPreopenDirfdResolvedPathEscapes(dirfd int32, mount *mountEntr
 	}
 	prefix := dirEntry.path
 	return resolvedGuest != prefix && !strings.HasPrefix(resolvedGuest, prefix+"/")
+}
+
+func (s *State) errnoIfNonPreopenDirfdEscapes(dirfd int32, mount *mountEntry, rel string) int32 {
+	if s.nonPreopenDirfdResolvedPathEscapes(dirfd, mount, rel) {
+		return wasiENotCap
+	}
+	return 0
 }
 
 // preopenEntryByFD returns the fdEntry for preopen fd if it is valid and
@@ -297,9 +304,10 @@ func (s *State) resolveDirfdPath(dirfd, pathPtr, pathLen int32) (*mountEntry, st
 }
 
 // resolveWritable resolves a (dirfd, path) pair to a host path for mutation
-// and other host-backed operations. Directory preopens reject mount-relative
-// paths that lexically escape the preopen root with ENOTCAPABLE (see
-// preopenDirfdLexicallyEscapes) before joining hostRoot.
+// and other host-backed operations. Before joining hostRoot it rejects paths
+// with ENOTCAPABLE when:
+//   - a directory preopen would lexically escape its root (preopenDirfdLexicallyEscapes), or
+//   - a nested non-preopen dirfd would resolve outside its subtree (errnoIfNonPreopenDirfdEscapes).
 func (s *State) resolveWritable(dirfd, pathPtr, pathLen int32) (string, int32) {
 	m, rel := s.resolveDirfdPath(dirfd, pathPtr, pathLen)
 	if m == nil {
@@ -311,6 +319,9 @@ func (s *State) resolveWritable(dirfd, pathPtr, pathLen int32) (string, int32) {
 
 	if s.preopenDirfdLexicallyEscapes(dirfd, rel) {
 		return "", wasiENotCap
+	}
+	if errno := s.errnoIfNonPreopenDirfdEscapes(dirfd, m, rel); errno != 0 {
+		return "", errno
 	}
 
 	if !m.writable || m.hostRoot == "" {

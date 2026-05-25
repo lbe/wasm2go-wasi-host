@@ -8,6 +8,8 @@ import (
 	"testing"
 )
 
+const nestedDirfdEscapePath = "dir/nested/../../../escape_sibling/dir/nested/file"
+
 // nestedDirfdSetup holds the common test fixtures for tests that exercise
 // path_open on a non-preopen (nested) directory fd.
 type nestedDirfdSetup struct {
@@ -72,6 +74,300 @@ func assertESuccess(t *testing.T, errno int32) {
 	}
 }
 
+// setupEscapeSiblingTree creates escape_sibling under the preopen with
+// dir/nested/file — the host target reachable via nestedDirfdEscapePath.
+func setupEscapeSiblingTree(t *testing.T, s *State, buf []byte, tmpDir string) (escapeFile string) {
+	t.Helper()
+
+	const preopenFd int32 = 3
+	const pathOff1 int32 = 1000
+
+	copy(buf[pathOff1:], "escape_sibling")
+	assertESuccess(t, s.Xpath_create_directory(preopenFd, pathOff1, int32(len("escape_sibling"))))
+
+	if err := os.MkdirAll(filepath.Join(tmpDir, "escape_sibling", "dir", "nested"), 0o755); err != nil {
+		t.Fatal(err)
+	}
+	escapeFile = filepath.Join(tmpDir, "escape_sibling", "dir", "nested", "file")
+	if err := os.WriteFile(escapeFile, []byte("escaped"), 0o644); err != nil {
+		t.Fatal(err)
+	}
+
+	return escapeFile
+}
+
+// setupNestedDirfdWithEscapeTarget extends setupNestedDirfd with an escape_sibling
+// tree containing dir/nested/file — the target reachable via nestedDirfdEscapePath.
+func setupNestedDirfdWithEscapeTarget(t *testing.T) (setup nestedDirfdSetup, escapePath, escapeFile string) {
+	t.Helper()
+
+	setup = setupNestedDirfd(t)
+	escapePath = nestedDirfdEscapePath
+	escapeFile = setupEscapeSiblingTree(t, setup.s, setup.buf, setup.tmpDir)
+
+	return setup, escapePath, escapeFile
+}
+
+func assertRejectNestedDirfdEscape(t *testing.T, op string, escapePath string, errno int32) {
+	t.Helper()
+	if errno == wasiESuccess {
+		t.Fatalf("%s(nested_fd, %q) succeeded; expected EPERM (%d) or ENOTCAPABLE (%d)",
+			op, escapePath, wasiEPerm, wasiENotCap)
+	}
+	if errno != wasiEPerm && errno != wasiENotCap {
+		t.Fatalf("%s(nested_fd, %q) = %d; want EPERM (%d) or ENOTCAPABLE (%d)",
+			op, escapePath, errno, wasiEPerm, wasiENotCap)
+	}
+}
+
+func assertEscapeFileUnchanged(t *testing.T, escapeFile string) {
+	t.Helper()
+	got, err := os.ReadFile(escapeFile)
+	if err != nil {
+		t.Fatalf("reading escape_sibling file: %v", err)
+	}
+	if string(got) != "escaped" {
+		t.Fatalf("escape_sibling file content = %q, want %q — escape path mutated host state", got, "escaped")
+	}
+}
+
+// TestPathMutationsRejectEscapeOutsideNestedDirfdSubtree verifies that path
+// mutations using resolveWritable on a non-preopen (nested) directory fd reject
+// the canonical escape path with EPERM or ENOTCAPABLE and do not mutate host
+// state outside the nested dirfd subtree.
+func TestPathMutationsRejectEscapeOutsideNestedDirfdSubtree(t *testing.T) {
+	t.Parallel()
+
+	const (
+		pathOff4  int32 = 4000
+		pathOff5  int32 = 5000
+		bufOff    int32 = 6000
+		nreadOff  int32 = 7000
+		targetOff int32 = 8000
+	)
+
+	tests := []struct {
+		name string
+		run  func(t *testing.T, setup nestedDirfdSetup, escapePath, escapeFile string)
+	}{
+		{
+			name: "path_create_directory",
+			run: func(t *testing.T, setup nestedDirfdSetup, escapePath, escapeFile string) {
+				s, buf, nestedFd := setup.s, setup.buf, setup.nestedFd
+				copy(buf[pathOff4:], escapePath)
+				errno := s.Xpath_create_directory(nestedFd, pathOff4, int32(len(escapePath)))
+				assertRejectNestedDirfdEscape(t, "Xpath_create_directory", escapePath, errno)
+				assertEscapeFileUnchanged(t, escapeFile)
+			},
+		},
+		{
+			name: "path_remove_directory",
+			run: func(t *testing.T, setup nestedDirfdSetup, escapePath, escapeFile string) {
+				s, buf, nestedFd := setup.s, setup.buf, setup.nestedFd
+				copy(buf[pathOff4:], escapePath)
+				errno := s.Xpath_remove_directory(nestedFd, pathOff4, int32(len(escapePath)))
+				assertRejectNestedDirfdEscape(t, "Xpath_remove_directory", escapePath, errno)
+				assertEscapeFileUnchanged(t, escapeFile)
+			},
+		},
+		{
+			name: "path_rename",
+			run: func(t *testing.T, setup nestedDirfdSetup, escapePath, escapeFile string) {
+				s, buf, nestedFd := setup.s, setup.buf, setup.nestedFd
+				const srcPath = "dir/nested/rename_src"
+				if err := os.WriteFile(filepath.Join(setup.tmpDir, "interesting_paths_dir", "dir", "nested", "rename_src"), []byte("src"), 0o644); err != nil {
+					t.Fatal(err)
+				}
+				copy(buf[pathOff4:], srcPath)
+				copy(buf[pathOff5:], escapePath)
+				errno := s.Xpath_rename(nestedFd, pathOff4, int32(len(srcPath)), nestedFd, pathOff5, int32(len(escapePath)))
+				assertRejectNestedDirfdEscape(t, "Xpath_rename", escapePath, errno)
+				assertEscapeFileUnchanged(t, escapeFile)
+				if _, err := os.Stat(filepath.Join(setup.tmpDir, "interesting_paths_dir", "dir", "nested", "rename_src")); err != nil {
+					t.Fatalf("rename_src was moved despite escape rejection: %v", err)
+				}
+			},
+		},
+		{
+			name: "path_readlink",
+			run: func(t *testing.T, setup nestedDirfdSetup, escapePath, _ string) {
+				s, buf, nestedFd := setup.s, setup.buf, setup.nestedFd
+				copy(buf[pathOff4:], escapePath)
+				errno := s.Xpath_readlink(nestedFd, pathOff4, int32(len(escapePath)), bufOff, 256, nreadOff)
+				assertRejectNestedDirfdEscape(t, "Xpath_readlink", escapePath, errno)
+			},
+		},
+		{
+			name: "path_symlink",
+			run: func(t *testing.T, setup nestedDirfdSetup, escapePath, escapeFile string) {
+				s, buf, nestedFd := setup.s, setup.buf, setup.nestedFd
+				copy(buf[targetOff:], "target")
+				copy(buf[pathOff4:], escapePath)
+				errno := s.Xpath_symlink(targetOff, int32(len("target")), nestedFd, pathOff4, int32(len(escapePath)))
+				assertRejectNestedDirfdEscape(t, "Xpath_symlink", escapePath, errno)
+				assertEscapeFileUnchanged(t, escapeFile)
+			},
+		},
+		{
+			name: "path_link",
+			run: func(t *testing.T, setup nestedDirfdSetup, escapePath, escapeFile string) {
+				s, buf, nestedFd := setup.s, setup.buf, setup.nestedFd
+				const oldPath = "dir/nested/file"
+				copy(buf[pathOff4:], oldPath)
+				copy(buf[pathOff5:], escapePath)
+				errno := s.Xpath_link(nestedFd, 0, pathOff4, int32(len(oldPath)), nestedFd, pathOff5, int32(len(escapePath)))
+				assertRejectNestedDirfdEscape(t, "Xpath_link", escapePath, errno)
+				assertEscapeFileUnchanged(t, escapeFile)
+			},
+		},
+	}
+
+	for _, tt := range tests {
+		t.Run(tt.name, func(t *testing.T) {
+			setup, escapePath, escapeFile := setupNestedDirfdWithEscapeTarget(t)
+			tt.run(t, setup, escapePath, escapeFile)
+		})
+	}
+}
+
+// TestPathMutationsAllowPathsWithinNestedDirfdSubtree verifies that path
+// mutations on a non-preopen (nested) directory fd still succeed for relative
+// paths that remain within the nested dirfd subtree after normalization.
+func TestPathMutationsAllowPathsWithinNestedDirfdSubtree(t *testing.T) {
+	t.Parallel()
+
+	const (
+		pathOff4  int32 = 4000
+		pathOff5  int32 = 5000
+		bufOff    int32 = 6000
+		nreadOff  int32 = 7000
+		targetOff int32 = 8000
+	)
+
+	tests := []struct {
+		name string
+		run  func(t *testing.T, setup nestedDirfdSetup)
+	}{
+		{
+			name: "path_create_directory",
+			run: func(t *testing.T, setup nestedDirfdSetup) {
+				s, buf, nestedFd, tmpDir := setup.s, setup.buf, setup.nestedFd, setup.tmpDir
+				const allowedPath = "allowed_subdir"
+				copy(buf[pathOff4:], allowedPath)
+				assertESuccess(t, s.Xpath_create_directory(nestedFd, pathOff4, int32(len(allowedPath))))
+				hostPath := filepath.Join(tmpDir, "interesting_paths_dir", allowedPath)
+				if _, err := os.Stat(hostPath); err != nil {
+					t.Fatalf("host path %q missing after in-subtree create: %v", hostPath, err)
+				}
+			},
+		},
+		{
+			name: "path_remove_directory",
+			run: func(t *testing.T, setup nestedDirfdSetup) {
+				s, buf, nestedFd, tmpDir := setup.s, setup.buf, setup.nestedFd, setup.tmpDir
+				const allowedPath = "allowed_remove_me"
+				hostPath := filepath.Join(tmpDir, "interesting_paths_dir", allowedPath)
+				if err := os.Mkdir(hostPath, 0o755); err != nil {
+					t.Fatal(err)
+				}
+				copy(buf[pathOff4:], allowedPath)
+				assertESuccess(t, s.Xpath_remove_directory(nestedFd, pathOff4, int32(len(allowedPath))))
+				if _, err := os.Stat(hostPath); !os.IsNotExist(err) {
+					t.Fatalf("host path %q still exists after in-subtree remove: %v", hostPath, err)
+				}
+			},
+		},
+		{
+			name: "path_rename",
+			run: func(t *testing.T, setup nestedDirfdSetup) {
+				s, buf, nestedFd, tmpDir := setup.s, setup.buf, setup.nestedFd, setup.tmpDir
+				const srcPath = "dir/nested/rename_src"
+				const dstPath = "dir/nested/rename_dst"
+				if err := os.WriteFile(filepath.Join(tmpDir, "interesting_paths_dir", "dir", "nested", "rename_src"), []byte("src"), 0o644); err != nil {
+					t.Fatal(err)
+				}
+				copy(buf[pathOff4:], srcPath)
+				copy(buf[pathOff5:], dstPath)
+				assertESuccess(t, s.Xpath_rename(nestedFd, pathOff4, int32(len(srcPath)), nestedFd, pathOff5, int32(len(dstPath))))
+				if _, err := os.Stat(filepath.Join(tmpDir, "interesting_paths_dir", "dir", "nested", "rename_dst")); err != nil {
+					t.Fatalf("rename_dst missing after in-subtree rename: %v", err)
+				}
+			},
+		},
+		{
+			name: "path_readlink",
+			run: func(t *testing.T, setup nestedDirfdSetup) {
+				s, buf, nestedFd, tmpDir := setup.s, setup.buf, setup.nestedFd, setup.tmpDir
+				const linkPath = "allowed_readlink"
+				const targetPath = "dir/nested/file"
+				hostLink := filepath.Join(tmpDir, "interesting_paths_dir", linkPath)
+				if err := os.Symlink("dir/nested/file", hostLink); err != nil {
+					t.Fatal(err)
+				}
+				copy(buf[pathOff4:], linkPath)
+				assertESuccess(t, s.Xpath_readlink(nestedFd, pathOff4, int32(len(linkPath)), bufOff, 256, nreadOff))
+				nread := int32(binary.LittleEndian.Uint32(buf[nreadOff : nreadOff+4]))
+				got := string(buf[bufOff : bufOff+nread])
+				if got != targetPath {
+					t.Fatalf("readlink = %q, want %q", got, targetPath)
+				}
+			},
+		},
+		{
+			name: "path_symlink",
+			run: func(t *testing.T, setup nestedDirfdSetup) {
+				s, buf, nestedFd, tmpDir := setup.s, setup.buf, setup.nestedFd, setup.tmpDir
+				const linkPath = "allowed_symlink"
+				copy(buf[targetOff:], "dir/nested/file")
+				copy(buf[pathOff4:], linkPath)
+				assertESuccess(t, s.Xpath_symlink(targetOff, int32(len("dir/nested/file")), nestedFd, pathOff4, int32(len(linkPath))))
+				hostLink := filepath.Join(tmpDir, "interesting_paths_dir", linkPath)
+				if _, err := os.Lstat(hostLink); err != nil {
+					t.Fatalf("symlink %q missing after in-subtree path_symlink: %v", hostLink, err)
+				}
+			},
+		},
+		{
+			name: "path_link",
+			run: func(t *testing.T, setup nestedDirfdSetup) {
+				s, buf, nestedFd, tmpDir := setup.s, setup.buf, setup.nestedFd, setup.tmpDir
+				const oldPath = "dir/nested/file"
+				const newPath = "allowed_hardlink"
+				copy(buf[pathOff4:], oldPath)
+				copy(buf[pathOff5:], newPath)
+				assertESuccess(t, s.Xpath_link(nestedFd, 0, pathOff4, int32(len(oldPath)), nestedFd, pathOff5, int32(len(newPath))))
+				hostLink := filepath.Join(tmpDir, "interesting_paths_dir", newPath)
+				if _, err := os.Stat(hostLink); err != nil {
+					t.Fatalf("hard link %q missing after in-subtree path_link: %v", hostLink, err)
+				}
+			},
+		},
+		{
+			name: "path_unlink_file",
+			run: func(t *testing.T, setup nestedDirfdSetup) {
+				s, buf, nestedFd, tmpDir := setup.s, setup.buf, setup.nestedFd, setup.tmpDir
+				const allowedPath = "dir/nested/unlink_me"
+				hostPath := filepath.Join(tmpDir, "interesting_paths_dir", "dir", "nested", "unlink_me")
+				if err := os.WriteFile(hostPath, []byte("bye"), 0o644); err != nil {
+					t.Fatal(err)
+				}
+				copy(buf[pathOff4:], allowedPath)
+				assertESuccess(t, s.Xpath_unlink_file(nestedFd, pathOff4, int32(len(allowedPath))))
+				if _, err := os.Stat(hostPath); !os.IsNotExist(err) {
+					t.Fatalf("host file %q still exists after in-subtree unlink: %v", hostPath, err)
+				}
+			},
+		},
+	}
+
+	for _, tt := range tests {
+		t.Run(tt.name, func(t *testing.T) {
+			setup := setupNestedDirfd(t)
+			tt.run(t, setup)
+		})
+	}
+}
+
 // TestPathOpenRejectsEscapeOutsideNestedDirfdSubtree verifies that path_open on
 // a non-preopen (nested) directory fd rejects relative paths whose normalized
 // form escapes outside the dirfd's guest subtree. A path like
@@ -83,51 +379,37 @@ func TestPathOpenRejectsEscapeOutsideNestedDirfdSubtree(t *testing.T) {
 	t.Parallel()
 
 	const (
-		preopenFd int32 = 3
-		pathOff1  int32 = 1000
 		pathOff4  int32 = 4000
 		fileFdPtr int32 = 6000
 	)
 
-	setup := setupNestedDirfd(t)
-	s, buf, tmpDir, nestedFd := setup.s, setup.buf, setup.tmpDir, setup.nestedFd
-
-	// Create "escape_sibling" under the preopen.
-	copy(buf[pathOff1:], "escape_sibling")
-	assertESuccess(t, s.Xpath_create_directory(preopenFd, pathOff1, int32(len("escape_sibling"))))
-
-	// Create dir/nested/file under escape_sibling (the target the escape path tries to reach).
-	if err := os.MkdirAll(filepath.Join(tmpDir, "escape_sibling", "dir", "nested"), 0o755); err != nil {
-		t.Fatal(err)
-	}
-	if err := os.WriteFile(filepath.Join(tmpDir, "escape_sibling", "dir", "nested", "file"), []byte("escaped"), 0o644); err != nil {
-		t.Fatal(err)
-	}
+	setup, escapePath, escapeFile := setupNestedDirfdWithEscapeTarget(t)
+	s, buf, nestedFd := setup.s, setup.buf, setup.nestedFd
 
 	// path_open with escape path on nested fd must return EPERM or ENOTCAPABLE.
-	// The path "dir/nested/../../../escape_sibling/dir/nested/file" normalizes to
-	// /data/escape_sibling/dir/nested/file, which is outside the nested fd's subtree.
-	escapePath := "dir/nested/../../../escape_sibling/dir/nested/file"
+	// nestedDirfdEscapePath normalizes to /data/escape_sibling/dir/nested/file,
+	// which is outside the nested fd's subtree.
 	copy(buf[pathOff4:], escapePath)
 	errno := s.Xpath_open(nestedFd, 0, pathOff4, int32(len(escapePath)), 0, int64(rightFDRead), 0, 0, fileFdPtr)
-	if errno == wasiESuccess {
-		fd := int32(binary.LittleEndian.Uint32(buf[fileFdPtr : fileFdPtr+4]))
-		t.Fatalf("Xpath_open(nested_fd, %q) succeeded (fd=%d); expected EPERM (%d) or ENOTCAPABLE (%d) — path escapes outside nested dirfd subtree",
-			escapePath, fd, wasiEPerm, wasiENotCap)
-	}
-	if errno != wasiEPerm && errno != wasiENotCap {
-		t.Fatalf("Xpath_open(nested_fd, %q) = %d; want EPERM (%d) or ENOTCAPABLE (%d)",
-			escapePath, errno, wasiEPerm, wasiENotCap)
-	}
+	assertRejectNestedDirfdEscape(t, "Xpath_open", escapePath, errno)
+	assertEscapeFileUnchanged(t, escapeFile)
+}
 
-	// Verify the file under escape_sibling was NOT opened / accessed.
-	got, err := os.ReadFile(filepath.Join(tmpDir, "escape_sibling", "dir", "nested", "file"))
-	if err != nil {
-		t.Fatalf("reading escape_sibling file: %v", err)
-	}
-	if string(got) != "escaped" {
-		t.Fatalf("escape_sibling file content = %q, want %q — file was accessed/modified by escape path", got, "escaped")
-	}
+// TestPathUnlinkRejectsEscapeOutsideNestedDirfdSubtree verifies that
+// path_unlink_file on a non-preopen (nested) directory fd rejects relative
+// paths whose normalized form escapes outside the dirfd's guest subtree.
+func TestPathUnlinkRejectsEscapeOutsideNestedDirfdSubtree(t *testing.T) {
+	t.Parallel()
+
+	const pathOff4 int32 = 4000
+
+	setup, escapePath, escapeFile := setupNestedDirfdWithEscapeTarget(t)
+	s, buf, nestedFd := setup.s, setup.buf, setup.nestedFd
+
+	copy(buf[pathOff4:], escapePath)
+	errno := s.Xpath_unlink_file(nestedFd, pathOff4, int32(len(escapePath)))
+	assertRejectNestedDirfdEscape(t, "Xpath_unlink_file", escapePath, errno)
+	assertEscapeFileUnchanged(t, escapeFile)
 }
 
 // TestPathOpenRejectsGuestAbsolutePathOnNestedDirfd verifies that path_open
