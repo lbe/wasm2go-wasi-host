@@ -14,6 +14,10 @@ const (
 	compileBinaryName = "runner"
 )
 
+// wasiHostPath returns the filesystem path to this repository root for
+// go.mod replace directives in generated runner workspaces. It prefers
+// vcs.dir from the build info when the binary is a development build,
+// otherwise WASM2GO_WASIHOST_PATH.
 func wasiHostPath() string {
 	info, ok := debug.ReadBuildInfo()
 	if !ok || info.Main.Version != "(devel)" {
@@ -34,6 +38,9 @@ func wasiHostPath() string {
 	return os.Getenv("WASM2GO_WASIHOST_PATH")
 }
 
+// compile transpiles wasmPath, writes a temporary Go module (main.go, module.go,
+// go.mod), and builds a runner binary. On success it returns the temp build
+// directory and binary path; the caller must remove the directory after execution.
 func compile(wasmPath string, cfg Config) (string, string, error) {
 	tmpDir, err := os.MkdirTemp("", "wasm2go-run-*")
 	if err != nil {

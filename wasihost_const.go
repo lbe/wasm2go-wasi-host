@@ -136,10 +136,7 @@ const (
 	filestatSize     = 64
 )
 
-// writeFilestat writes a 64-byte WASI filestat struct at bufPtr in mem.
-// fdType is a WASI snapshot-preview1 filetype tag (same values as fdstat.fs_filetype),
-// e.g. fdDir, fdFile, fdSymlink.
-
+// Standard WASI file descriptor numbers for the process I/O streams.
 const (
 	StdinFD  = 0
 	StdoutFD = 1

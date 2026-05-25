@@ -15,11 +15,6 @@ func (s *State) readBytes(ptr, length int32) []byte {
 // with '/'. This checks the raw guest bytes before any host resolution so
 // that trailing-slash semantics are preserved exactly as the guest expressed
 // them.
-
-// pathHasTrailingSlash reports whether the guest path at (ptr, len) ends
-// with '/'. This checks the raw guest bytes before any host resolution so
-// that trailing-slash semantics are preserved exactly as the guest expressed
-// them.
 func (s *State) pathHasTrailingSlash(ptr, length int32) bool {
 	b := s.readBytes(ptr, length)
 	return len(b) > 0 && b[len(b)-1] == '/'
@@ -38,11 +33,6 @@ func writeStringTableSizes(mem []byte, countPtr, bufSizePtr int32, items []strin
 	}
 	binary.LittleEndian.PutUint32(mem[bufSizePtr:], total)
 }
-
-// writeStringTable writes a pointer array at ptrBase and null-terminated
-// strings packed at bufBase into mem. Each pointer is a uint32 offset into
-// mem pointing to the start of the corresponding string. Shared by
-// environ_get and args_get.
 
 // writeStringTable writes a pointer array at ptrBase and null-terminated
 // strings packed at bufBase into mem. Each pointer is a uint32 offset into

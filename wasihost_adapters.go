@@ -21,17 +21,7 @@ type fsFile interface {
 // backed by real host files on a writable mount. It also exposes ReadAt,
 // WriteAt, Truncate, and Sync through the embedded *os.File, which are
 // used by fd_read, fd_write, fd_filestat_set_size, and fd_datasync.
-
-// osFile wraps *os.File to satisfy the fsFile interface for fd entries
-// backed by real host files on a writable mount. It also exposes ReadAt,
-// WriteAt, Truncate, and Sync through the embedded *os.File, which are
-// used by fd_read, fd_write, fd_filestat_set_size, and fd_datasync.
 type osFile struct{ *os.File }
-
-// fdEntry is one slot in the WASI file-descriptor table. Slots 0-2 are
-// stdin, stdout, and stderr (fdCharDev). Slots 3 through 3+len(mounts)-1
-// are preopen directory entries. Higher slots are allocated dynamically
-// by path_open and freed by fd_close.
 
 // wasiDirInfo is a sentinel fs.FileInfo returned by DirEntriesFile.Stat.
 // It satisfies the fs.FileInfo interface with directory-type metadata and
@@ -51,8 +41,6 @@ func (wasiDirInfo) IsDir() bool { return true }
 func (wasiDirInfo) Sys() any { return nil }
 
 // synthDirEntry is a minimal fs.DirEntry for synthetic . and .. entries.
-
-// synthDirEntry is a minimal fs.DirEntry for synthetic . and .. entries.
 type synthDirEntry struct{ name string }
 
 func (e synthDirEntry) Name() string { return e.name }
@@ -62,11 +50,6 @@ func (e synthDirEntry) IsDir() bool { return true }
 func (e synthDirEntry) Type() fs.FileMode { return fs.ModeDir }
 
 func (e synthDirEntry) Info() (fs.FileInfo, error) { return wasiDirInfo{}, nil }
-
-// DirEntriesFile adapts a []fs.DirEntry to the fs.ReadDirFile interface.
-// It is used internally by fd_readdir to serve preopen directory listings
-// from fs.ReadDirFS mounts. The Entries field is exported so that tests
-// can construct values directly without going through path_open.
 
 // DirEntriesFile adapts a []fs.DirEntry to the fs.ReadDirFile interface.
 // It is used internally by fd_readdir to serve preopen directory listings
@@ -99,11 +82,6 @@ func (d *DirEntriesFile) ReadDir(n int) ([]fs.DirEntry, error) {
 // an explicit Seek method. If the underlying fs.File implements io.Seeker,
 // Seek delegates to it; otherwise Seek returns an error. Used for
 // read-only embedded-FS file entries opened via path_open.
-
-// FSFileWrap adapts an fs.File to the fd-table file interface by adding
-// an explicit Seek method. If the underlying fs.File implements io.Seeker,
-// Seek delegates to it; otherwise Seek returns an error. Used for
-// read-only embedded-FS file entries opened via path_open.
 type FSFileWrap struct{ fs.File }
 
 func (f *FSFileWrap) Stat() (fs.FileInfo, error) {
@@ -116,7 +94,3 @@ func (f *FSFileWrap) Seek(offset int64, whence int) (int64, error) {
 	}
 	return 0, fmt.Errorf("seek not supported")
 }
-
-// Xenviron_sizes_get implements environ_sizes_get. Writes the count of
-// configured environment strings and their total buffer size (including
-// null terminators) to the respective pointers in guest memory.

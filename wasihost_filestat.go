@@ -50,8 +50,6 @@ func statAtimNs(fi fs.FileInfo) int64 {
 	return fi.ModTime().UnixNano()
 }
 
-// WASI snapshot-preview1 filestat layout (64 bytes).
-
 // writeFilestat writes a 64-byte WASI filestat struct at bufPtr in mem.
 // fdType is a WASI snapshot-preview1 filetype tag (same values as fdstat.fs_filetype),
 // e.g. fdDir, fdFile, fdSymlink.
@@ -136,16 +134,6 @@ func (s *State) Xfd_filestat_get(fd, bufPtr int32) int32 {
 // embedded-only files. Read-only mounts use fs.Stat on the mount root only.
 // Writable host directory preopens return ENOTCAPABLE for mount-relative paths
 // that lexically escape the preopen (same check as path_open and resolveWritable).
-
-// Xpath_filestat_get implements path_filestat_get. Resolves the path and
-// writes a 64-byte filestat struct. On writable host-backed mounts, when
-// SYMLINK_FOLLOW is absent the final component is examined with Lstat-like
-// semantics (a symlink is reported as filetype symbolic link); when it is
-// set, symlinks in the final component are followed (Stat). Both paths try
-// the host filesystem first, then fall back to fs.Stat on the overlay for
-// embedded-only files. Read-only mounts use fs.Stat on the mount root only.
-// Writable host directory preopens return ENOTCAPABLE for mount-relative paths
-// that lexically escape the preopen (same check as path_open and resolveWritable).
 func (s *State) Xpath_filestat_get(dirfd, flags, pathPtr, pathLen, bufPtr int32) int32 {
 	mount, relPath := s.resolveDirfdPath(dirfd, pathPtr, pathLen)
 	if mount == nil {
@@ -217,14 +205,6 @@ func (s *State) Xfd_filestat_set_size(fd int32, size int64) int32 {
 // contradictory flag combinations (ATIM together with ATIM_NOW, or MTIM
 // together with MTIM_NOW) with EINVAL. For fs.FS-backed fds, returns
 // ESUCCESS without mutation.
-
-// Xfd_filestat_set_times implements fd_filestat_set_times.
-//
-// For osFile-backed fds, calls os.Chtimes with the specified nanosecond
-// values. Honors ATIM, MTIM, ATIM_NOW, and MTIM_NOW flags. Rejects
-// contradictory flag combinations (ATIM together with ATIM_NOW, or MTIM
-// together with MTIM_NOW) with EINVAL. For fs.FS-backed fds, returns
-// ESUCCESS without mutation.
 func (s *State) Xfd_filestat_set_times(fd int32, atim, mtim int64, fstFlags int32) int32 {
 	if fstFlags&(fstAtim|fstMtim|fstAtimNow|fstMtimNow) == 0 {
 		return wasiESuccess
@@ -277,10 +257,6 @@ func computeTargetTimes(fi fs.FileInfo, atim, mtim int64, fstFlags int32) (time.
 // setTimesAtPath sets the access and modification times on path. When follow
 // is true it follows symlinks (os.Chtimes); when false it sets times on the
 // symlink inode itself (unix.UtimesNanoAt with AT_SYMLINK_NOFOLLOW).
-
-// setTimesAtPath sets the access and modification times on path. When follow
-// is true it follows symlinks (os.Chtimes); when false it sets times on the
-// symlink inode itself (unix.UtimesNanoAt with AT_SYMLINK_NOFOLLOW).
 func setTimesAtPath(path string, atim, mtim time.Time, follow bool) error {
 	if follow {
 		return os.Chtimes(path, atim, mtim)
@@ -291,17 +267,6 @@ func setTimesAtPath(path string, atim, mtim time.Time, follow bool) error {
 	}
 	return unix.UtimesNanoAt(unix.AT_FDCWD, path, ts, unix.AT_SYMLINK_NOFOLLOW)
 }
-
-// Xpath_filestat_set_times implements path_filestat_set_times.
-//
-// ATIM (bit 0), ATIM_NOW (bit 1), MTIM (bit 2), and MTIM_NOW (bit 3) flags
-// are acted upon. Rejects contradictory flag combinations (ATIM together with
-// ATIM_NOW, or MTIM together with MTIM_NOW) with EINVAL. Resolves paths with
-// resolveWritable (including ENOTCAPABLE when a directory preopen path
-// lexically escapes the mount). When LOOKUPFLAGS_SYMLINK_FOLLOW is set in
-// flags, follows symlinks in the final path component; otherwise sets times on
-// the symlink inode itself. Returns EROFS when the path is read-only or cannot
-// be resolved to a writable host path.
 
 // Xpath_filestat_set_times implements path_filestat_set_times.
 //

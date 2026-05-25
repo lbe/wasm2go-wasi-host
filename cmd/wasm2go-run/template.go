@@ -7,6 +7,8 @@ import (
 	"text/template"
 )
 
+// generateMain renders the wrapper main.go that wires wasihost to the
+// transpiled wasm2go module.
 func generateMain(cfg Config, imports []string, moduleName string) (string, error) {
 	const mainTmpl = `package main
 
@@ -101,8 +103,9 @@ func main() {
 	return buf.String(), nil
 }
 
+// generateGoMod returns a minimal go.mod for the ephemeral runner workspace.
 func generateGoMod(moduleName, wasiHostPath string) string {
-	res := "module " + moduleName + "\n\ngo 1.22\n\nrequire github.com/lbe/wasm2go-wasi-host v0.0.0\n"
+	res := "module " + moduleName + "\n\ngo 1.26\n\nrequire github.com/lbe/wasm2go-wasi-host v0.0.0\n"
 	if wasiHostPath != "" {
 		res += "\nreplace github.com/lbe/wasm2go-wasi-host => " + wasiHostPath + "\n"
 	}

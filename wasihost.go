@@ -1,31 +1,37 @@
-// Package wasihost implements a standalone, general-purpose WASI
-// snapshot-preview1 host for binaries compiled with wasm2go. It covers
-// all 40 WASI preview1 functions plus the env.call_host_function stub
-// required by zeroperl-style wasm2go modules.
+// Package wasihost implements a WASI snapshot-preview1 host for Go code
+// produced by [wasm2go]. It implements all 40 WASI Preview1 imports plus
+// the env.call_host_function stub used by some wasm2go modules.
+//
+// Filesystem access is capability-oriented: guests see only preopened
+// directories, either read-only [fs.FS] mounts ([WithReadOnlyFS]) or writable
+// host directories ([WithHostDirectoryPreopen]). See ARCHITECTURE.md for the
+// source layout and syscall flow.
 //
 // # Usage
 //
 // Construct a [State] with [New], passing a callback that returns the guest's
-// linear memory slice. The callback is re-invoked on every syscall so that
-// memory growth events are handled transparently:
+// linear memory slice. The callback is re-invoked on every syscall so memory
+// growth is handled transparently:
 //
 //	state := wasihost.New(
 //	    func() []byte { return *mod.Xmemory().Slice() },
-//	    wasihost.WithStdin(stdinReader),
-//	    wasihost.WithStdout(stdoutWriter),
+//	    wasihost.WithArgs("app"),
 //	    wasihost.WithHostDirectoryPreopen("/", hostDir),
 //	)
-//	mod := zeroperl.New(state, state)
+//	mod := generated.New(state, state)
+//
+// Recover [ExitError] at the module boundary to obtain the guest exit code.
 //
 // # Concurrency
 //
-// State is not safe for concurrent use. Each wasm2go Module instance must
-// have its own State, and both must be used from a single goroutine.
+// [State] is not safe for concurrent use. Each wasm2go module instance needs
+// its own State, used from a single goroutine. [WithOwnerAssertion] panics when
+// a different goroutine calls into the host.
 //
 // # Memory layout
 //
-// All multi-byte integers written into guest memory are little-endian, per
-// the WASI snapshot-preview1 specification.
+// All multi-byte integers written into guest memory are little-endian per the
+// WASI snapshot-preview1 specification.
 package wasihost
 
 import (
@@ -65,10 +71,6 @@ type State struct {
 	invalidated map[int]bool // fd_renumber invalidates source slots; cleared on Xfd_close and storeOpenedFD reuse
 }
 
-// fsFile is the internal read/stat/close interface satisfied by both
-// [FSFileWrap] (for fs.FS-backed files) and [osFile] (for *os.File-backed
-// files). It is the element type of fdEntry.file.
-
 // fdEntry is one slot in the WASI file-descriptor table. Slots 0-2 are
 // stdin, stdout, and stderr (fdCharDev). Slots 3 through 3+len(mounts)-1
 // are preopen directory entries. Higher slots are allocated dynamically
@@ -105,21 +107,7 @@ type mountEntry struct {
 
 // Option is a functional option for configuring a [State] at construction
 // time. Options are applied in the order they are passed to [New].
-
-// Option is a functional option for configuring a [State] at construction
-// time. Options are applied in the order they are passed to [New].
 type Option func(*State)
-
-// ExitError is the panic value raised by proc_exit. Embedding applications
-// must recover it at the wasm eval boundary to obtain the guest exit code:
-//
-//	defer func() {
-//	    if r := recover(); r != nil {
-//	        if e, ok := r.(wasihost.ExitError); ok {
-//	            // e.Code is the guest exit status
-//	        }
-//	    }
-//	}()
 
 // ExitError is the panic value raised by proc_exit. Embedding applications
 // must recover it at the wasm eval boundary to obtain the guest exit code:
@@ -135,9 +123,6 @@ type ExitError struct{ Code int32 }
 
 // Error implements the error interface. Returns a string of the form
 // "exit status N" where N is the guest exit code.
-
-// Error implements the error interface. Returns a string of the form
-// "exit status N" where N is the guest exit code.
 func (e ExitError) Error() string { return fmt.Sprintf("exit status %d", e.Code) }
 
 // New creates a WASI snapshot-preview1 host state. mem is called on every
@@ -149,21 +134,7 @@ func (e ExitError) Error() string { return fmt.Sprintf("exit status %d", e.Code)
 // New constructor:
 //
 //	state := wasihost.New(func() []byte { return *mod.Xmemory().Slice() }, opts...)
-//	mod   := zeroperl.New(state, state)
-//
-// If mem is nil, any method that accesses guest memory will panic. A nil
-// mem is only safe for tests that do not exercise memory-reading methods.
-
-// New creates a WASI snapshot-preview1 host state. mem is called on every
-// syscall invocation to obtain the current guest linear memory slice; it is
-// safe to call after memory growth events because wasm2go re-slices on grow.
-//
-// The returned *State satisfies the X-prefixed method interfaces generated
-// by wasm2go. Pass it as both import arguments to the generated module's
-// New constructor:
-//
-//	state := wasihost.New(func() []byte { return *mod.Xmemory().Slice() }, opts...)
-//	mod   := zeroperl.New(state, state)
+//	mod   := generated.New(state, state)
 //
 // If mem is nil, any method that accesses guest memory will panic. A nil
 // mem is only safe for tests that do not exercise memory-reading methods.
@@ -201,22 +172,12 @@ func New(mem func() []byte, opts ...Option) *State {
 
 // WithArgs sets the argv for the WASI process, used by args_get and
 // args_sizes_get. Defaults to no arguments. Multiple calls append.
-
-// WithArgs sets the argv for the WASI process, used by args_get and
-// args_sizes_get. Defaults to no arguments. Multiple calls append.
 func WithArgs(args ...string) Option { return func(s *State) { s.args = append(s.args, args...) } }
 
 // WithEnv sets the full environment variable list as "KEY=VALUE" strings,
 // used by environ_get and environ_sizes_get. Callers are responsible for
 // including all required entries such as PERL5LIB. Multiple calls append.
-
-// WithEnv sets the full environment variable list as "KEY=VALUE" strings,
-// used by environ_get and environ_sizes_get. Callers are responsible for
-// including all required entries such as PERL5LIB. Multiple calls append.
 func WithEnv(env ...string) Option { return func(s *State) { s.env = append(s.env, env...) } }
-
-// WithReadOnlyFS adds a read-only guest filesystem mount that is explicitly
-// marked as read-only in WASI preopens, reporting no write or mutation rights.
 
 // WithReadOnlyFS adds a read-only guest filesystem mount that is explicitly
 // marked as read-only in WASI preopens, reporting no write or mutation rights.
@@ -226,9 +187,8 @@ func WithReadOnlyFS(guestPath string, root fs.FS) Option {
 	}
 }
 
-// WithHostDirectoryPreopen adds a host directory as a WASI preopened directory.
-
-// WithHostDirectoryPreopen adds a host directory as a WASI preopened directory.
+// WithHostDirectoryPreopen adds a writable host directory preopen at guestPath.
+// The mount uses os.DirFS for reads and direct host path operations for writes.
 func WithHostDirectoryPreopen(guestPath, hostPath string) Option {
 	return func(s *State) {
 		s.mounts = append(s.mounts, mountEntry{guestPath: guestPath, hostRoot: hostPath, root: os.DirFS(hostPath), writable: true})
@@ -239,16 +199,7 @@ func WithHostDirectoryPreopen(guestPath, hostPath string) Option {
 // returns (0, io.EOF) immediately. Defaulting to os.Stdin is deliberately
 // avoided: this host is designed for embedded server use where the process
 // stdin is unrelated to the guest.
-
-// WithStdin sets the io.Reader for guest fd 0. Defaults to a reader that
-// returns (0, io.EOF) immediately. Defaulting to os.Stdin is deliberately
-// avoided: this host is designed for embedded server use where the process
-// stdin is unrelated to the guest.
 func WithStdin(r io.Reader) Option { return func(s *State) { s.stdin = r } }
-
-// WithStdout sets the io.Writer for guest fd 1. Defaults to io.Discard.
-// Defaulting to os.Stdout is deliberately avoided; accidental stdout
-// leakage is a correctness hazard in embedded server use.
 
 // WithStdout sets the io.Writer for guest fd 1. Defaults to io.Discard.
 // Defaulting to os.Stdout is deliberately avoided; accidental stdout
@@ -257,44 +208,21 @@ func WithStdout(w io.Writer) Option { return func(s *State) { s.stdout = w } }
 
 // WithStderr sets the io.Writer for guest fd 2. Defaults to io.Discard.
 // See [WithStdout] for rationale.
-
-// WithStderr sets the io.Writer for guest fd 2. Defaults to io.Discard.
-// See [WithStdout] for rationale.
 func WithStderr(w io.Writer) Option { return func(s *State) { s.stderr = w } }
 
 // WithTracing enables per-syscall trace logging to os.Stdout. Off by
-// default. In the embedding application, activate via the
-// EXIFTOOL_WASI_TRACE=1 environment variable.
-
-// WithTracing enables per-syscall trace logging to os.Stdout. Off by
-// default. In the embedding application, activate via the
-// EXIFTOOL_WASI_TRACE=1 environment variable.
+// default.
 func WithTracing() Option { return func(s *State) { s.trace = true } }
 
 // WithOwnerAssertion enables a runtime goroutine-ownership assertion. When
 // enabled, any WASI call from a goroutine other than the first caller
-// panics with a descriptive message. Off by default. In the embedding
-// application, activate via the EXIFTOOL_WASI_ASSERT_OWNER=1 environment
-// variable.
-
-// WithOwnerAssertion enables a runtime goroutine-ownership assertion. When
-// enabled, any WASI call from a goroutine other than the first caller
-// panics with a descriptive message. Off by default. In the embedding
-// application, activate via the EXIFTOOL_WASI_ASSERT_OWNER=1 environment
-// variable.
+// panics with a descriptive message. Off by default.
 func WithOwnerAssertion() Option { return func(s *State) { s.assertOwner = true } }
 
 // Mem returns the current guest linear memory slice by invoking the mem
 // callback passed to [New]. The returned slice may be replaced after any
 // memory growth event; callers must not retain it across calls.
-
-// Mem returns the current guest linear memory slice by invoking the mem
-// callback passed to [New]. The returned slice may be replaced after any
-// memory growth event; callers must not retain it across calls.
 func (s *State) Mem() []byte { return s.mem() }
-
-// allocFD returns the index of the first empty fd-table slot above the
-// preopen range. It extends the table by one slot if no free slot exists.
 
 // allocFD returns the index of the first empty fd-table slot above the
 // preopen range. It extends the table by one slot if no free slot exists.
@@ -339,17 +267,11 @@ func (s *State) storeOpenedFD(file fsFile, guestPath string, fdType byte, parent
 }
 
 // logTrace writes a formatted line to os.Stdout when tracing is enabled.
-
-// logTrace writes a formatted line to os.Stdout when tracing is enabled.
 func (s *State) logTrace(format string, args ...interface{}) {
 	if s.trace {
 		fmt.Printf(format+"\n", args...)
 	}
 }
-
-// assertSingleOwner panics if the calling goroutine is not the goroutine
-// that first called a method on this State. Has no effect when
-// WithOwnerAssertion was not passed to New.
 
 // assertSingleOwner panics if the calling goroutine is not the goroutine
 // that first called a method on this State. Has no effect when
@@ -374,11 +296,6 @@ func (s *State) assertSingleOwner() {
 // the output of runtime.Stack. There is no public Go API for goroutine IDs;
 // this approach is intentionally fragile by design - it is only used for
 // debugging assertions, not for correctness logic.
-
-// currentGID returns the numeric ID of the calling goroutine by parsing
-// the output of runtime.Stack. There is no public Go API for goroutine IDs;
-// this approach is intentionally fragile by design - it is only used for
-// debugging assertions, not for correctness logic.
 func currentGID() uint64 {
 	var b [64]byte
 	n := runtime.Stack(b[:], false)
@@ -398,7 +315,3 @@ func currentGID() uint64 {
 	}
 	return id
 }
-
-// wasiDirInfo is a sentinel fs.FileInfo returned by DirEntriesFile.Stat.
-// It satisfies the fs.FileInfo interface with directory-type metadata and
-// zero values for fields that are not meaningful for virtual directory listings.

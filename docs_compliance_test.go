@@ -37,7 +37,7 @@ func TestDocsCompliance(t *testing.T) {
 		}
 	})
 
-	// 3. Check e2e-wasip1.sh or a targeted runner test for a mutation test
+	// 3. Check runner test for a mutation test
 	t.Run("E2E script or runner test includes mutation wasi-testsuite binary", func(t *testing.T) {
 		// We want to ensure at least one test from wasi-testsuite that performs
 		// create/write/remove is part of our verified compliance.

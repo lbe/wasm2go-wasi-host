@@ -10,12 +10,16 @@ import (
 
 var ErrVersionRequested = errors.New("version requested")
 
+// DirMount maps a host directory path to a guest preopen path passed to
+// wasihost.WithHostDirectoryPreopen.
 type DirMount struct {
 	Host  string
 	Guest string
 }
 
-// Config holds the runtime configuration for wasm2go-run.
+// Config holds CLI flags and positional arguments for a single wasm2go-run
+// invocation: WASM path, guest argv after "--", environment, directory mounts,
+// and optional cache override.
 type Config struct {
 	Env      []string
 	Dirs     []DirMount
@@ -53,6 +57,8 @@ func (d *dirSlice) Set(value string) error {
 	return nil
 }
 
+// parseConfig parses wasm2go-run flags and positional arguments. It returns
+// ErrVersionRequested when -version is set (caller should exit 0).
 func parseConfig(args []string, stdout io.Writer) (Config, error) {
 	var env stringSlice
 	var dirs dirSlice

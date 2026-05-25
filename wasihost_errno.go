@@ -32,11 +32,6 @@ func errnoIfFDRightsMissing(rightsBase, required uint64) int32 {
 // resolved writable host path. When the path exists and is not a directory,
 // it returns wasiENotDir. Stat errors (including ENOENT) return 0 so the
 // subsequent OpenFile (or overlay fallback) can map errors as usual.
-
-// errnoIfHostPathNotADirectory is the path_open O_DIRECTORY pre-check for a
-// resolved writable host path. When the path exists and is not a directory,
-// it returns wasiENotDir. Stat errors (including ENOENT) return 0 so the
-// subsequent OpenFile (or overlay fallback) can map errors as usual.
 func errnoIfHostPathNotADirectory(hostPath string) int32 {
 	fi, err := os.Stat(hostPath)
 	if err == nil && !fi.IsDir() {

@@ -243,6 +243,3 @@ func (s *State) Xfd_fdstat_set_rights(fd int32, base, inheriting int64) int32 {
 	entry.rightsInheriting = uInheriting
 	return wasiESuccess
 }
-
-// Xproc_raise implements proc_raise. Always returns ENOSYS. Raising a
-// signal inside a WASM guest has no meaningful host mapping.

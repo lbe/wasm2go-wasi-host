@@ -68,8 +68,8 @@ func transpileCached(wasmPath string, cfg Config) (string, error) {
 // WebAssembly module that imports the same host function more than once causes
 // wasm2go to emit duplicate interface method declarations, which are invalid Go.
 //
-// TODO: Remove this function once the upstream wasm2go issue is fixed.
-// See: wasm2go-duplicate-import-issue.md
+// TODO: Remove once wasm2go stops emitting duplicate interface methods for
+// repeated host imports (see ncruces/wasm2go issue tracker).
 func deduplicateInterfaceMethods(src string) string {
 	var sb strings.Builder
 	lines := strings.Split(src, "\n")
