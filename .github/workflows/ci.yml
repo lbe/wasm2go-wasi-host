@@ -52,7 +52,13 @@ jobs:
           cache: true
 
       - name: Install pytest
-        run: python3 -m pip install pytest
+        run: python3 -m pip install --break-system-packages pytest
+
+      - name: Install golangci-lint
+        uses: golangci/golangci-lint-action@v9
+        with:
+          version: v2.12.2
+          install-only: true
 
       - name: Install wasm2go
         run: go install github.com/ncruces/wasm2go@v0.4.2
@@ -86,7 +92,13 @@ jobs:
           cache: true
 
       - name: Install pytest
-        run: python3 -m pip install pytest
+        run: python3 -m pip install --break-system-packages pytest
+
+      - name: Install golangci-lint
+        uses: golangci/golangci-lint-action@v9
+        with:
+          version: v2.12.2
+          install-only: true
 
       - name: Install wasm2go
         run: go install github.com/ncruces/wasm2go@v0.4.2
