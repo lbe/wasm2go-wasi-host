@@ -18,6 +18,7 @@ const (
 	wasiENotDir   int32 = 54
 	wasiENotEmpty int32 = 55
 	wasiENotSup   int32 = 56
+	wasiENotSock  int32 = 57
 	wasiEPerm     int32 = 63
 	wasiEROFS     int32 = 66
 	wasiEXdev     int32 = 75

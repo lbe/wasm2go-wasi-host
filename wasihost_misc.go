@@ -22,18 +22,10 @@ func (s *State) Xenviron_sizes_get(countPtr, bufSizePtr int32) int32 {
 // Xenviron_get implements environ_get. Writes a pointer array at envPtr
 // and the corresponding null-terminated "KEY=VALUE" strings packed at
 // envBufPtr into guest memory.
-
-// Xenviron_get implements environ_get. Writes a pointer array at envPtr
-// and the corresponding null-terminated "KEY=VALUE" strings packed at
-// envBufPtr into guest memory.
 func (s *State) Xenviron_get(envPtr, envBufPtr int32) int32 {
 	writeStringTable(s.mem(), envPtr, envBufPtr, s.env)
 	return wasiESuccess
 }
-
-// Xfd_prestat_get implements fd_prestat_get. Returns the prestat struct
-// for the preopen directory at fd. Returns EBADF if fd is not a valid,
-// in-use preopen.
 
 // Xfd_prestat_get implements fd_prestat_get. Returns the prestat struct
 // for the preopen directory at fd. Returns EBADF if fd is not a valid,
@@ -54,11 +46,6 @@ func (s *State) Xfd_prestat_get(fd, prestatPtr int32) int32 {
 // path string for the preopen directory at fd into guest memory. Returns
 // EBADF if fd is not a valid, in-use preopen, or EINVAL when pathLen is
 // smaller than the preopen path length.
-
-// Xfd_prestat_dir_name implements fd_prestat_dir_name. Writes the guest
-// path string for the preopen directory at fd into guest memory. Returns
-// EBADF if fd is not a valid, in-use preopen, or EINVAL when pathLen is
-// smaller than the preopen path length.
 func (s *State) Xfd_prestat_dir_name(fd, pathPtr, pathLen int32) int32 {
 	entry, ok := s.preopenEntryByFD(fd)
 	if !ok {
@@ -72,10 +59,6 @@ func (s *State) Xfd_prestat_dir_name(fd, pathPtr, pathLen int32) int32 {
 	copy(mem[pathPtr:], name)
 	return wasiESuccess
 }
-
-// Xfd_fdstat_get implements fd_fdstat_get. Writes a 24-byte fdstat struct
-// at statPtr. fds 0-2 are reported as character devices; all others use
-// the type recorded in the fd table.
 
 // Xfd_fdstat_get implements fd_fdstat_get. Writes a 24-byte fdstat struct
 // at statPtr. fds 0-2 are reported as character devices; all others use
@@ -148,21 +131,11 @@ func (s *State) Xproc_exit(code int32) {
 
 // Xrandom_get implements random_get. Fills the guest memory region
 // [bufPtr, bufPtr+bufLen) with cryptographically random bytes.
-
-// Xrandom_get implements random_get. Fills the guest memory region
-// [bufPtr, bufPtr+bufLen) with cryptographically random bytes.
 func (s *State) Xrandom_get(bufPtr, bufLen int32) int32 {
 	mem := s.mem()
 	rand.Read(mem[bufPtr : bufPtr+bufLen])
 	return wasiESuccess
 }
-
-// Xclock_time_get implements clock_time_get. Writes the current time as
-// a uint64 nanosecond value to resultPtr.
-//
-// clockID 0 (CLOCK_REALTIME): wall-clock time via time.Now().UnixNano().
-// clockID 1 (CLOCK_MONOTONIC): nanoseconds elapsed since State construction.
-// Any other clockID: returns ENOSYS.
 
 // Xclock_time_get implements clock_time_get. Writes the current time as
 // a uint64 nanosecond value to resultPtr.
@@ -192,9 +165,6 @@ func (s *State) Xclock_time_get(clockID int32, precision int64, resultPtr int32)
 
 // Xclock_res_get implements clock_res_get. Writes 1 (nanosecond
 // resolution) for clockID 0 and 1. Returns ENOSYS for any other clockID.
-
-// Xclock_res_get implements clock_res_get. Writes 1 (nanosecond
-// resolution) for clockID 0 and 1. Returns ENOSYS for any other clockID.
 func (s *State) Xclock_res_get(clockID int32, resultPtr int32) int32 {
 	switch clockID {
 	case 0, 1:
@@ -207,9 +177,6 @@ func (s *State) Xclock_res_get(clockID int32, resultPtr int32) int32 {
 
 // Xargs_sizes_get implements args_sizes_get. Writes the argument count
 // and total buffer size (including null terminators) to guest memory.
-
-// Xargs_sizes_get implements args_sizes_get. Writes the argument count
-// and total buffer size (including null terminators) to guest memory.
 func (s *State) Xargs_sizes_get(argcPtr, argvSizePtr int32) int32 {
 	writeStringTableSizes(s.mem(), argcPtr, argvSizePtr, s.args)
 	return wasiESuccess
@@ -218,17 +185,10 @@ func (s *State) Xargs_sizes_get(argcPtr, argvSizePtr int32) int32 {
 // Xargs_get implements args_get. Writes a pointer array at argvPtr and
 // the corresponding null-terminated argument strings packed at argvBufPtr
 // into guest memory. Uses the same layout as environ_get.
-
-// Xargs_get implements args_get. Writes a pointer array at argvPtr and
-// the corresponding null-terminated argument strings packed at argvBufPtr
-// into guest memory. Uses the same layout as environ_get.
 func (s *State) Xargs_get(argvPtr, argvBufPtr int32) int32 {
 	writeStringTable(s.mem(), argvPtr, argvBufPtr, s.args)
 	return wasiESuccess
 }
-
-// readBytes reads length bytes from guest memory starting at ptr.
-// Returns nil if ptr or length is zero.
 
 // Xpoll_oneoff implements poll_oneoff. This function processes subscriptions
 // and writes output events. The memory layout is as follows:
@@ -409,15 +369,7 @@ func writePollOneoffEvent(mem []byte, evtOffset int32, userdata uint64, errno ui
 // Xcall_host_function implements the env.call_host_function import used
 // by zeroperl-style wasm2go modules as a host-callback bridge. This host
 // does not support guest-initiated host callbacks; it always returns 0.
-
-// Xcall_host_function implements the env.call_host_function import used
-// by zeroperl-style wasm2go modules as a host-callback bridge. This host
-// does not support guest-initiated host callbacks; it always returns 0.
 func (s *State) Xcall_host_function(v0, v1, v2 int32) int32 { return 0 }
-
-// writeStringTableSizes writes the item count and total buffer size
-// (sum of len(item)+1 for each item) to countPtr and bufSizePtr in mem.
-// Shared by environ_sizes_get and args_sizes_get.
 
 // Xsched_yield implements sched_yield. This host is synchronous;
 // yielding calls the [runtime.Gosched] seam and returns ESUCCESS.
@@ -426,22 +378,14 @@ func (s *State) Xsched_yield() int32 {
 	return wasiESuccess
 }
 
-// Xfd_datasync implements fd_datasync. Validates that fd is a valid
-// open file descriptor index. For sync-capable fds (those whose underlying
-// file implements a Sync() error method, such as osFile), invokes host Sync
-// and maps any error. For other files, returns ESUCCESS without mutation.
-
 // Xproc_raise implements proc_raise. Always returns ENOSYS. Raising a
 // signal inside a WASM guest has no meaningful host mapping.
 func (s *State) Xproc_raise(signal int32) int32 { return wasiENoSys }
 
 // Xsock_accept, Xsock_recv, Xsock_send, and Xsock_shutdown implement the
-// WASI socket functions. All return ENOSYS; sockets are not supported in
-// this host.
-
-// Xsock_accept, Xsock_recv, Xsock_send, and Xsock_shutdown implement the
-// WASI socket functions. All return ENOSYS; sockets are not supported in
-// this host.
+// WASI socket functions. Sockets are not supported in this host: accept,
+// recv, and send return ENOSYS; shutdown returns EBADF for invalid/unused
+// fds and ENOTSOCK for valid non-socket fds.
 func (s *State) Xsock_accept(fd, flags, resultPtr int32) int32 { return wasiENoSys }
 
 func (s *State) Xsock_recv(fd, iovsPtr, iovsLen, riFlags, nreadPtr, roFlagsPtr int32) int32 {
@@ -450,7 +394,20 @@ func (s *State) Xsock_recv(fd, iovsPtr, iovsLen, riFlags, nreadPtr, roFlagsPtr i
 
 func (s *State) Xsock_send(fd, iovsPtr, iovsLen, siFlags, nsentPtr int32) int32 { return wasiENoSys }
 
-func (s *State) Xsock_shutdown(fd, how int32) int32 { return wasiENoSys }
+func (s *State) Xsock_shutdown(fd, how int32) int32 {
+	if fd < 0 || int(fd) >= len(s.fds) {
+		return wasiEBadf
+	}
+	entry := s.fds[fd]
+	if entry.isUnused() {
+		return wasiEBadf
+	}
+	// WASI snapshot-preview1 socket file types are 10 (SOCKET_STREAM)
+	// and 11 (SOCKET_DGRAM). If the fd is valid but not a socket, return
+	// ENOTSOCK. No socket fds are ever created in this host, so all
+	// valid fds reach this path.
+	return wasiENotSock
+}
 
 // Xfd_filestat_set_size implements fd_filestat_set_size. Returns EISDIR
 // for directory fds. For osFile-backed fds, truncates the file to size bytes

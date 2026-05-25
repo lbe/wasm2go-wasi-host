@@ -266,8 +266,8 @@ func TestGroupEPositionedIO(t *testing.T) {
 		if s.Xsock_send(5, iovPtrOff, 1, 0, nresOff) != wasiENoSys {
 			t.Error("Xsock_send: want ENOSYS")
 		}
-		if s.Xsock_shutdown(5, 0) != wasiENoSys {
-			t.Error("Xsock_shutdown: want ENOSYS")
+		if s.Xsock_shutdown(5, 0) != wasiEBadf {
+			t.Error("Xsock_shutdown: want EBADF")
 		}
 		_ = buf
 	})
