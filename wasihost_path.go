@@ -324,10 +324,3 @@ func (s *State) Xpath_rename(oldDirfd, oldPathPtr, oldPathLen, newDirfd, newPath
 	}
 	return wasiESuccess
 }
-
-// Xpoll_oneoff implements poll_oneoff. Clock subscriptions (event type 0)
-// are handled by sleeping for the shortest requested timeout nanoseconds.
-// fd_read and fd_write subscriptions (event types 1 and 2) validate fd
-// existence but do not model actual I/O readiness. A real readiness model
-// would require async I/O infrastructure beyond this synchronous host's
-// scope.

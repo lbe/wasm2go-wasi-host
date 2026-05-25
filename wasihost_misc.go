@@ -6,6 +6,11 @@ import (
 	"time"
 )
 
+const (
+	subscriptionSize = 48
+	eventSize        = 32
+)
+
 // Xenviron_sizes_get implements environ_sizes_get. Writes the count of
 // configured environment strings and their total buffer size (including
 // null terminators) to the respective pointers in guest memory.
@@ -225,51 +230,180 @@ func (s *State) Xargs_get(argvPtr, argvBufPtr int32) int32 {
 // readBytes reads length bytes from guest memory starting at ptr.
 // Returns nil if ptr or length is zero.
 
-// Xpoll_oneoff implements poll_oneoff. Clock subscriptions (event type 0)
-// are handled by sleeping for the shortest requested timeout nanoseconds.
-// fd_read and fd_write subscriptions (event types 1 and 2) validate fd
-// existence but do not model actual I/O readiness. A real readiness model
-// would require async I/O infrastructure beyond this synchronous host's
-// scope.
+// Xpoll_oneoff implements poll_oneoff. This function processes subscriptions
+// and writes output events. The memory layout is as follows:
+//
+//	Subscription (48 bytes):
+//	  - 0:   userdata (uint64)
+//	  - 8:   tag (u8): 0=clock, 1=fd_read, 2=fd_write
+//	  - 9:   padding (7 bytes)
+//	  - 16:  fd (uint32, for fd_read/fd_write) or clock.id
+//	  - 20:  padding (4 bytes)
+//	  - 24:  timeout (uint64, for clock events)
+//	  - 32:  precision (uint64, for clock events)
+//	  - 40:  flags (uint16, for clock events)
+//	  - 42:  padding (6 bytes)
+//
+//	Output Event (32 bytes):
+//	  - 0:   userdata (uint64)
+//	  - 8:   error (uint16)
+//	  - 10:  event_type (uint8) - stored as single byte per WASI spec
+//	  - 11:  padding (uint8)
+//	  - 12:  event-specific data:
+//	    * For clock: timeout (uint64)
+//	    * For fd_read/fd_write: fd (uint16)
+//	  - 14:  padding (uint16 for fd events, or part of clock padding)
+//	  - 16:  padding (uint64 for clock events to fill 32 bytes)
+//	  - 24:  padding (uint64)
+//
+// Note: The event_type is stored as a uint8 at offset +10, not as a uint32
+// at offset +12. This is a common pitfall and was a source of bugs.
+//
+// Clock subscriptions (event type 0) are handled by sleeping for the shortest
+// requested timeout nanoseconds. fd_read and fd_write subscriptions (event
+// types 1 and 2) validate fd existence but do not model actual I/O readiness.
+// A real readiness model would require async I/O infrastructure beyond this
+// synchronous host's scope.
 func (s *State) Xpoll_oneoff(inPtr int32, outPtr int32, nsubscriptions int32, neventsPtr int32) int32 {
+	// Define offsets for subscription structure
+	// The WASI spec layout (used by the Rust wasi 0.11.0 crate and the wasm binary):
+	//   Offset  Size  Field
+	//   0       8     userdata (u64)
+	//   8       1     tag (u8) - event type: 0=clock, 1=fd_read, 2=fd_write
+	//   9       7     padding
+	//   16      4     clock.id / fd_read.file_descriptor (u32)
+	//   20      4     padding
+	//   24      8     clock.timeout (u64)
+	//   32      8     clock.precision (u64)
+	//   40      2     clock.flags (u16)
+	//   42      6     padding
+	const (
+		subOffsetUserdata = 0
+		subOffsetTag      = 8  // tag (u8) - event type: 0=clock, 1=fd_read, 2=fd_write
+		subOffsetFD       = 16 // file_descriptor (u32) for fd_read/fd_write, or clock.id
+		subOffsetTimeout  = 24 // timeout (u64) for clock subscriptions
+	)
+
+	// Event type constants (used with u8 tag at subOffsetTag)
+	const (
+		evtTypeClock   = 0
+		evtTypeFdRead  = 1
+		evtTypeFdWrite = 2
+	)
+
 	s.assertSingleOwner()
 	mem := s.mem()
-	var minTimeout int64 = -1
-	for i := int32(0); i < nsubscriptions; i++ {
-		subOff := inPtr + i*48
-		userdata := binary.LittleEndian.Uint64(mem[subOff:])
-		eventType := binary.LittleEndian.Uint32(mem[subOff+40:])
-		var errno uint32 = 0
+
+	// ---- Pass 1: emit all ready fd_read / fd_write events immediately (no sleep) ----
+	// Also collect clock subscription data for a second pass.
+
+	eventCount := 0
+	currentOutPtr := outPtr
+	fdWriteEmitted := false
+
+	// Collect clock subscription info: timeout, userdata, subOffset per index.
+	type clockSub struct {
+		subOffset int32
+		userdata  uint64
+		timeout   int64
+	}
+	var clockSubs []clockSub
+	var minClockTimeout int64 = -1
+
+	for idx := int32(0); idx < nsubscriptions; idx++ {
+		subOffset := inPtr + idx*subscriptionSize
+		eventType := int32(mem[subOffset+subOffsetTag])
+		userdata := binary.LittleEndian.Uint64(mem[subOffset+subOffsetUserdata:])
+
 		switch eventType {
-		case 0: // clock
-			timeout := int64(binary.LittleEndian.Uint64(mem[subOff+8+8:]))
-			if timeout > 0 && (minTimeout < 0 || timeout < minTimeout) {
-				minTimeout = timeout
-			}
-		case 1: // fd_read
-			fd := int32(binary.LittleEndian.Uint32(mem[subOff+8:]))
+		case evtTypeFdRead, evtTypeFdWrite:
+			fd := int32(binary.LittleEndian.Uint32(mem[subOffset+subOffsetFD:]))
+			var errno uint32 = 0
 			if fd < 0 || fd >= int32(len(s.fds)) {
 				errno = uint32(wasiEBadf)
 			}
-		case 2: // fd_write
-			fd := int32(binary.LittleEndian.Uint32(mem[subOff+8:]))
-			if fd < 0 || fd >= int32(len(s.fds)) {
-				errno = uint32(wasiEBadf)
+			// Write event immediately
+			writePollOneoffEvent(mem, currentOutPtr, userdata, uint16(errno), uint8(eventType), fd)
+			currentOutPtr += eventSize
+			eventCount++
+			if eventType == evtTypeFdWrite {
+				fdWriteEmitted = true
+			}
+
+		case evtTypeClock:
+			timeout := int64(binary.LittleEndian.Uint64(mem[subOffset+subOffsetTimeout:]))
+			clockSubs = append(clockSubs, clockSub{subOffset: subOffset, userdata: userdata, timeout: timeout})
+			if minClockTimeout < 0 || timeout < minClockTimeout {
+				minClockTimeout = timeout
 			}
 		}
-		evOff := outPtr + i*32
-		binary.LittleEndian.PutUint64(mem[evOff:], userdata)
-		binary.LittleEndian.PutUint16(mem[evOff+8:], uint16(errno))
-		binary.LittleEndian.PutUint16(mem[evOff+10:], 0)
-		binary.LittleEndian.PutUint32(mem[evOff+12:], eventType)
-		binary.LittleEndian.PutUint64(mem[evOff+16:], 0)
-		binary.LittleEndian.PutUint64(mem[evOff+24:], 0)
 	}
-	if minTimeout > 0 {
-		time.Sleep(time.Duration(minTimeout))
+
+	// ---- Pass 2: handle clock subscriptions ----
+	// Rule: if FD_WRITE was emitted, skip clocks with timeout > 0 (guest drains writable in a loop;
+	// clock fires on a later poll_oneoff). FD_READ does NOT suppress clocks.
+
+	if fdWriteEmitted {
+		// Emit only clocks with timeout == 0 (poll without blocking).
+		// Skip clocks with timeout > 0 — they will fire on a later call.
+		for _, cs := range clockSubs {
+			if cs.timeout == 0 {
+				writePollOneoffEvent(mem, currentOutPtr, cs.userdata, 0, uint8(evtTypeClock), int32(cs.timeout))
+				currentOutPtr += eventSize
+				eventCount++
+			}
+		}
+	} else {
+		// Clock-only or fd_read+clock case.
+		// Sleep for the minimum positive timeout among clock subscriptions that will fire.
+		if minClockTimeout > 0 {
+			time.Sleep(time.Duration(minClockTimeout))
+		}
+		// Emit clocks whose timeout equals minClockTimeout.
+		// (If minClockTimeout == 0 or < 0, no sleep is needed; 0-timeout clocks are always ready.)
+		for _, cs := range clockSubs {
+			if minClockTimeout >= 0 && cs.timeout == minClockTimeout {
+				writePollOneoffEvent(mem, currentOutPtr, cs.userdata, 0, uint8(evtTypeClock), int32(cs.timeout))
+				currentOutPtr += eventSize
+				eventCount++
+			}
+		}
 	}
-	binary.LittleEndian.PutUint32(mem[neventsPtr:], uint32(nsubscriptions))
+
+	// Write the number of events that actually fired.
+	binary.LittleEndian.PutUint32(mem[neventsPtr:], uint32(eventCount))
 	return wasiESuccess
+}
+
+// writePollOneoffEvent writes a single poll_oneoff output event to mem at evtOffset.
+// For clock events, fdOrTimeout is the timeout value (written at evtOffset+12 as uint64).
+// For fd_read/fd_write events, fdOrTimeout is the file descriptor (written as uint16).
+func writePollOneoffEvent(mem []byte, evtOffset int32, userdata uint64, errno uint16, eventType uint8, fdOrTimeout int32) {
+	const (
+		evtOffsetUserdata      = 0
+		evtOffsetErrno         = 8
+		evtOffsetEventTypeByte = 10
+		evtOffsetPadding1      = 11
+		evtOffsetEventData     = 12
+		evtOffsetPadding2      = 20
+		evtOffsetPadding3      = 24
+	)
+
+	binary.LittleEndian.PutUint64(mem[evtOffset+evtOffsetUserdata:], userdata)
+	binary.LittleEndian.PutUint16(mem[evtOffset+evtOffsetErrno:], errno)
+	mem[evtOffset+evtOffsetEventTypeByte] = eventType
+	mem[evtOffset+evtOffsetPadding1] = 0
+
+	switch eventType {
+	case 0: // clock: store timeout as uint64
+		binary.LittleEndian.PutUint64(mem[evtOffset+evtOffsetEventData:], uint64(fdOrTimeout))
+		binary.LittleEndian.PutUint64(mem[evtOffset+evtOffsetPadding2:], 0)
+	case 1, 2: // fd_read/fd_write: store fd as uint16
+		binary.LittleEndian.PutUint16(mem[evtOffset+evtOffsetEventData:], uint16(fdOrTimeout))
+		binary.LittleEndian.PutUint16(mem[evtOffset+evtOffsetPadding2:], 0)
+	}
+	// Zero out the remaining bytes (from +24 to +32)
+	binary.LittleEndian.PutUint64(mem[evtOffset+evtOffsetPadding3:], 0)
 }
 
 // Xcall_host_function implements the env.call_host_function import used

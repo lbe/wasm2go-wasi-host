@@ -13,8 +13,9 @@ import (
 
 // wasiTestsuiteCase is a single wasi-testsuite wasm binary to run end-to-end.
 type wasiTestsuiteCase struct {
-	name     string
-	wantPass bool
+	name      string
+	wantPass  bool
+	stdioOnly bool
 }
 
 var (
@@ -59,10 +60,17 @@ func runWasiTestsuiteCases(t *testing.T, suiteDir string, cases []wasiTestsuiteC
 			t.Parallel()
 
 			wasmPath := filepath.Join(testsDir, tc.name+".wasm")
-			argv := []string{
-				"--dir", fsTestsDir + "::fs-tests.dir",
-				wasmPath,
-				"fs-tests.dir",
+			var argv []string
+			if tc.stdioOnly {
+				argv = []string{
+					wasmPath,
+				}
+			} else {
+				argv = []string{
+					"--dir", fsTestsDir + "::fs-tests.dir",
+					wasmPath,
+					"fs-tests.dir",
+				}
 			}
 
 			cmd := exec.Command(binPath, argv...)

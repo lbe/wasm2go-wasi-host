@@ -310,7 +310,7 @@ via `group_dir_fd_test.go`, `group_a_fd_test.go`, and `e2e_group2_test.go`.
 | 8 — seek/append | `file_seek_tell`, `file_allocate`, `fd_advise`, `lseek`, `pwrite-with-append` | ☐ |
 | 9 — link/rename | `path_link`, `path_rename` | ☑ |
 | 10 — renumber | `renumber` | ☑ |
-| 11 — poll | `poll_oneoff_stdio` | ☐ |
+| 11 — poll | `poll_oneoff_stdio` | ☑ |
 | 12 — sockets | `sock_shutdown-not_sock`, `sock_shutdown-invalid_fd` | ☐ |
 
 ---

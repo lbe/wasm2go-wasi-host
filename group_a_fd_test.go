@@ -1053,9 +1053,9 @@ func TestXpollOneoff(t *testing.T) {
 	t.Run("clock subscription", func(t *testing.T) {
 		buf := make([]byte, 65536)
 		s := New(func() []byte { return buf })
-		// eventType=0 at [inPtr+40], timeout=1ns at [inPtr+16]
-		binary.LittleEndian.PutUint32(buf[inPtr+40:], 0)
-		binary.LittleEndian.PutUint64(buf[inPtr+16:], 1)
+		// tag=0 (clock) at offset 8, timeout=1ns at offset 24
+		buf[inPtr+8] = 0
+		binary.LittleEndian.PutUint64(buf[inPtr+24:], 1)
 		if errno := s.Xpoll_oneoff(inPtr, outPtr, 1, neventsPtr); errno != wasiESuccess {
 			t.Fatalf("Xpoll_oneoff clock = %d", errno)
 		}
@@ -1070,8 +1070,8 @@ func TestXpollOneoff(t *testing.T) {
 	t.Run("fd_read valid fd", func(t *testing.T) {
 		buf := make([]byte, 65536)
 		s := New(func() []byte { return buf })
-		binary.LittleEndian.PutUint32(buf[inPtr+40:], 1) // fd_read
-		binary.LittleEndian.PutUint32(buf[inPtr+8:], 0)  // fd=0 (exists)
+		binary.LittleEndian.PutUint32(buf[inPtr+8:], 1)  // tag: fd_read
+		binary.LittleEndian.PutUint32(buf[inPtr+16:], 0) // fd=0 (exists)
 		if errno := s.Xpoll_oneoff(inPtr, outPtr, 1, neventsPtr); errno != wasiESuccess {
 			t.Fatalf("Xpoll_oneoff fd_read = %d", errno)
 		}
@@ -1083,10 +1083,13 @@ func TestXpollOneoff(t *testing.T) {
 	t.Run("fd_read invalid fd", func(t *testing.T) {
 		buf := make([]byte, 65536)
 		s := New(func() []byte { return buf })
-		binary.LittleEndian.PutUint32(buf[inPtr+40:], 1) // fd_read
-		binary.LittleEndian.PutUint32(buf[inPtr+8:], 99) // invalid fd
+		binary.LittleEndian.PutUint32(buf[inPtr+8:], 1)   // tag: fd_read
+		binary.LittleEndian.PutUint32(buf[inPtr+16:], 99) // invalid fd
 		if errno := s.Xpoll_oneoff(inPtr, outPtr, 1, neventsPtr); errno != wasiESuccess {
 			t.Fatalf("Xpoll_oneoff = %d", errno)
+		}
+		if n := binary.LittleEndian.Uint32(buf[neventsPtr : neventsPtr+4]); n != 1 {
+			t.Errorf("nevents = %d, want 1", n)
 		}
 		if e := binary.LittleEndian.Uint16(buf[outPtr+8 : outPtr+10]); e != uint16(wasiEBadf) {
 			t.Errorf("event errno = %d, want EBADF (%d)", e, wasiEBadf)
@@ -1097,11 +1100,11 @@ func TestXpollOneoff(t *testing.T) {
 		buf := make([]byte, 65536)
 		s := New(func() []byte { return buf })
 		// Sub 0: clock, 1ns
-		binary.LittleEndian.PutUint32(buf[inPtr+40:], 0)
-		binary.LittleEndian.PutUint64(buf[inPtr+16:], 1)
+		binary.LittleEndian.PutUint32(buf[inPtr+8:], 0)  // tag: clock
+		binary.LittleEndian.PutUint64(buf[inPtr+24:], 1) // timeout: 1ns
 		// Sub 1: fd_read, fd=0
-		binary.LittleEndian.PutUint32(buf[inPtr+48+40:], 1)
-		binary.LittleEndian.PutUint32(buf[inPtr+48+8:], 0)
+		binary.LittleEndian.PutUint32(buf[inPtr+48+8:], 1)  // tag: fd_read
+		binary.LittleEndian.PutUint32(buf[inPtr+48+16:], 0) // fd=0
 		if errno := s.Xpoll_oneoff(inPtr, outPtr, 2, neventsPtr); errno != wasiESuccess {
 			t.Fatalf("Xpoll_oneoff multi = %d", errno)
 		}
