@@ -4,13 +4,8 @@ package wasihost
 
 import "golang.org/x/sys/unix"
 
-// linkSymlinkInode creates a hard link to the symlink inode at oldPath (without
-// following it), using Linux O_PATH + linkat(AT_EMPTY_PATH).
+// linkSymlinkInode creates a hard link to the symlink inode at oldPath. On Linux,
+// linkat with no flags does not dereference a symlink oldpath (see linkat(2)).
 func linkSymlinkInode(oldPath, newPath string) error {
-	fd, err := unix.Openat(unix.AT_FDCWD, oldPath, unix.O_PATH, 0)
-	if err != nil {
-		return err
-	}
-	defer unix.Close(fd)
-	return unix.Linkat(fd, "", unix.AT_FDCWD, newPath, unix.AT_EMPTY_PATH)
+	return unix.Linkat(unix.AT_FDCWD, oldPath, unix.AT_FDCWD, newPath, 0)
 }
