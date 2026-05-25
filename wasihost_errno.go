@@ -2,9 +2,22 @@ package wasihost
 
 import (
 	"errors"
+	"math"
 	"os"
 	"syscall"
 )
+
+// fileRangeEnd returns offset+length when offset and length are non-negative
+// and the sum does not overflow int64; otherwise ok is false.
+func fileRangeEnd(offset, length int64) (end int64, ok bool) {
+	if offset < 0 || length < 0 {
+		return 0, false
+	}
+	if length > 0 && offset > math.MaxInt64-length {
+		return 0, false
+	}
+	return offset + length, true
+}
 
 // errnoIfFDRightsMissing returns wasiENotCap if rightsBase does not include
 // every bit set in required; otherwise it returns 0.

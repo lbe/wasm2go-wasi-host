@@ -159,6 +159,150 @@ func TestWriteFilestat(t *testing.T) {
 	}
 }
 
+// TestFdWriteSeekCur verifies that Xfd_write on an osFile-backed fd uses
+// Seek+Write (which syncs the OS kernel file position) instead of WriteAt
+// (which bypasses it). Each sub-test independently opens the file and writes
+// 100 bytes before checking Seek/Tell behavior.
+func TestFdWriteSeekCur(t *testing.T) {
+	t.Parallel()
+	const (
+		iovsOff     = 1024
+		dataBuf     = 2048
+		nwrittenOff = 512
+		fdPtr       = 3000
+		pathOff     = 4000
+		seekPtr     = 6000
+		tellPtr     = 7000
+		seekResult  = 8000
+	)
+
+	// setupWrite creates an empty file, opens it with write+read+seek rights,
+	// and writes 100 bytes before returning the fd for the test.
+	setupEmptyWrite := func(t *testing.T) (*State, []byte, int32) {
+		t.Helper()
+		s, buf, tmpDir := newWMState(t)
+		fname := "wseekcur.txt"
+		if err := os.WriteFile(filepath.Join(tmpDir, fname), []byte{}, 0644); err != nil {
+			t.Fatal(err)
+		}
+		copy(buf[pathOff:], fname)
+		errno := s.Xpath_open(dirfd, 0, pathOff, int32(len(fname)),
+			int32(oflagTrunc), int64(rightFDWrite|rightFDRead|rightFDSeek), 0, 0, fdPtr)
+		if errno != wasiESuccess {
+			t.Fatalf("Xpath_open = %d", errno)
+		}
+		fd := int32(binary.LittleEndian.Uint32(buf[fdPtr : fdPtr+4]))
+
+		// Write 100 bytes.
+		for i := int32(0); i < 100; i++ {
+			buf[dataBuf+i] = 'A'
+		}
+		binary.LittleEndian.PutUint32(buf[iovsOff:], uint32(dataBuf))
+		binary.LittleEndian.PutUint32(buf[iovsOff+4:], 100)
+		if errno := s.Xfd_write(fd, iovsOff, 1, nwrittenOff); errno != wasiESuccess {
+			t.Fatalf("Xfd_write (100 bytes) = %d", errno)
+		}
+		if n := binary.LittleEndian.Uint32(buf[nwrittenOff : nwrittenOff+4]); n != 100 {
+			t.Fatalf("nwritten = %d, want 100", n)
+		}
+
+		return s, buf, fd
+	}
+
+	t.Run("tell after write returns correct offset", func(t *testing.T) {
+		s, buf, fd := setupEmptyWrite(t)
+		if errno := s.Xfd_tell(fd, tellPtr); errno != wasiESuccess {
+			t.Fatalf("Xfd_tell = %d", errno)
+		}
+		if pos := binary.LittleEndian.Uint64(buf[tellPtr : tellPtr+8]); pos != 100 {
+			t.Errorf("tell = %d, want 100", pos)
+		}
+	})
+
+	t.Run("seek cur backward after write returns correct offset", func(t *testing.T) {
+		s, buf, fd := setupEmptyWrite(t)
+		// Xfd_seek(-50, WHENCE_CUR) must return 50 because Xfd_write advanced
+		// the OS kernel position (via Seek+Write) from 0 to 100.
+		if errno := s.Xfd_seek(fd, -50, 1, seekPtr); errno != wasiESuccess {
+			t.Fatalf("Xfd_seek(-50, CUR) = %d, want ESUCCESS", errno)
+		}
+		if pos := binary.LittleEndian.Uint64(buf[seekPtr : seekPtr+8]); pos != 50 {
+			t.Errorf("SEEK_CUR = %d, want 50", pos)
+		}
+	})
+
+	t.Run("seek set then write updates tell correctly", func(t *testing.T) {
+		s, buf, fd := setupEmptyWrite(t)
+		// Seek to offset 0.
+		if errno := s.Xfd_seek(fd, 0, 0, seekPtr); errno != wasiESuccess {
+			t.Fatalf("Xfd_seek(0, SET) = %d", errno)
+		}
+		// Write 50 bytes at offset 0.
+		for i := int32(0); i < 50; i++ {
+			buf[dataBuf+i] = 'B'
+		}
+		binary.LittleEndian.PutUint32(buf[iovsOff:], uint32(dataBuf))
+		binary.LittleEndian.PutUint32(buf[iovsOff+4:], 50)
+		if errno := s.Xfd_write(fd, iovsOff, 1, nwrittenOff); errno != wasiESuccess {
+			t.Fatalf("Xfd_write (50 bytes) = %d", errno)
+		}
+		if n := binary.LittleEndian.Uint32(buf[nwrittenOff : nwrittenOff+4]); n != 50 {
+			t.Fatalf("nwritten = %d, want 50", n)
+		}
+		// With Seek+Write, position should be at offset 50 (start of write + bytes written).
+		if errno := s.Xfd_tell(fd, tellPtr); errno != wasiESuccess {
+			t.Fatalf("Xfd_tell = %d", errno)
+		}
+		if pos := binary.LittleEndian.Uint64(buf[tellPtr : tellPtr+8]); pos != 50 {
+			t.Errorf("tell after seek(0,SET)+write(50) = %d, want 50", pos)
+		}
+	})
+
+	t.Run("fdFlagsAppend causes tell to reflect actual OS position", func(t *testing.T) {
+		s, buf, tmpDir := newWMState(t)
+		fname := "wappend.txt"
+		if err := os.WriteFile(filepath.Join(tmpDir, fname), []byte{}, 0644); err != nil {
+			t.Fatal(err)
+		}
+		copy(buf[pathOff:], fname)
+		// Open with fdFlagsAppend so writes go to the end regardless of seek.
+		errno := s.Xpath_open(dirfd, 0, pathOff, int32(len(fname)),
+			int32(oflagTrunc), int64(rightFDWrite|rightFDRead|rightFDSeek), 0, fdFlagsAppend, fdPtr)
+		if errno != wasiESuccess {
+			t.Fatalf("Xpath_open(APPEND) = %d", errno)
+		}
+		fd := int32(binary.LittleEndian.Uint32(buf[fdPtr : fdPtr+4]))
+
+		// Write 2 bytes.
+		copy(buf[dataBuf:], "AB")
+		binary.LittleEndian.PutUint32(buf[iovsOff:], uint32(dataBuf))
+		binary.LittleEndian.PutUint32(buf[iovsOff+4:], 2)
+		if errno := s.Xfd_write(fd, iovsOff, 1, nwrittenOff); errno != wasiESuccess {
+			t.Fatalf("first Xfd_write = %d", errno)
+		}
+
+		// Seek to offset 0.
+		if errno := s.Xfd_seek(fd, 0, 0, seekResult); errno != wasiESuccess {
+			t.Fatalf("Xfd_seek(0, SET) = %d", errno)
+		}
+
+		// Write 2 more bytes; APPEND should write at end (offset 2).
+		copy(buf[dataBuf:], "CD")
+		if errno := s.Xfd_write(fd, iovsOff, 1, nwrittenOff); errno != wasiESuccess {
+			t.Fatalf("second Xfd_write = %d", errno)
+		}
+
+		// With Seek+Write + APPEND, the OS position after the second write is at
+		// offset 4 (end of 4-byte file). Tell must reflect this.
+		if errno := s.Xfd_tell(fd, tellPtr); errno != wasiESuccess {
+			t.Fatalf("Xfd_tell = %d", errno)
+		}
+		if pos := binary.LittleEndian.Uint64(buf[tellPtr : tellPtr+8]); pos != 4 {
+			t.Errorf("tell after APPEND seeks + writes = %d, want 4", pos)
+		}
+	})
+}
+
 // TestFdClose exercises fd_close success, double-close, preopen protection,
 // and out-of-range fd.
 func TestFdClose(t *testing.T) {
@@ -223,7 +367,7 @@ func TestFdClose(t *testing.T) {
 	})
 }
 
-// TestFdRead covers stdin, nil-stdin, osFile ReadAt sequential reads, and EBADF.
+// TestFdRead covers stdin, nil-stdin, osFile Seek+Read sequential reads, and EBADF.
 func TestFdRead(t *testing.T) {
 	t.Parallel()
 	const (
@@ -263,7 +407,7 @@ func TestFdRead(t *testing.T) {
 		}
 	})
 
-	t.Run("osFile ReadAt advances offset", func(t *testing.T) {
+	t.Run("osFile sequential read advances offset", func(t *testing.T) {
 		s, buf, tmpDir := newWMState(t)
 		os.WriteFile(filepath.Join(tmpDir, "rtest.txt"), []byte("ABCDEFGHIJ"), 0644) //nolint
 		fd := openHostFile(t, s, buf, pathOff, "rtest.txt", fdPtr)
@@ -309,7 +453,7 @@ func TestFdRead(t *testing.T) {
 	})
 }
 
-// TestFdWrite covers stdout, stderr, nil-stdout, osFile WriteAt, EBADF,
+// TestFdWrite covers stdout, stderr, nil-stdout, osFile Seek+Write, EBADF,
 // and error/partial write reporting.
 func TestFdWrite(t *testing.T) {
 	t.Parallel()
@@ -389,7 +533,7 @@ func TestFdWrite(t *testing.T) {
 		}
 	})
 
-	t.Run("osFile WriteAt", func(t *testing.T) {
+	t.Run("osFile sequential write", func(t *testing.T) {
 		s, buf, tmpDir := newWMState(t)
 		fname := "wtest.txt"
 		os.WriteFile(filepath.Join(tmpDir, fname), []byte{}, 0644) //nolint
@@ -424,6 +568,92 @@ func TestFdWrite(t *testing.T) {
 		binary.LittleEndian.PutUint32(buf[iovsOff+4:], 4)
 		if errno := s.Xfd_write(999, iovsOff, 1, nwrittenOff); errno != wasiEBadf {
 			t.Errorf("invalid fd write = %d, want EBADF", errno)
+		}
+	})
+}
+
+// TestFdReadSeekCur verifies that Xfd_read on an osFile-backed fd uses
+// Seek+Read (which syncs the OS kernel file position) instead of ReadAt
+// (which bypasses it). Each sub-test independently opens the file and reads
+// 4 bytes before checking Seek/Tell behavior.
+func TestFdReadSeekCur(t *testing.T) {
+	t.Parallel()
+	const (
+		iovsOff  = 1024
+		dataBuf  = 2048
+		nreadOff = 512
+		fdPtr    = 3000
+		pathOff  = 4000
+		seekPtr  = 6000
+		tellPtr  = 7000
+	)
+
+	setup := func(t *testing.T) (*State, []byte, int32) {
+		t.Helper()
+		s, buf, tmpDir := newWMState(t)
+		if err := os.WriteFile(filepath.Join(tmpDir, "seekcur.txt"), []byte("ABCDEFGHIJ"), 0644); err != nil {
+			t.Fatal(err)
+		}
+		fd := openHostFile(t, s, buf, pathOff, "seekcur.txt", fdPtr)
+
+		// Read 4 bytes from offset 0.
+		binary.LittleEndian.PutUint32(buf[iovsOff:], uint32(dataBuf))
+		binary.LittleEndian.PutUint32(buf[iovsOff+4:], 4)
+		if errno := s.Xfd_read(fd, iovsOff, 1, nreadOff); errno != wasiESuccess {
+			t.Fatalf("Xfd_read = %d", errno)
+		}
+		if got := string(buf[dataBuf : dataBuf+4]); got != "ABCD" {
+			t.Fatalf("read data = %q, want ABCD", got)
+		}
+		return s, buf, fd
+	}
+
+	t.Run("tell after read returns correct offset", func(t *testing.T) {
+		s, buf, fd := setup(t)
+		if errno := s.Xfd_tell(fd, tellPtr); errno != wasiESuccess {
+			t.Fatalf("Xfd_tell = %d", errno)
+		}
+		if pos := binary.LittleEndian.Uint64(buf[tellPtr : tellPtr+8]); pos != 4 {
+			t.Errorf("tell = %d, want 4", pos)
+		}
+	})
+
+	t.Run("seek cur after read returns correct offset", func(t *testing.T) {
+		s, buf, fd := setup(t)
+		// Xfd_seek(0, WHENCE_CUR) must return 4 because Xfd_read advanced
+		// the OS kernel position (via Seek+Read) from 0 to 4.
+		if errno := s.Xfd_seek(fd, 0, 1, seekPtr); errno != wasiESuccess {
+			t.Fatalf("Xfd_seek(0, CUR) = %d", errno)
+		}
+		if pos := binary.LittleEndian.Uint64(buf[seekPtr : seekPtr+8]); pos != 4 {
+			t.Errorf("SEEK_CUR = %d, want 4", pos)
+		}
+	})
+
+	t.Run("seek beyond EOF succeeds", func(t *testing.T) {
+		s, buf, fd := setup(t)
+		// Seek(1000, WHENCE_CUR) after reading 4 bytes must go to offset 1004.
+		if errno := s.Xfd_seek(fd, 1000, 1, seekPtr); errno != wasiESuccess {
+			t.Fatalf("Xfd_seek(1000, CUR) = %d", errno)
+		}
+		if pos := binary.LittleEndian.Uint64(buf[seekPtr : seekPtr+8]); pos != 1004 {
+			t.Errorf("SEEK_CUR = %d, want 1004", pos)
+		}
+	})
+
+	t.Run("seek negative from cur returns EINVAL", func(t *testing.T) {
+		s, buf, fd := setup(t)
+		// Seek(-2000, WHENCE_CUR) would result in a negative offset, which
+		// MUST return EINVAL and leave the fd offset unchanged at 4.
+		if errno := s.Xfd_seek(fd, -2000, 1, seekPtr); errno != wasiEInval {
+			t.Errorf("Xfd_seek(-2000, CUR) = %d, want EINVAL (%d)", errno, wasiEInval)
+		}
+		// entry.offset must stay at 4 after the failed seek.
+		if errno := s.Xfd_tell(fd, tellPtr); errno != wasiESuccess {
+			t.Fatalf("Xfd_tell after failed seek = %d", errno)
+		}
+		if pos := binary.LittleEndian.Uint64(buf[tellPtr : tellPtr+8]); pos != 4 {
+			t.Errorf("tell after failed seek = %d, want 4", pos)
 		}
 	})
 }

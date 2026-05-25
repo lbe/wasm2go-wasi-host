@@ -2,6 +2,7 @@ package wasihost
 
 import (
 	"encoding/binary"
+	"errors"
 	"io"
 	"io/fs"
 	"os"
@@ -30,15 +31,9 @@ func (s *State) Xfd_close(fd int32) int32 {
 }
 
 // Xfd_read implements fd_read. For fd 0 (stdin), reads from the
-// io.Reader configured by [WithStdin]. For other fds, reads via ReadAt
-// at the current fd offset when available, otherwise via Read. Returns
-// EISDIR for directory fds, ENOTCAPABLE when FD_READ is not set in the
-// fd's rights_base.
-
-// Xfd_read implements fd_read. For fd 0 (stdin), reads from the
-// io.Reader configured by [WithStdin]. For other fds, reads via ReadAt
-// at the current fd offset when available, otherwise via Read. Returns
-// EISDIR for directory fds, ENOTCAPABLE when FD_READ is not set in the
+// io.Reader configured by [WithStdin]. For other fds, seeks to the
+// current fd offset then reads sequentially. Returns EISDIR for
+// directory fds, ENOTCAPABLE when FD_READ is not set in the
 // fd's rights_base.
 func (s *State) Xfd_read(fd int32, iovsPtr int32, iovsCount int32, nreadPtr int32) int32 {
 	s.assertSingleOwner()
@@ -94,6 +89,15 @@ func (s *State) Xfd_read(fd int32, iovsPtr int32, iovsCount int32, nreadPtr int3
 		return errno
 	}
 	var total uint32
+	// For io.Seeker-backed fds (e.g., osFile), sync the OS kernel position
+	// with entry.offset so that subsequent SEEK_CUR via Xfd_seek is correct.
+	if seeker, ok := entry.file.(io.Seeker); ok {
+		if _, err := seeker.Seek(entry.offset, io.SeekStart); err != nil {
+			s.fds[fd] = entry
+			binary.LittleEndian.PutUint32(mem[nreadPtr:], total)
+			return wasiEIo
+		}
+	}
 	for i := int32(0); i < iovsCount; i++ {
 		off := iovsPtr + i*8
 		bufPtr := int32(binary.LittleEndian.Uint32(mem[off:]))
@@ -103,13 +107,7 @@ func (s *State) Xfd_read(fd int32, iovsPtr int32, iovsCount int32, nreadPtr int3
 		}
 		var n int
 		var err error
-		if ra, ok := entry.file.(interface {
-			ReadAt([]byte, int64) (int, error)
-		}); ok {
-			n, err = ra.ReadAt(mem[bufPtr:bufPtr+bufLen], entry.offset)
-		} else {
-			n, err = entry.file.Read(mem[bufPtr : bufPtr+bufLen])
-		}
+		n, err = entry.file.Read(mem[bufPtr : bufPtr+bufLen])
 		total += uint32(n)
 		entry.offset += int64(n)
 		if err != nil {
@@ -131,15 +129,11 @@ func (s *State) Xfd_read(fd int32, iovsPtr int32, iovsCount int32, nreadPtr int3
 
 // Xfd_write implements fd_write. For fd 1 and 2 (stdout/stderr), writes
 // to the io.Writers configured by [WithStdout] and [WithStderr]. For
-// other fds, uses WriteAt with the current fd offset; only osFile-backed
-// entries support writes. Returns EISDIR for directory fds, ENOTCAPABLE
-// when FD_WRITE is not set in the fd's rights_base.
-
-// Xfd_write implements fd_write. For fd 1 and 2 (stdout/stderr), writes
-// to the io.Writers configured by [WithStdout] and [WithStderr]. For
-// other fds, uses WriteAt with the current fd offset; only osFile-backed
-// entries support writes. Returns EISDIR for directory fds, ENOTCAPABLE
-// when FD_WRITE is not set in the fd's rights_base.
+// other fds backed by io.Seeker (e.g., osFile), seeks to the current
+// fd offset then writes sequentially so that the OS kernel position
+// advances; uses WriteAt as a fallback for non-seeker files. Returns
+// EISDIR for directory fds, ENOTCAPABLE when FD_WRITE is not set in
+// the fd's rights_base.
 func (s *State) Xfd_write(fd int32, iovsPtr int32, iovsCount int32, nwrittenPtr int32) int32 {
 	s.assertSingleOwner()
 	if fd < 0 || int(fd) >= len(s.fds) {
@@ -187,6 +181,24 @@ func (s *State) Xfd_write(fd int32, iovsPtr int32, iovsCount int32, nwrittenPtr 
 		return errno
 	}
 	var total uint32
+	// For io.Seeker-backed fds (e.g., osFile), sync the OS kernel position
+	// with entry.offset (for normal writes) or the end of the file (for
+	// APPEND) so that subsequent SEEK_CUR via Xfd_seek is correct.
+	if seeker, ok := entry.file.(io.Seeker); ok {
+		if entry.fdFlags&uint16(fdFlagsAppend) != 0 {
+			// For APPEND, seek to end before writing so Write() goes to
+			// the correct OS position regardless of entry.offset.
+			if pos, err := seeker.Seek(0, io.SeekEnd); err == nil {
+				entry.offset = pos
+			}
+		} else {
+			if _, err := seeker.Seek(entry.offset, io.SeekStart); err != nil {
+				s.fds[fd] = entry
+				binary.LittleEndian.PutUint32(mem[nwrittenPtr:], total)
+				return wasiEIo
+			}
+		}
+	}
 	for i := int32(0); i < iovsCount; i++ {
 		off := iovsPtr + i*8
 		bufPtr := int32(binary.LittleEndian.Uint32(mem[off:]))
@@ -194,21 +206,41 @@ func (s *State) Xfd_write(fd int32, iovsPtr int32, iovsCount int32, nwrittenPtr 
 		if bufLen == 0 {
 			continue
 		}
-		wa, ok := entry.file.(interface {
-			WriteAt([]byte, int64) (int, error)
-		})
+		// Use io.Writer (Write) for osFile-backed entries that implement
+		// io.Writer (all osFile entries do). Fall back to WriteAt for
+		// non-Writer files.
+		w, ok := entry.file.(io.Writer)
 		if !ok {
-			break
-		}
-		writeOff := entry.offset
-		if entry.fdFlags&uint16(fdFlagsAppend) != 0 {
-			if fi, err := entry.file.Stat(); err == nil {
-				writeOff = fi.Size()
+			wa, ok2 := entry.file.(interface {
+				WriteAt([]byte, int64) (int, error)
+			})
+			if !ok2 {
+				break
 			}
+			n, err := wa.WriteAt(mem[bufPtr:bufPtr+bufLen], entry.offset)
+			entry.offset += int64(n)
+			total += uint32(n)
+			if err != nil {
+				s.fds[fd] = entry
+				binary.LittleEndian.PutUint32(mem[nwrittenPtr:], total)
+				return wasiEIo
+			}
+			continue
 		}
-		n, err := wa.WriteAt(mem[bufPtr:bufPtr+bufLen], writeOff)
-		entry.offset += int64(n)
+		n, err := w.Write(mem[bufPtr : bufPtr+bufLen])
 		total += uint32(n)
+		if entry.fdFlags&uint16(fdFlagsAppend) != 0 {
+			// For APPEND, the actual OS position may differ from
+			// entry.offset + n. Seek to 0, SEEK_CUR to capture the
+			// real OS position.
+			if seeker, ok2 := entry.file.(io.Seeker); ok2 {
+				if pos, seekErr := seeker.Seek(0, io.SeekCurrent); seekErr == nil {
+					entry.offset = pos
+				}
+			}
+		} else {
+			entry.offset += int64(n)
+		}
 		if err != nil {
 			s.fds[fd] = entry
 			binary.LittleEndian.PutUint32(mem[nwrittenPtr:], total)
@@ -220,15 +252,11 @@ func (s *State) Xfd_write(fd int32, iovsPtr int32, iovsCount int32, nwrittenPtr 
 	return wasiESuccess
 }
 
-// Xfd_seek implements fd_seek. Delegates to the underlying io.Seeker and
-// updates the WASI-level fd offset so that subsequent fd_write (via
-// WriteAt) and fd_tell return consistent positions. Returns EISDIR for
-// directory fds, EINVAL if the file does not implement io.Seeker.
-
-// Xfd_seek implements fd_seek. Delegates to the underlying io.Seeker and
-// updates the WASI-level fd offset so that subsequent fd_write (via
-// WriteAt) and fd_tell return consistent positions. Returns EISDIR for
-// directory fds, EINVAL if the file does not implement io.Seeker.
+// Xfd_seek implements fd_seek. Delegates to the underlying io.Seeker, stores
+// the resulting position in entry.offset, and writes it to guest memory.
+// Subsequent fd_read and fd_write on seeker-backed fds seek to entry.offset
+// before I/O. Returns EISDIR for directory fds, EINVAL if the file does not
+// implement io.Seeker.
 func (s *State) Xfd_seek(fd int32, offset int64, whence, newOffsetPtr int32) int32 {
 	s.assertSingleOwner()
 	if fd < 0 || int(fd) >= len(s.fds) {
@@ -247,6 +275,9 @@ func (s *State) Xfd_seek(fd int32, offset int64, whence, newOffsetPtr int32) int
 	}
 	n, err := sk.Seek(offset, int(whence))
 	if err != nil {
+		if errors.Is(err, syscall.EINVAL) {
+			return wasiEInval
+		}
 		return wasiEIo
 	}
 	entry.offset = n
@@ -254,11 +285,6 @@ func (s *State) Xfd_seek(fd int32, offset int64, whence, newOffsetPtr int32) int
 	binary.LittleEndian.PutUint64(s.mem()[newOffsetPtr:], uint64(n))
 	return wasiESuccess
 }
-
-// Xfd_readdir implements fd_readdir. Writes WASI dirent structs into
-// guest memory starting from the entry at cookie. Each dirent is
-// 24 + len(name) bytes. For preopen fds backed by fs.ReadDirFS, the
-// directory listing is loaded on first call and cached in the fd entry.
 
 // Xfd_readdir implements fd_readdir. Writes WASI dirent structs into
 // guest memory starting from the entry at cookie. Each dirent is

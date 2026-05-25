@@ -68,15 +68,6 @@ func (s *State) Xfd_pread(fd, iovsPtr, iovsCount int32, offset int64, nreadPtr i
 // Returns EINVAL for fds 0-2 (positioned writes on stdio are not
 // defined by WASI). Returns EISDIR for directory fds, ENOTCAPABLE when
 // FD_WRITE is not set in the fd's rights_base.
-
-// Xfd_pwrite implements fd_pwrite. Writes to fd at the given offset
-// without updating the fd's WASI-level offset (entry.offset). Requires
-// the underlying file to implement WriteAt; if it does not, no bytes are
-// written and ENOTSUP is returned. If WriteAt returns an error, fd_pwrite
-// returns EIO and preserves the partial byte count in guest memory.
-// Returns EINVAL for fds 0-2 (positioned writes on stdio are not
-// defined by WASI). Returns EISDIR for directory fds, ENOTCAPABLE when
-// FD_WRITE is not set in the fd's rights_base.
 func (s *State) Xfd_pwrite(fd, iovsPtr, iovsCount int32, offset int64, nwrittenPtr int32) int32 {
 	if fd <= StderrFD {
 		return wasiEInval
@@ -125,17 +116,9 @@ func (s *State) Xfd_pwrite(fd, iovsPtr, iovsCount int32, offset int64, nwrittenP
 	return wasiESuccess
 }
 
-// Xfd_tell implements fd_tell. Returns the WASI-level fd offset
-// (entry.offset) rather than the kernel file position. This is necessary
-// because fd_write uses WriteAt, which does not advance the kernel
-// position; reading it back via Seek(0, SeekCurrent) would return a
-// stale value. Returns EISDIR for directory fds.
-
-// Xfd_tell implements fd_tell. Returns the WASI-level fd offset
-// (entry.offset) rather than the kernel file position. This is necessary
-// because fd_write uses WriteAt, which does not advance the kernel
-// position; reading it back via Seek(0, SeekCurrent) would return a
-// stale value. Returns EISDIR for directory fds.
+// Xfd_tell implements fd_tell. Returns entry.offset, the WASI-tracked file
+// position maintained by fd_read, fd_write, and fd_seek. Returns EISDIR for
+// directory fds.
 func (s *State) Xfd_tell(fd, offsetPtr int32) int32 {
 	if fd < 0 || int(fd) >= len(s.fds) {
 		return wasiEBadf
@@ -163,7 +146,7 @@ func (s *State) Xfd_datasync(fd int32) int32 {
 		return wasiEBadf
 	}
 	entry := s.fds[fd]
-	if entry.file == nil && entry.fdType == 0 {
+	if entry.isUnused() {
 		return wasiEBadf
 	}
 	if syncer, ok := entry.file.(interface{ Sync() error }); ok {
@@ -175,14 +158,9 @@ func (s *State) Xfd_datasync(fd int32) int32 {
 }
 
 // Xfd_sync implements fd_sync. Always returns ESUCCESS.
-
-// Xfd_sync implements fd_sync. Always returns ESUCCESS.
 func (s *State) Xfd_sync(fd int32) int32 {
 	return wasiESuccess
 }
-
-// Xfd_fdstat_set_flags implements fd_fdstat_set_flags.
-// Supported flags: APPEND, DSYNC, NONBLOCK, RSYNC, SYNC.
 
 // Xfd_fdstat_set_flags implements fd_fdstat_set_flags.
 // Supported flags: APPEND, DSYNC, NONBLOCK, RSYNC, SYNC.
@@ -192,7 +170,7 @@ func (s *State) Xfd_fdstat_set_flags(fd, flags int32) int32 {
 		return wasiEBadf
 	}
 	entry := &s.fds[fd]
-	if entry.file == nil && entry.fdType == 0 {
+	if entry.isUnused() {
 		return wasiEBadf
 	}
 	// WASI only allows setting these 5 flags.
@@ -206,19 +184,13 @@ func (s *State) Xfd_fdstat_set_flags(fd, flags int32) int32 {
 // Xfd_advise implements fd_advise (POSIX posix_fadvise). Always returns
 // ESUCCESS. There is no portable Go equivalent for this hint; it is
 // silently ignored.
-
-// Xfd_advise implements fd_advise (POSIX posix_fadvise). Always returns
-// ESUCCESS. There is no portable Go equivalent for this hint; it is
-// silently ignored.
 func (s *State) Xfd_advise(fd int32, offset, length int64, advice int32) int32 { return wasiESuccess }
 
-// Xfd_allocate implements fd_allocate (fallocate). Returns EISDIR for
-// directory fds. For regular files, disk-space pre-reservation is advisory;
-// this is an intentional no-op.
-
-// Xfd_allocate implements fd_allocate (fallocate). Returns EISDIR for
-// directory fds. For regular files, disk-space pre-reservation is advisory;
-// this is an intentional no-op.
+// Xfd_allocate implements fd_allocate (fallocate). Returns EINVAL when
+// offset or length is negative or offset+length overflows. Returns EISDIR for
+// directory fds. For osFile-backed fds, grows the file to at least
+// offset+length by calling Truncate with max(current_size, offset+length).
+// For FSFileWrap-backed fds (read-only fs.FS files), returns ENOTSUP.
 func (s *State) Xfd_allocate(fd int32, offset, length int64) int32 {
 	if fd < 0 || int(fd) >= len(s.fds) {
 		return wasiEBadf
@@ -230,7 +202,27 @@ func (s *State) Xfd_allocate(fd int32, offset, length int64) int32 {
 	if errno := errnoForDirectoryFDOp(entry); errno != 0 {
 		return errno
 	}
-	return wasiESuccess
+	if errno := errnoIfFDRightsMissing(entry.rightsBase, rightFDAllocate); errno != 0 {
+		return errno
+	}
+	newSize, ok := fileRangeEnd(offset, length)
+	if !ok {
+		return wasiEInval
+	}
+	if of, ok := entry.file.(*osFile); ok {
+		fi, err := of.Stat()
+		if err != nil {
+			return mapOSError(err)
+		}
+		if fi.Size() > newSize {
+			newSize = fi.Size()
+		}
+		if err := of.Truncate(newSize); err != nil {
+			return mapOSError(err)
+		}
+		return wasiESuccess
+	}
+	return wasiENotSup
 }
 
 func (s *State) Xfd_fdstat_set_rights(fd int32, base, inheriting int64) int32 {
@@ -239,7 +231,7 @@ func (s *State) Xfd_fdstat_set_rights(fd int32, base, inheriting int64) int32 {
 		return wasiEBadf
 	}
 	entry := &s.fds[fd]
-	if entry.file == nil && entry.fdType == 0 {
+	if entry.isUnused() {
 		return wasiEBadf
 	}
 	uBase := uint64(base)

@@ -54,7 +54,11 @@ func setupOsFileFd(t *testing.T, s *State, fdIdx int, content []byte) string {
 	for len(s.fds) <= fdIdx {
 		s.fds = append(s.fds, fdEntry{})
 	}
-	s.fds[fdIdx] = fdEntry{fdType: fdFile, file: &osFile{f}, rightsBase: rightsRegularFile}
+	s.fds[fdIdx] = fdEntry{
+		fdType:     fdFile,
+		file:       &osFile{f},
+		rightsBase: rightsRegularFile | rightFDAllocate,
+	}
 	return path
 }
 
@@ -232,11 +236,20 @@ func TestGroupEPositionedIO(t *testing.T) {
 		}
 	})
 
-	t.Run("Xfd_allocate returns ESUCCESS", func(t *testing.T) {
+	t.Run("Xfd_allocate returns ESUCCESS when FD_ALLOCATE is granted", func(t *testing.T) {
 		s, _ := newTestState()
 		_ = setupOsFileFd(t, s, 5, []byte{})
-		if s.Xfd_allocate(5, 0, 16) != wasiESuccess {
-			t.Error("Xfd_allocate returned non-zero")
+		if errno := s.Xfd_allocate(5, 0, 16); errno != wasiESuccess {
+			t.Errorf("Xfd_allocate = %d, want ESUCCESS", errno)
+		}
+	})
+
+	t.Run("Xfd_allocate returns ENOTCAPABLE without FD_ALLOCATE", func(t *testing.T) {
+		s, _ := newTestState()
+		_ = setupOsFileFd(t, s, 5, []byte{})
+		s.fds[5].rightsBase &^= rightFDAllocate
+		if errno := s.Xfd_allocate(5, 0, 16); errno != wasiENotCap {
+			t.Errorf("Xfd_allocate without FD_ALLOCATE = %d, want ENOTCAPABLE (%d)", errno, wasiENotCap)
 		}
 	})
 
