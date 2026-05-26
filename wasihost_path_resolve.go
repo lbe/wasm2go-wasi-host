@@ -49,24 +49,73 @@ func (s *State) resolvePath(guestPath string) (*mountEntry, string) {
 			clean = "/"
 		}
 
-		if (clean == mp || strings.HasPrefix(clean, mp+"/")) && len(mp) > bestLen {
-			rel := strings.TrimPrefix(clean, mp)
-			rel = strings.TrimPrefix(rel, "/")
+		mpPrefix := mp + "/"
+		if mp == "/" {
+			mpPrefix = "/"
+		}
+		if clean == mp && len(mp) > bestLen {
+			best = m
+			bestLen = len(mp)
+			bestRel = ""
+		} else if strings.HasPrefix(clean, mpPrefix) && len(mp) > bestLen {
+			rel := strings.TrimPrefix(clean, mpPrefix)
 			best = m
 			bestLen = len(mp)
 			bestRel = rel
 		}
 
 		raw := "/" + strings.TrimPrefix(guestPath, "/")
-		if (strings.HasPrefix(raw, mp+"/") || raw == mp) && len(mp) > bestLen {
-			rel := strings.TrimPrefix(raw, mp)
-			rel = strings.TrimPrefix(rel, "/")
+		if raw == mp && len(mp) > bestLen {
+			best = m
+			bestLen = len(mp)
+			bestRel = ""
+		} else if strings.HasPrefix(raw, mpPrefix) && len(mp) > bestLen {
+			rel := strings.TrimPrefix(raw, mpPrefix)
 			best = m
 			bestLen = len(mp)
 			bestRel = rel
 		}
 	}
 	return best, bestRel
+}
+
+// isRootMount reports whether m covers the guest root directory "/".
+func isRootMount(m *mountEntry) bool {
+	return path.Clean("/"+m.guestPath) == "/"
+}
+
+// writableMountHostPaths returns the primary and fallback host filesystem paths
+// for a mount-relative path rel within a writable host-backed mount m.
+// For root mounts, the primary path is the re-absolutized form ("/" + rel),
+// recovering the original absolute host path. The joined path
+// (filepath.Join(hostRoot, rel)) is returned as fallback for cwd-relative
+// paths. For non-root mounts, only the joined path is returned.
+// For root mounts with symlink-following lookups, the primary path is
+// confined via filepath.EvalSymlinks to detect escapes; ENOTCAPABLE is
+// returned as the errno when confinement fails.
+// Returns ("", "", _) if m is nil or has no hostRoot.
+func writableMountHostPaths(m *mountEntry, rel string, followSymlinks bool) (primary, fallback string, errno int32) {
+	if m == nil || m.hostRoot == "" {
+		return "", "", 0
+	}
+	joined := filepath.Join(m.hostRoot, filepath.FromSlash(rel))
+	if isRootMount(m) {
+		abs := "/" + filepath.FromSlash(rel)
+		if abs != joined {
+			if followSymlinks {
+				resolved, err := filepath.EvalSymlinks(abs)
+				if err != nil {
+					if errors.Is(err, fs.ErrNotExist) {
+						return abs, joined, wasiESuccess
+					}
+					return "", "", wasiENoEnt
+				}
+				_ = resolved
+			}
+			return abs, joined, wasiESuccess
+		}
+	}
+	return joined, "", 0
 }
 
 // mountGuestPath returns the normalized guest-absolute path for a
@@ -370,6 +419,14 @@ func (s *State) resolveWritable(dirfd, pathPtr, pathLen int32) (string, int32) {
 		return "", wasiEROFS
 	}
 
+	if isRootMount(m) {
+		if strings.HasPrefix(guestPath, "/") {
+			// Absolute guest path: recover the original host absolute path
+			return "/" + filepath.FromSlash(rel), wasiESuccess
+		}
+		// Relative guest path: simple join against hostRoot
+		return filepath.Join(m.hostRoot, filepath.FromSlash(rel)), wasiESuccess
+	}
 	hostPath, errno := joinWritableHostPathForMutation(m.hostRoot, rel, guestPath)
 	if errno != 0 {
 		return "", errno

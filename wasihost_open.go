@@ -131,9 +131,23 @@ func (s *State) Xpath_open(dirfd int32, lookupFlags int32, pathPtr int32, pathLe
 	var err error
 
 	if mount.writable && mount.hostRoot != "" {
-		hostPath, errno := joinWritableHostPathForLookup(mount.hostRoot, relPath, lookupFlags)
-		if errno != wasiESuccess {
-			return errno
+		var hostPath, hostFallback string
+		if isRootMount(mount) {
+			primary, fallback, errno := writableMountHostPaths(mount, relPath, lookupFlags&wasiLookupSymlinkFollow != 0)
+			if errno != wasiESuccess {
+				return errno
+			}
+			hostPath = primary
+			hostFallback = fallback
+			if hostPath == "" {
+				hostPath = relPath
+			}
+		} else {
+			var errno int32
+			hostPath, errno = joinWritableHostPathForLookup(mount.hostRoot, relPath, lookupFlags)
+			if errno != wasiESuccess {
+				return errno
+			}
 		}
 		wantDirectory := uint32(oflags)&oflagDir != 0
 		if wantDirectory {
@@ -171,6 +185,9 @@ func (s *State) Xpath_open(dirfd int32, lookupFlags int32, pathPtr int32, pathLe
 			hostPath += string(filepath.Separator)
 		}
 		hostFile, osErr := os.OpenFile(hostPath, osFlags, 0o666)
+		if osErr != nil && hostFallback != "" && errors.Is(osErr, os.ErrNotExist) {
+			hostFile, osErr = os.OpenFile(hostFallback, osFlags, 0o666)
+		}
 		if osErr != nil {
 			if uint32(oflags)&(oflagCreat|oflagTrunc|oflagExcl) == 0 &&
 				errors.Is(osErr, os.ErrNotExist) {

@@ -90,7 +90,7 @@ func TestPathFilestatSetTimesRejectsSymlinkEscapeFollow(t *testing.T) {
 	origMtime := fi0.ModTime()
 
 	linkName := filepath.Join(root, "leak")
-	if err := os.Symlink("../secret.txt", linkName); err != nil {
+	if err = os.Symlink("../secret.txt", linkName); err != nil {
 		t.Fatal(err)
 	}
 
@@ -139,12 +139,12 @@ type symlinkEscapePrefixSetup struct {
 }
 
 const (
-	symlinkEscapeDirfd    int32 = 3
-	symlinkEscapePathOff  int32 = 100
-	symlinkEscapePath2Off int32 = 200
+	symlinkEscapeDirfd     int32 = 3
+	symlinkEscapePathOff   int32 = 100
+	symlinkEscapePath2Off  int32 = 200
 	symlinkEscapeTargetOff int32 = 300
-	symlinkEscapeBufOff   int32 = 400
-	symlinkEscapeNreadOff int32 = 500
+	symlinkEscapeBufOff    int32 = 400
+	symlinkEscapeNreadOff  int32 = 500
 )
 
 func setupSymlinkEscapePrefixFixture(t *testing.T) symlinkEscapePrefixSetup {

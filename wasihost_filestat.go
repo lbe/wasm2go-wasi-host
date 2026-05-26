@@ -148,13 +148,24 @@ func (s *State) Xpath_filestat_get(dirfd, flags, pathPtr, pathLen, bufPtr int32)
 		}
 		follow := flags&wasiLookupSymlinkFollow != 0
 		var hostPath string
-		if follow {
+		switch {
+		case isRootMount(mount):
+			primary, fallback, errno := writableMountHostPaths(mount, relPath, follow)
+			if errno != wasiESuccess {
+				return errno
+			}
+			hostPath = primary
+			if hostPath == "" {
+				hostPath = relPath
+			}
+			_ = fallback
+		case follow:
 			var errno int32
 			hostPath, errno = joinWritableHostPathForLookup(mount.hostRoot, relPath, flags)
 			if errno != wasiESuccess {
 				return errno
 			}
-		} else {
+		default:
 			hostPath = filepath.Join(mount.hostRoot, filepath.FromSlash(relPath))
 		}
 		fi, err = statHostPathOrOverlay(hostPath, mount.root, relPath, follow)
@@ -298,7 +309,19 @@ func (s *State) Xpath_filestat_set_times(dirfd, flags, pathPtr, pathLen int32, a
 			if errno := s.errnoIfNonPreopenDirfdEscapes(dirfd, mount, relPath); errno != 0 {
 				return errno
 			}
-			primary, werrno = joinWritableHostPathForLookup(mount.hostRoot, relPath, flags)
+			if isRootMount(mount) {
+				var fallback string
+				primary, fallback, werrno = writableMountHostPaths(mount, relPath, follow)
+				if werrno != wasiESuccess {
+					return werrno
+				}
+				if primary == "" {
+					primary = relPath
+				}
+				_ = fallback
+			} else {
+				primary, werrno = joinWritableHostPathForLookup(mount.hostRoot, relPath, flags)
+			}
 		} else {
 			primary, werrno = s.resolveWritable(dirfd, pathPtr, pathLen)
 		}
