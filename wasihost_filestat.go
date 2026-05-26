@@ -285,12 +285,29 @@ func (s *State) Xpath_filestat_set_times(dirfd, flags, pathPtr, pathLen int32, a
 	if errno := errnoIfContradictoryFstFlags(fstFlags); errno != 0 {
 		return errno
 	}
-	primary, werrno := s.resolveWritable(dirfd, pathPtr, pathLen)
+
+	follow := flags&wasiLookupSymlinkFollow != 0
+	var primary string
+	var werrno int32
+	if follow {
+		mount, relPath := s.resolveDirfdPath(dirfd, pathPtr, pathLen)
+		if mount != nil && mount.writable && mount.hostRoot != "" {
+			if s.preopenDirfdLexicallyEscapes(dirfd, relPath) {
+				return wasiENotCap
+			}
+			if errno := s.errnoIfNonPreopenDirfdEscapes(dirfd, mount, relPath); errno != 0 {
+				return errno
+			}
+			primary, werrno = joinWritableHostPathForLookup(mount.hostRoot, relPath, flags)
+		} else {
+			primary, werrno = s.resolveWritable(dirfd, pathPtr, pathLen)
+		}
+	} else {
+		primary, werrno = s.resolveWritable(dirfd, pathPtr, pathLen)
+	}
 	if werrno != wasiESuccess {
 		return werrno
 	}
-
-	follow := flags&wasiLookupSymlinkFollow != 0
 	fi, err := statPath(primary, follow)
 	if err != nil {
 		return mapOSError(err)

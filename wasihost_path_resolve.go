@@ -163,6 +163,33 @@ func (s *State) preopenEntryByFD(fd int32) (fdEntry, bool) {
 	return entry, true
 }
 
+// guestPathNeedsSymlinkTraversal reports whether the path argument passed to the
+// WASI syscall (not the mount-relative path after dirfd resolution) has more than
+// one segment. Nested directory fds lengthen mountRel for single-component guest
+// paths (for example "symlink" -> "scratch/symlink"); confinement must follow the
+// guest segment count so mutations that address the final component directly
+// (path_link on a symlink inode) do not run EvalSymlinks on symlink loops.
+func guestPathNeedsSymlinkTraversal(guestPath, mountRel string) bool {
+	if strings.HasPrefix(guestPath, "/") {
+		return writableHostPathNeedsSymlinkTraversal(mountRel)
+	}
+	return writableHostPathNeedsSymlinkTraversal(guestPath)
+}
+
+// joinWritableHostPathForMutation joins hostRoot with a mount-relative path for
+// writable host-backed mutations (path_create_directory, path_remove, etc.).
+// Multi-segment guest paths run writableHostSymlinkFollowConfinementErrno so symlink
+// traversal in intermediate directories cannot escape hostRoot. Single-segment
+// guest paths join only (no EvalSymlinks), even when mountRel has multiple segments
+// after nested dirfd resolution.
+func joinWritableHostPathForMutation(hostRoot, mountRel, guestPathArg string) (hostPath string, errno int32) {
+	hostPath = filepath.Join(hostRoot, filepath.FromSlash(mountRel))
+	if guestPathNeedsSymlinkTraversal(guestPathArg, mountRel) {
+		errno = writableHostSymlinkFollowConfinementErrno(hostRoot, hostPath)
+	}
+	return hostPath, errno
+}
+
 // joinWritableHostPathForLookup joins hostRoot with a mount-relative path for a
 // host directory preopen. When symlink following is not requested, it Lstats the
 // host path and returns ELOOP if the final component is a symlink (matching
@@ -209,6 +236,17 @@ func statPath(path string, follow bool) (fs.FileInfo, error) {
 
 // filestatFdTypeFromInfo maps os.FileInfo / fs.FileInfo to a WASI preview1
 // filetype for the filestat struct.
+
+// writableHostPathNeedsSymlinkTraversal reports whether rel has more than one
+// path segment after path.Clean, meaning host resolution must walk through at
+// least one intermediate directory (and may follow symlinks in those steps).
+func writableHostPathNeedsSymlinkTraversal(rel string) bool {
+	clean := path.Clean(rel)
+	if clean == "." || clean == "" {
+		return false
+	}
+	return strings.Contains(clean, "/")
+}
 
 // writableHostSymlinkFollowConfinementErrno checks that resolving hostPath with
 // symlink awareness stays inside hostRoot (after filepath.Clean / EvalSymlinks).
@@ -308,7 +346,11 @@ func (s *State) resolveDirfdPath(dirfd, pathPtr, pathLen int32) (*mountEntry, st
 // with ENOTCAPABLE when:
 //   - a directory preopen would lexically escape its root (preopenDirfdLexicallyEscapes), or
 //   - a nested non-preopen dirfd would resolve outside its subtree (errnoIfNonPreopenDirfdEscapes).
+//
+// Host path joining uses joinWritableHostPathForMutation: multi-segment guest
+// paths run symlink confinement; single-segment guest paths join only (no EvalSymlinks).
 func (s *State) resolveWritable(dirfd, pathPtr, pathLen int32) (string, int32) {
+	guestPath := string(s.readBytes(pathPtr, pathLen))
 	m, rel := s.resolveDirfdPath(dirfd, pathPtr, pathLen)
 	if m == nil {
 		if dirfd < 0 || int(dirfd) >= len(s.fds) {
@@ -328,5 +370,9 @@ func (s *State) resolveWritable(dirfd, pathPtr, pathLen int32) (string, int32) {
 		return "", wasiEROFS
 	}
 
-	return filepath.Join(m.hostRoot, filepath.FromSlash(rel)), wasiESuccess
+	hostPath, errno := joinWritableHostPathForMutation(m.hostRoot, rel, guestPath)
+	if errno != 0 {
+		return "", errno
+	}
+	return hostPath, wasiESuccess
 }
