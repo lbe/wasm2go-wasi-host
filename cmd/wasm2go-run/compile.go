@@ -14,11 +14,7 @@ const (
 	compileBinaryName = "runner"
 )
 
-// wasiHostPath returns the filesystem path to this repository root for
-// go.mod replace directives in generated runner workspaces. It prefers
-// vcs.dir from the build info when the binary is a development build,
-// otherwise WASM2GO_WASIHOST_PATH.
-func wasiHostPath() string {
+var wasiHostPath = func() string {
 	info, ok := debug.ReadBuildInfo()
 	if !ok || info.Main.Version != "(devel)" {
 		return os.Getenv("WASM2GO_WASIHOST_PATH")
@@ -54,6 +50,18 @@ func compile(wasmPath string, cfg Config) (string, string, error) {
 		}
 	}()
 
+	buildKey := buildCacheKey(wasmPath, cfg)
+	if buildKey != "" && cacheEnabled(cfg) {
+		if runnerBytes, hit := cacheGetBuild(buildKey); hit {
+			binaryPath := filepath.Join(tmpDir, compileBinaryName)
+			if writeErr := os.WriteFile(binaryPath, runnerBytes, 0755); writeErr != nil {
+				return "", "", fmt.Errorf("failed to write cached binary: %w", writeErr)
+			}
+			success = true
+			return tmpDir, binaryPath, nil
+		}
+	}
+
 	transpiled, err := transpileCached(wasmPath, cfg)
 	if err != nil {
 		return "", "", fmt.Errorf("transpilation failed: %w", err)
@@ -71,6 +79,12 @@ func compile(wasmPath string, cfg Config) (string, string, error) {
 	binaryPath, err := buildCompileBinary(tmpDir)
 	if err != nil {
 		return "", "", err
+	}
+
+	if buildKey != "" && cacheEnabled(cfg) {
+		if runnerBytes, readErr := os.ReadFile(binaryPath); readErr == nil {
+			_ = cachePutBuild(buildKey, runnerBytes, currentBuildCacheMeta(wasmPath))
+		}
 	}
 
 	success = true

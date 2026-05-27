@@ -5,8 +5,11 @@ import (
 	"os/exec"
 	"path/filepath"
 	"runtime"
+	"strings"
 	"testing"
 )
+
+const fakeFailGoScript = "#!/bin/sh\necho 'fake go should not be called' >&2\nexit 1\n"
 
 // installFakeWasm2go writes a fake wasm2go executable into dir, prepends dir
 // to PATH, and marks the file executable.
@@ -56,4 +59,33 @@ exit 1
 // active tier-1 cache (WASM2GO_RUN_CACHE_DIR must be set in tests).
 func tier1CachedModulePath(wasmPath string) string {
 	return filepath.Join(cacheTranspileEntryPath(transpileCacheKey(wasmPath)), cacheFileModule)
+}
+
+// tier2CachedRunnerPath returns the path to the cached runner binary for the
+// given build key in the active tier-2 cache.
+func tier2CachedRunnerPath(bkey string) string {
+	return filepath.Join(cacheDir(), cacheSubdirBuild, bkey, compileBinaryName)
+}
+
+// installFakeFailGo writes a fake go executable that always fails into a temp
+// directory and prepends that directory to PATH.
+func installFakeFailGo(t *testing.T) {
+	t.Helper()
+	dir := t.TempDir()
+	if err := os.WriteFile(filepath.Join(dir, "go"), []byte(fakeFailGoScript), 0o755); err != nil {
+		t.Fatal(err)
+	}
+	t.Setenv("PATH", dir+string(os.PathListSeparator)+os.Getenv("PATH"))
+}
+
+// assertBinaryWithinBuildDir reports an error via t if binaryPath is not
+// a descendant of buildDir.
+func assertBinaryWithinBuildDir(t *testing.T, buildDir, binaryPath string) {
+	t.Helper()
+	absBuildDir, _ := filepath.Abs(buildDir)
+	absBinaryPath, _ := filepath.Abs(binaryPath)
+	rel, relErr := filepath.Rel(absBuildDir, absBinaryPath)
+	if relErr != nil || strings.HasPrefix(rel, "..") {
+		t.Errorf("binaryPath %q is not within buildDir %q", absBinaryPath, absBuildDir)
+	}
 }

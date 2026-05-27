@@ -1,6 +1,7 @@
 package main
 
 import (
+	"bytes"
 	"encoding/json"
 	"os"
 	"path/filepath"
@@ -279,6 +280,222 @@ printf '%s\n' 'package main' 'func New() *Module { return nil }'
 	}
 }
 
+func TestBuildCacheKeyIsStableAndSensitive(t *testing.T) {
+	tmpDir := t.TempDir()
+
+	wasmA := filepath.Join(tmpDir, "a.wasm")
+	content := []byte{0x00, 0x61, 0x73, 0x6d, 0x01, 0x00, 0x00, 0x00}
+	if err := os.WriteFile(wasmA, content, 0644); err != nil {
+		t.Fatal(err)
+	}
+
+	cfg := Config{
+		Env:      []string{"FOO=bar"},
+		Dirs:     []DirMount{{Host: "/host", Guest: "/guest"}},
+		WasmArgs: []string{"arg1"},
+	}
+
+	key1 := buildCacheKey(wasmA, cfg)
+
+	t.Run("same wasm and cfg gives same key", func(t *testing.T) {
+		key2 := buildCacheKey(wasmA, cfg)
+		if key1 != key2 {
+			t.Errorf("same inputs should give same key, got %q and %q", key1, key2)
+		}
+	})
+
+	t.Run("different wasm bytes gives different key", func(t *testing.T) {
+		wasmB := filepath.Join(tmpDir, "b.wasm")
+		if err := os.WriteFile(wasmB, append(content, 0x01), 0644); err != nil {
+			t.Fatal(err)
+		}
+		key2 := buildCacheKey(wasmB, cfg)
+		if key1 == key2 {
+			t.Errorf("different wasm bytes should give different key, got %q", key1)
+		}
+	})
+
+	t.Run("different cfg.Env gives different key", func(t *testing.T) {
+		cfg2 := cfg
+		cfg2.Env = []string{"FOO=baz"}
+		key2 := buildCacheKey(wasmA, cfg2)
+		if key1 == key2 {
+			t.Errorf("different cfg.Env should give different key, got %q", key1)
+		}
+	})
+
+	t.Run("different cfg.Dirs gives different key", func(t *testing.T) {
+		cfg2 := cfg
+		cfg2.Dirs = []DirMount{{Host: "/other", Guest: "/guest"}}
+		key2 := buildCacheKey(wasmA, cfg2)
+		if key1 == key2 {
+			t.Errorf("different cfg.Dirs should give different key, got %q", key1)
+		}
+	})
+
+	t.Run("different cfg.WasmArgs gives different key", func(t *testing.T) {
+		cfg2 := cfg
+		cfg2.WasmArgs = []string{"arg2"}
+		key2 := buildCacheKey(wasmA, cfg2)
+		if key1 == key2 {
+			t.Errorf("different cfg.WasmArgs should give different key, got %q", key1)
+		}
+	})
+
+	t.Run("different cfg.WasmPath gives different key", func(t *testing.T) {
+		wasmB := filepath.Join(tmpDir, "c.wasm")
+		if err := os.WriteFile(wasmB, content, 0644); err != nil {
+			t.Fatal(err)
+		}
+		cfg2 := cfg
+		cfg2.WasmPath = wasmB
+		key2 := buildCacheKey(wasmA, cfg2)
+		if key1 == key2 {
+			t.Errorf("different cfg.WasmPath should give different key, got %q", key1)
+		}
+	})
+
+	t.Run("different buildKeyVersion gives different key", func(t *testing.T) {
+		oldVersion := buildKeyVersion
+		buildKeyVersion = 999
+		defer func() { buildKeyVersion = oldVersion }()
+
+		key2 := buildCacheKey(wasmA, cfg)
+		if key1 == key2 {
+			t.Errorf("different buildKeyVersion should give different key, got %q", key1)
+		}
+	})
+
+	t.Run("different wasiHostFingerprint gives different key", func(t *testing.T) {
+		old := wasiHostFingerprint
+		wasiHostFingerprint = func() string { return "different-host" }
+		defer func() { wasiHostFingerprint = old }()
+
+		key2 := buildCacheKey(wasmA, cfg)
+		if key1 == key2 {
+			t.Errorf("different wasiHostFingerprint should give different key, got %q", key1)
+		}
+	})
+
+	t.Run("different goVersion gives different key", func(t *testing.T) {
+		old := goVersion
+		goVersion = "go1.24"
+		defer func() { goVersion = old }()
+
+		key2 := buildCacheKey(wasmA, cfg)
+		if key1 == key2 {
+			t.Errorf("different goVersion should give different key, got %q", key1)
+		}
+	})
+
+	t.Run("different goos gives different key", func(t *testing.T) {
+		old := goos
+		goos = "darwin"
+		defer func() { goos = old }()
+
+		key2 := buildCacheKey(wasmA, cfg)
+		if key1 == key2 {
+			t.Errorf("different goos should give different key, got %q", key1)
+		}
+	})
+
+	t.Run("different goarch gives different key", func(t *testing.T) {
+		old := goarch
+		goarch = "arm64"
+		defer func() { goarch = old }()
+
+		key2 := buildCacheKey(wasmA, cfg)
+		if key1 == key2 {
+			t.Errorf("different goarch should give different key, got %q", key1)
+		}
+	})
+
+	t.Run("different wasm2goRunVersion gives different key", func(t *testing.T) {
+		old := wasm2goRunVersion
+		wasm2goRunVersion = "v1.0.0"
+		defer func() { wasm2goRunVersion = old }()
+
+		key2 := buildCacheKey(wasmA, cfg)
+		if key1 == key2 {
+			t.Errorf("different wasm2goRunVersion should give different key, got %q", key1)
+		}
+	})
+
+	t.Run("env order does not affect key", func(t *testing.T) {
+		cfg1 := Config{Env: []string{"B=2", "A=1"}}
+		cfg2 := Config{Env: []string{"A=1", "B=2"}}
+		k1 := buildCacheKey(wasmA, cfg1)
+		k2 := buildCacheKey(wasmA, cfg2)
+		if k1 != k2 {
+			t.Errorf("different env order should give same key, got %q and %q", k1, k2)
+		}
+	})
+
+	t.Run("dir order does not affect key", func(t *testing.T) {
+		cfg1 := Config{Dirs: []DirMount{{Host: "/b", Guest: "/g2"}, {Host: "/a", Guest: "/g1"}}}
+		cfg2 := Config{Dirs: []DirMount{{Host: "/a", Guest: "/g1"}, {Host: "/b", Guest: "/g2"}}}
+		k1 := buildCacheKey(wasmA, cfg1)
+		k2 := buildCacheKey(wasmA, cfg2)
+		if k1 != k2 {
+			t.Errorf("different dir order should give same key, got %q and %q", k1, k2)
+		}
+	})
+
+	t.Run("WasmPath is normalized to absolute", func(t *testing.T) {
+		relPath := filepath.Join(".", filepath.Base(wasmA))
+		origWd, err := os.Getwd()
+		if err != nil {
+			t.Fatal(err)
+		}
+		if err := os.Chdir(tmpDir); err != nil {
+			t.Fatal(err)
+		}
+		defer func() {
+			if err := os.Chdir(origWd); err != nil {
+				t.Fatalf("restore wd: %v", err)
+			}
+		}()
+
+		keyRel := buildCacheKey(relPath, cfg)
+		keyAbs := buildCacheKey(wasmA, cfg)
+		if keyRel != keyAbs {
+			t.Errorf("relative and absolute paths should give same key, got %q and %q", keyRel, keyAbs)
+		}
+	})
+}
+
+func TestWasiHostFingerprintIsStableAndSensitiveToSourceChanges(t *testing.T) {
+	tmpDir := t.TempDir()
+
+	oldPath := wasiHostPath
+	wasiHostPath = func() string { return tmpDir }
+	defer func() { wasiHostPath = oldPath }()
+
+	wasihostGo := filepath.Join(tmpDir, "wasihost.go")
+	if err := os.WriteFile(wasihostGo, []byte("package wasihost\n// version 1\n"), 0644); err != nil {
+		t.Fatal(err)
+	}
+
+	fp1 := wasiHostFingerprint()
+	if fp1 == "" {
+		t.Fatal("wasiHostFingerprint returned empty string")
+	}
+
+	fp2 := wasiHostFingerprint()
+	if fp1 != fp2 {
+		t.Errorf("wasiHostFingerprint not stable for unchanged sources: %q vs %q", fp1, fp2)
+	}
+
+	if err := os.WriteFile(wasihostGo, []byte("package wasihost\n// version 2\n"), 0644); err != nil {
+		t.Fatal(err)
+	}
+
+	fp3 := wasiHostFingerprint()
+	if fp1 == fp3 {
+		t.Errorf("wasiHostFingerprint should change when host source changes, got %q both times", fp1)
+	}
+}
+
 func TestTranspileCachedFailedTranspileDoesNotLeaveCacheEntry(t *testing.T) {
 	tmpDir := t.TempDir()
 	cacheDir := t.TempDir()
@@ -330,5 +547,80 @@ exit 1
 		t.Errorf("transpile cache entry directory %q should not exist after failed transpile", transpileDir)
 	} else if !os.IsNotExist(statErr) {
 		t.Fatalf("stat transpile dir: %v", statErr)
+	}
+}
+
+func TestCacheBuildStoreAndRetrieve(t *testing.T) {
+	tmpDir := t.TempDir()
+	t.Setenv("WASM2GO_RUN_CACHE_DIR", tmpDir)
+
+	key := "buildkey123456789"
+	wantBytes := []byte{0x7f, 0x45, 0x4c, 0x46}
+	meta := buildCacheMeta{
+		TranspileKey:        "transpilekeyabc",
+		BuildKeyVersion:     42,
+		WasiHostFingerprint: "fingerprint-xyz",
+		GoVersion:           "go1.23",
+		Goos:                "linux",
+		Goarch:              "amd64",
+		Wasm2goRunVersion:   "v0.0.1",
+	}
+
+	if err := cachePutBuild(key, wantBytes, meta); err != nil {
+		t.Fatalf("cachePutBuild failed: %v", err)
+	}
+
+	buildDir := filepath.Join(tmpDir, cacheSubdirBuild, key)
+	runnerPath := filepath.Join(buildDir, compileBinaryName)
+	metaPath := filepath.Join(buildDir, cacheFileMeta)
+
+	runnerData, err := os.ReadFile(runnerPath)
+	if err != nil {
+		t.Fatalf("runner binary not found after put: %v", err)
+	}
+	if !bytes.Equal(runnerData, wantBytes) {
+		t.Errorf("runner binary content mismatch:\ngot  %q\nwant %q", runnerData, wantBytes)
+	}
+
+	metaData, err := os.ReadFile(metaPath)
+	if err != nil {
+		t.Fatalf("meta.json not found after put: %v", err)
+	}
+	var gotMeta buildCacheMeta
+	if err := json.Unmarshal(metaData, &gotMeta); err != nil {
+		t.Fatalf("meta.json invalid JSON: %v", err)
+	}
+	if gotMeta.TranspileKey != meta.TranspileKey {
+		t.Errorf("meta.json transpileKey = %q, want %q", gotMeta.TranspileKey, meta.TranspileKey)
+	}
+	if gotMeta.BuildKeyVersion != meta.BuildKeyVersion {
+		t.Errorf("meta.json buildKeyVersion = %d, want %d", gotMeta.BuildKeyVersion, meta.BuildKeyVersion)
+	}
+	if gotMeta.WasiHostFingerprint != meta.WasiHostFingerprint {
+		t.Errorf("meta.json wasiHostFingerprint = %q, want %q", gotMeta.WasiHostFingerprint, meta.WasiHostFingerprint)
+	}
+	if gotMeta.GoVersion != meta.GoVersion {
+		t.Errorf("meta.json goVersion = %q, want %q", gotMeta.GoVersion, meta.GoVersion)
+	}
+	if gotMeta.Goos != meta.Goos {
+		t.Errorf("meta.json goos = %q, want %q", gotMeta.Goos, meta.Goos)
+	}
+	if gotMeta.Goarch != meta.Goarch {
+		t.Errorf("meta.json goarch = %q, want %q", gotMeta.Goarch, meta.Goarch)
+	}
+	if gotMeta.Wasm2goRunVersion != meta.Wasm2goRunVersion {
+		t.Errorf("meta.json wasm2goRunVersion = %q, want %q", gotMeta.Wasm2goRunVersion, meta.Wasm2goRunVersion)
+	}
+
+	gotBytes, ok := cacheGetBuild(key)
+	if !ok {
+		t.Fatalf("cacheGetBuild returned miss for existing key")
+	}
+	if !bytes.Equal(gotBytes, wantBytes) {
+		t.Errorf("cacheGetBuild returned wrong bytes:\ngot  %q\nwant %q", gotBytes, wantBytes)
+	}
+
+	if _, ok := cacheGetBuild("nonexistent"); ok {
+		t.Error("cacheGetBuild returned hit for nonexistent key")
 	}
 }
