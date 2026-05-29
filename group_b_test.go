@@ -60,7 +60,7 @@ func TestGroupBFilesystemMutations(t *testing.T) {
 	)
 
 	t.Run("Xpath_create_directory creates dir", func(t *testing.T) {
-		s, buf := newTestState()
+		s, buf := newTestState(nil)
 		hostDir := setupWritableMount(t, s, buf)
 		nameOff, nameLen := writePath(buf, pathOff1, "newdir")
 		errno := s.Xpath_create_directory(dirfd, nameOff, nameLen)
@@ -73,7 +73,7 @@ func TestGroupBFilesystemMutations(t *testing.T) {
 	})
 
 	t.Run("Xpath_create_directory second call returns EEXIST", func(t *testing.T) {
-		s, buf := newTestState()
+		s, buf := newTestState(nil)
 		hostDir := setupWritableMount(t, s, buf)
 		if err := os.Mkdir(filepath.Join(hostDir, "existing"), 0755); err != nil {
 			t.Fatal(err)
@@ -86,7 +86,7 @@ func TestGroupBFilesystemMutations(t *testing.T) {
 	})
 
 	t.Run("Xpath_remove_directory removes empty dir", func(t *testing.T) {
-		s, buf := newTestState()
+		s, buf := newTestState(nil)
 		hostDir := setupWritableMount(t, s, buf)
 		if err := os.Mkdir(filepath.Join(hostDir, "emptydir"), 0755); err != nil {
 			t.Fatal(err)
@@ -102,7 +102,7 @@ func TestGroupBFilesystemMutations(t *testing.T) {
 	})
 
 	t.Run("Xpath_remove_directory on non-empty dir returns ENOTEMPTY", func(t *testing.T) {
-		s, buf := newTestState()
+		s, buf := newTestState(nil)
 		hostDir := setupWritableMount(t, s, buf)
 		if err := os.MkdirAll(filepath.Join(hostDir, "nonempty/child"), 0755); err != nil {
 			t.Fatal(err)
@@ -115,7 +115,7 @@ func TestGroupBFilesystemMutations(t *testing.T) {
 	})
 
 	t.Run("Xpath_remove_directory on file returns ENOTDIR", func(t *testing.T) {
-		s, buf := newTestState()
+		s, buf := newTestState(nil)
 		hostDir := setupWritableMount(t, s, buf)
 		if err := os.WriteFile(filepath.Join(hostDir, "afile"), []byte("x"), 0644); err != nil {
 			t.Fatal(err)
@@ -128,7 +128,7 @@ func TestGroupBFilesystemMutations(t *testing.T) {
 	})
 
 	t.Run("Xpath_unlink_file removes a file", func(t *testing.T) {
-		s, buf := newTestState()
+		s, buf := newTestState(nil)
 		hostDir := setupWritableMount(t, s, buf)
 		if err := os.WriteFile(filepath.Join(hostDir, "todelete"), []byte("x"), 0644); err != nil {
 			t.Fatal(err)
@@ -144,7 +144,7 @@ func TestGroupBFilesystemMutations(t *testing.T) {
 	})
 
 	t.Run("Xpath_unlink_file second call returns ENOENT", func(t *testing.T) {
-		s, buf := newTestState()
+		s, buf := newTestState(nil)
 		hostDir := setupWritableMount(t, s, buf)
 		_ = hostDir
 		nameOff, nameLen := writePath(buf, pathOff1, "nonexistent")
@@ -155,7 +155,7 @@ func TestGroupBFilesystemMutations(t *testing.T) {
 	})
 
 	t.Run("Xpath_unlink_file on directory returns EISDIR", func(t *testing.T) {
-		s, buf := newTestState()
+		s, buf := newTestState(nil)
 		hostDir := setupWritableMount(t, s, buf)
 		if err := os.Mkdir(filepath.Join(hostDir, "adir"), 0755); err != nil {
 			t.Fatal(err)
@@ -168,7 +168,7 @@ func TestGroupBFilesystemMutations(t *testing.T) {
 	})
 
 	t.Run("Xpath_readlink returns target and nread", func(t *testing.T) {
-		s, buf := newTestState()
+		s, buf := newTestState(nil)
 		hostDir := setupWritableMount(t, s, buf)
 		// Create a symlink on the host
 		if err := os.Symlink("/target/path", filepath.Join(hostDir, "mylink")); err != nil {
@@ -190,7 +190,7 @@ func TestGroupBFilesystemMutations(t *testing.T) {
 	})
 
 	t.Run("Xpath_symlink creates a symlink", func(t *testing.T) {
-		s, buf := newTestState()
+		s, buf := newTestState(nil)
 		hostDir := setupWritableMount(t, s, buf)
 		targetOff, targetLen := writePath(buf, pathOff1, "/some/target")
 		nameOff, nameLen := writePath(buf, pathOff2, "newsym")
@@ -207,7 +207,7 @@ func TestGroupBFilesystemMutations(t *testing.T) {
 	})
 
 	t.Run("Xpath_link creates a hard link", func(t *testing.T) {
-		s, buf := newTestState()
+		s, buf := newTestState(nil)
 		hostDir := setupWritableMount(t, s, buf)
 		origPath := filepath.Join(hostDir, "original")
 		if err := os.WriteFile(origPath, []byte("data"), 0644); err != nil {
@@ -230,7 +230,7 @@ func TestGroupBFilesystemMutations(t *testing.T) {
 	})
 
 	t.Run("all six functions return EROFS on read-only mount", func(t *testing.T) {
-		s, buf := newTestState()
+		s, buf := newTestState(nil)
 		setupReadOnlyMount(t, s, buf, t.TempDir())
 
 		pathOff, pathLen := writePath(buf, pathOff1, "name")

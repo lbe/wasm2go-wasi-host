@@ -47,13 +47,15 @@ import (
 
 func main() {
     var mod *generated.Module
+    cfg := wasihost.NewModuleConfig().
+        WithArgs("app-name", "arg1").
+        WithEnv("PATH", "/bin").
+        WithHostDirectoryPreopen("/", "./host-data").
+        WithStdout(os.Stdout).
+        WithStderr(os.Stderr)
     state := wasihost.New(
         func() []byte { return *mod.Xmemory().Slice() },
-        wasihost.WithArgs("app-name", "arg1"),
-        wasihost.WithEnv("PATH=/bin"),
-        wasihost.WithHostDirectoryPreopen("/", "./host-data"),
-        wasihost.WithStdout(os.Stdout),
-        wasihost.WithStderr(os.Stderr),
+        cfg,
     )
 
     mod = generated.New(state, state)
@@ -78,13 +80,15 @@ See [`cmd/wasm2go-run/README.md`](./cmd/wasm2go-run/README.md).
 
 ## File system support
 
+Configure mounts on [`NewModuleConfig`](https://pkg.go.dev/github.com/lbe/wasm2go-wasi-host#NewModuleConfig):
+
 - **`WithReadOnlyFS(guestPath, root)`**: Read-only `fs.FS` preopen; WASI rights exclude writes and path mutations.
 - **`WithHostDirectoryPreopen(guestPath, hostPath)`**: Writable host directory preopen (`os.DirFS` for reads, host paths for mutations).
+- **`WithFS(fsConfig)`**: Advanced layout via [`FSConfig`](https://pkg.go.dev/github.com/lbe/wasm2go-wasi-host#FSConfig) (`WithDirMount`, `WithReadOnlyDirMount`, `WithFSMount`).
 
 ## Concurrency and safety
 
 - **Single-owner**: [`State`](https://pkg.go.dev/github.com/lbe/wasm2go-wasi-host#State) is not safe for concurrent use. One `State` per wasm2go module instance, one goroutine.
-- **Owner assertion**: [`WithOwnerAssertion`](https://pkg.go.dev/github.com/lbe/wasm2go-wasi-host#WithOwnerAssertion) panics if the host is called from another goroutine.
 
 ## Development
 
@@ -112,6 +116,8 @@ See [`cmd/wasm2go-run/README.md`](./cmd/wasm2go-run/README.md).
     ```bash
     go test -v -run TestQualityGate
     ```
+
+    For faster local iteration, use `go test -short ./...` to skip the correction-2 safety-net test that runs the full wasi-testsuite (~50s).
 
 4. **Full Preview1 compliance** via the submodule inventory:
 

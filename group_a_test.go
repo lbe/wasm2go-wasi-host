@@ -29,9 +29,9 @@ func (w *errorWriter) Write(p []byte) (n int, err error) {
 	return n, w.err
 }
 
-func newTestState(opts ...Option) (*State, []byte) {
+func newTestState(cfg *ModuleConfig) (*State, []byte) {
 	buf := make([]byte, 65536)
-	s := New(func() []byte { return buf }, opts...)
+	s := New(func() []byte { return buf }, cfg)
 	return s, buf
 }
 
@@ -48,7 +48,7 @@ func TestGroupAFoundation(t *testing.T) {
 	)
 
 	t.Run("environ_sizes_get writes count and total length", func(t *testing.T) {
-		s, buf := newTestState(WithEnv("A=1", "BC=2"))
+		s, buf := newTestState(NewModuleConfig().WithEnvRaw("A=1").WithEnvRaw("BC=2"))
 		s.env = []string{"A=1", "BC=2"}
 		errno := s.Xenviron_sizes_get(countOff, bufSizeOff)
 		if errno != 0 {
@@ -65,7 +65,7 @@ func TestGroupAFoundation(t *testing.T) {
 	})
 
 	t.Run("environ_get writes strings and pointers", func(t *testing.T) {
-		s, buf := newTestState()
+		s, buf := newTestState(nil)
 		s.env = []string{"A=1", "BC=2"}
 		errno := s.Xenviron_get(envPtrOff, envBufOff)
 		if errno != 0 {
@@ -90,7 +90,7 @@ func TestGroupAFoundation(t *testing.T) {
 	})
 
 	t.Run("fd_prestat_get and fd_prestat_dir_name", func(t *testing.T) {
-		s, buf := newTestState()
+		s, buf := newTestState(nil)
 		s.mounts = []mountEntry{{guestPath: "tmp"}}
 		s.preopens = []fdEntry{{path: "tmp", fdType: 3, mount: 0, preopen: true}}
 		for len(s.fds) < 4 {
@@ -133,7 +133,7 @@ func TestGroupAFoundation(t *testing.T) {
 	})
 
 	t.Run("fd_fdstat_get", func(t *testing.T) {
-		s, buf := newTestState()
+		s, buf := newTestState(nil)
 		for len(s.fds) <= 5 {
 			s.fds = append(s.fds, fdEntry{})
 		}
@@ -172,7 +172,7 @@ func TestGroupAFoundation(t *testing.T) {
 	})
 
 	t.Run("fd_renumber", func(t *testing.T) {
-		s, _ := newTestState()
+		s, _ := newTestState(nil)
 		for len(s.fds) <= 6 {
 			s.fds = append(s.fds, fdEntry{})
 		}
@@ -191,7 +191,7 @@ func TestGroupAFoundation(t *testing.T) {
 	})
 
 	t.Run("proc_exit panics", func(t *testing.T) {
-		s, _ := newTestState()
+		s, _ := newTestState(nil)
 		defer func() {
 			r := recover()
 			if r == nil {
@@ -205,7 +205,7 @@ func TestGroupAFoundation(t *testing.T) {
 	})
 
 	t.Run("random_get", func(t *testing.T) {
-		s, buf := newTestState()
+		s, buf := newTestState(nil)
 		errno := s.Xrandom_get(randOff, 32)
 		if errno != 0 {
 			t.Fatalf("expected ESUCCESS, got %d", errno)
@@ -223,7 +223,7 @@ func TestGroupAFoundation(t *testing.T) {
 	})
 
 	t.Run("resolvePath", func(t *testing.T) {
-		s, _ := newTestState()
+		s, _ := newTestState(nil)
 		s.mounts = []mountEntry{
 			{guestPath: "/"},
 			{guestPath: "zeroperl"},
@@ -241,14 +241,14 @@ func TestGroupAFoundation(t *testing.T) {
 	})
 
 	t.Run("readBytes ptr==0 returns nil", func(t *testing.T) {
-		s, _ := newTestState()
+		s, _ := newTestState(nil)
 		if got := s.readBytes(0, 10); got != nil {
 			t.Errorf("readBytes(0, 10) = %v, want nil", got)
 		}
 	})
 
 	t.Run("resolveDirfdPath non-preopen dir fd", func(t *testing.T) {
-		s, _ := newTestState()
+		s, _ := newTestState(nil)
 		s.mounts = []mountEntry{{guestPath: "/tmp", writable: false}}
 		for len(s.fds) <= 5 {
 			s.fds = append(s.fds, fdEntry{})

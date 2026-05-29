@@ -11,34 +11,25 @@ func TestInitializationAndOSErrorMapping(t *testing.T) {
 	mem := func() []byte { return make([]byte, 65536) }
 
 	// Test New returns non-nil
-	s := New(mem)
+	s := New(mem, nil)
 	if s == nil {
-		t.Errorf("New(mem) returned nil, want non-nil *State")
+		t.Errorf("New(mem, nil) returned nil, want non-nil *State")
 	}
 
-	// Test Options don't panic
-	options := []Option{
-		WithArgs("arg1"),
-		WithEnv("VAR=VAL"),
-		WithReadOnlyFS("/tmp", os.DirFS("/tmp")),
-		WithHostDirectoryPreopen("/data", "/tmp/data"),
-		WithStdin(os.Stdin),
-		WithStdout(os.Stdout),
-		WithStderr(os.Stderr),
-		WithTracing(),
-		WithOwnerAssertion(),
-	}
-
-	for i, opt := range options {
-		func() {
-			defer func() {
-				if r := recover(); r != nil {
-					t.Errorf("Option %d panicked: %v", i, r)
-				}
-			}()
-			New(mem, opt)
+	// Test ModuleConfig builder chain does not panic
+	func() {
+		defer func() {
+			if r := recover(); r != nil {
+				t.Errorf("ModuleConfig builder chain panicked: %v", r)
+			}
 		}()
-	}
+		cfg := NewModuleConfig().
+			WithArgs("arg1").
+			WithEnv("VAR", "VAL").
+			WithReadOnlyFS("/tmp", os.DirFS("/tmp")).
+			WithHostDirectoryPreopen("/data", "/tmp/data")
+		New(mem, cfg)
+	}()
 
 	// Test ExitError.Error() is non-empty
 	exitErr := ExitError{Code: 1}

@@ -29,7 +29,7 @@ func TestPathSymlinkCreateAndFollowOpen(t *testing.T) {
 
 	t.Run("file target", func(t *testing.T) {
 		t.Parallel()
-		s, buf := newTestState()
+		s, buf := newTestState(nil)
 		hostDir := setupWritableMount(t, s, buf)
 
 		// Create the target file via path_open with O_CREAT.
@@ -92,7 +92,7 @@ func TestPathSymlinkCreateAndFollowOpen(t *testing.T) {
 
 	t.Run("directory target", func(t *testing.T) {
 		t.Parallel()
-		s, buf := newTestState()
+		s, buf := newTestState(nil)
 		hostDir := setupWritableMount(t, s, buf)
 
 		// Create the target directory.
@@ -161,7 +161,7 @@ func TestPathSymlinkRejectsAbsoluteOldPath(t *testing.T) {
 		symlinkOff = 200
 	)
 
-	s, buf := newTestState()
+	s, buf := newTestState(nil)
 	hostDir := setupWritableMount(t, s, buf)
 
 	// Attempt to create a symlink with an absolute old path "/".

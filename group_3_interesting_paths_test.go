@@ -39,7 +39,7 @@ func setupNestedDirfd(t *testing.T) nestedDirfdSetup {
 	tmpDir := t.TempDir()
 
 	s := New(func() []byte { return buf },
-		WithHostDirectoryPreopen("/data", tmpDir),
+		NewModuleConfig().WithHostDirectoryPreopen("/data", tmpDir),
 	)
 
 	// Create "interesting_paths_dir" under the preopen.

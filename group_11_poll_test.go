@@ -15,7 +15,7 @@ func TestPollOneoffEventLayout(t *testing.T) {
 		evtSize    = 32
 	)
 
-	s, buf := newTestState()
+	s, buf := newTestState(nil)
 
 	t.Run("clock event", func(t *testing.T) {
 		// Setup a clock subscription
@@ -185,7 +185,7 @@ func TestPollOneoffNeventsPacked(t *testing.T) {
 		evtSize    = 32
 	)
 
-	s, buf := newTestState()
+	s, buf := newTestState(nil)
 
 	t.Run("one clock subscription", func(t *testing.T) {
 		// Setup a clock subscription
@@ -332,7 +332,7 @@ func TestPollOneoffClock(t *testing.T) {
 		evtSize    = 32
 	)
 
-	s, buf := newTestState()
+	s, buf := newTestState(nil)
 
 	t.Run("two clocks with different timeouts respect minimum timeout", func(t *testing.T) {
 		// Subscription 0: clock, 1ms timeout, userdata=0x1111111111111111
@@ -393,7 +393,7 @@ func TestPollOneoffFdWriteStdio(t *testing.T) {
 		evtSize    = 32
 	)
 
-	s, buf := newTestState()
+	s, buf := newTestState(nil)
 
 	// Test case: fd_write on stdout (fd=1) and stderr (fd=2) with a concurrent clock timeout
 	// The fd_write events should be ready immediately and should be returned before the clock
@@ -542,7 +542,7 @@ func TestPollOneoffInvalidFd(t *testing.T) {
 		evtSize    = 32
 	)
 
-	s, buf := newTestState()
+	s, buf := newTestState(nil)
 
 	t.Run("fd_read fd=99 alone", func(t *testing.T) {
 		userdata := uint64(0xAAAA)
@@ -644,7 +644,7 @@ func TestPollOneoffTagU8(t *testing.T) {
 		neventsPtr = 2000
 	)
 
-	s, buf := newTestState()
+	s, buf := newTestState(nil)
 
 	t.Run("fd_read with tag byte at +8 and non-zero padding at +9..11", func(t *testing.T) {
 		userdata := uint64(0xDEADBEEF)

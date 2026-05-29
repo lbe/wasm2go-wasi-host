@@ -22,7 +22,7 @@ func TestDanglingSymlinkPathOpenNoFollow(t *testing.T) {
 		fdPtr      = 300
 	)
 
-	s, buf := newTestState()
+	s, buf := newTestState(nil)
 	hostDir := setupWritableMount(t, s, buf)
 
 	// Create a dangling symlink "symlink" -> "target" (target does not exist).

@@ -333,8 +333,7 @@ func TestFdFdstatGetReportsWASIPreview1RightsBits(t *testing.T) {
 	buf := make([]byte, 65536)
 	tmpDir := t.TempDir()
 	s := New(func() []byte { return buf },
-		WithHostDirectoryPreopen("/tmp", tmpDir),
-		WithReadOnlyFS("/ro", fstest.MapFS{}),
+		NewModuleConfig().WithHostDirectoryPreopen("/tmp", tmpDir).WithReadOnlyFS("/ro", fstest.MapFS{}),
 	)
 
 	const readOnlyPreopenFD = int32(4) // mounts: 3=/tmp (writable host), 4=/ro (read-only fs.FS)

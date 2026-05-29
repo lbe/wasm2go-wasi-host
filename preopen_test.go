@@ -23,7 +23,7 @@ func TestHostDirectoryPreopen(t *testing.T) {
 	// The refactor plan likely wants to introduce a more WASI-standard "preopen"
 	// concept that specifically maps to fd 3+ in a way that matches WASI expectations.
 
-	s := New(mem, WithHostDirectoryPreopen(guestPath, tmpDir))
+	s := New(mem, NewModuleConfig().WithHostDirectoryPreopen(guestPath, tmpDir))
 
 	t.Run("fd 3 is a preopen", func(t *testing.T) {
 		const prestatPtr = 100

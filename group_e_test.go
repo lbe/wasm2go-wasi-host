@@ -72,7 +72,7 @@ func TestGroupEPositionedIO(t *testing.T) {
 
 	// ── pread ─────────────────────────────────────────────────────────────
 	t.Run("Xfd_pread reads at offset without advancing cursor", func(t *testing.T) {
-		s, buf := newTestState()
+		s, buf := newTestState(nil)
 		_ = setupOsFileFd(t, s, 5, []byte("ABCDEFGHIJ"))
 
 		// Build iovec at iovPtrOff: {bufPtr=iovDataOff, bufLen=4}
@@ -100,7 +100,7 @@ func TestGroupEPositionedIO(t *testing.T) {
 	})
 
 	t.Run("Xfd_pread on stdin (fd=0) returns EINVAL", func(t *testing.T) {
-		s, buf := newTestState()
+		s, buf := newTestState(nil)
 		binary.LittleEndian.PutUint32(buf[iovPtrOff:], uint32(iovDataOff))
 		binary.LittleEndian.PutUint32(buf[iovPtrOff+4:], 4)
 		errno := s.Xfd_pread(0, iovPtrOff, 1, 0, nresOff)
@@ -111,7 +111,7 @@ func TestGroupEPositionedIO(t *testing.T) {
 
 	// ── pwrite ────────────────────────────────────────────────────────────
 	t.Run("Xfd_pwrite writes at offset without advancing cursor", func(t *testing.T) {
-		s, buf := newTestState()
+		s, buf := newTestState(nil)
 		filePath := setupOsFileFd(t, s, 5, []byte{}) // empty file
 
 		// Put "XYZ" into the guest buffer at iovDataOff
@@ -142,7 +142,7 @@ func TestGroupEPositionedIO(t *testing.T) {
 	})
 
 	t.Run("Xfd_pwrite on stdout (fd=1) returns EINVAL", func(t *testing.T) {
-		s, buf := newTestState()
+		s, buf := newTestState(nil)
 		copy(buf[iovDataOff:], "XYZ")
 		binary.LittleEndian.PutUint32(buf[iovPtrOff:], uint32(iovDataOff))
 		binary.LittleEndian.PutUint32(buf[iovPtrOff+4:], 3)
@@ -154,7 +154,7 @@ func TestGroupEPositionedIO(t *testing.T) {
 
 	// ── Group E stubs ─────────────────────────────────────────────────────
 	t.Run("Xfd_datasync returns ESUCCESS", func(t *testing.T) {
-		s, _ := newTestState()
+		s, _ := newTestState(nil)
 
 		t.Run("validates fd", func(t *testing.T) {
 			errno := s.Xfd_datasync(99)
@@ -165,7 +165,7 @@ func TestGroupEPositionedIO(t *testing.T) {
 	})
 
 	t.Run("Xfd_datasync invokes host Sync for sync-capable fds and maps errors", func(t *testing.T) {
-		s, _ := newTestState()
+		s, _ := newTestState(nil)
 
 		t.Run("returns ESUCCESS and calls Sync once for sync-capable file", func(t *testing.T) {
 			stub := &syncStub{}
@@ -192,7 +192,7 @@ func TestGroupEPositionedIO(t *testing.T) {
 	})
 
 	t.Run("Xsched_yield calls sched_yield seam and returns ESUCCESS", func(t *testing.T) {
-		s, _ := newTestState()
+		s, _ := newTestState(nil)
 		var yieldCount int
 		// schedYield is a package-level seam: var schedYield func() = runtime.Gosched
 		oldYield := schedYield
@@ -208,7 +208,7 @@ func TestGroupEPositionedIO(t *testing.T) {
 	})
 
 	t.Run("Xfd_datasync on FSFileWrap-backed fd returns ESUCCESS", func(t *testing.T) {
-		s, _ := newTestState()
+		s, _ := newTestState(nil)
 		dir := t.TempDir()
 		if err := os.WriteFile(dir+"/f.txt", []byte("x"), 0644); err != nil {
 			t.Fatal(err)
@@ -229,7 +229,7 @@ func TestGroupEPositionedIO(t *testing.T) {
 	})
 
 	t.Run("Xfd_advise returns ESUCCESS", func(t *testing.T) {
-		s, _ := newTestState()
+		s, _ := newTestState(nil)
 		_ = setupOsFileFd(t, s, 5, []byte("data"))
 		if s.Xfd_advise(5, 0, 4, 0) != wasiESuccess {
 			t.Error("Xfd_advise returned non-zero")
@@ -237,7 +237,7 @@ func TestGroupEPositionedIO(t *testing.T) {
 	})
 
 	t.Run("Xfd_allocate returns ESUCCESS when FD_ALLOCATE is granted", func(t *testing.T) {
-		s, _ := newTestState()
+		s, _ := newTestState(nil)
 		_ = setupOsFileFd(t, s, 5, []byte{})
 		if errno := s.Xfd_allocate(5, 0, 16); errno != wasiESuccess {
 			t.Errorf("Xfd_allocate = %d, want ESUCCESS", errno)
@@ -245,7 +245,7 @@ func TestGroupEPositionedIO(t *testing.T) {
 	})
 
 	t.Run("Xfd_allocate returns ENOTCAPABLE without FD_ALLOCATE", func(t *testing.T) {
-		s, _ := newTestState()
+		s, _ := newTestState(nil)
 		_ = setupOsFileFd(t, s, 5, []byte{})
 		s.fds[5].rightsBase &^= rightFDAllocate
 		if errno := s.Xfd_allocate(5, 0, 16); errno != wasiENotCap {
@@ -254,7 +254,7 @@ func TestGroupEPositionedIO(t *testing.T) {
 	})
 
 	t.Run("Xfd_fdstat_set_rights returns ESUCCESS", func(t *testing.T) {
-		s, _ := newTestState()
+		s, _ := newTestState(nil)
 		_ = setupOsFileFd(t, s, 5, []byte("data"))
 		if s.Xfd_fdstat_set_rights(5, 0, 0) != wasiESuccess {
 			t.Error("Xfd_fdstat_set_rights returned non-zero")
@@ -262,14 +262,14 @@ func TestGroupEPositionedIO(t *testing.T) {
 	})
 
 	t.Run("Xproc_raise returns ENOSYS", func(t *testing.T) {
-		s, _ := newTestState()
+		s, _ := newTestState(nil)
 		if errno := s.Xproc_raise(9); errno != wasiENoSys {
 			t.Errorf("got %d, want ENOSYS (%d)", errno, wasiENoSys)
 		}
 	})
 
 	t.Run("Xsock_* functions return ENOSYS", func(t *testing.T) {
-		s, buf := newTestState()
+		s, buf := newTestState(nil)
 		if s.Xsock_accept(5, 0, nresOff) != wasiENoSys {
 			t.Error("Xsock_accept: want ENOSYS")
 		}
@@ -286,7 +286,7 @@ func TestGroupEPositionedIO(t *testing.T) {
 	})
 
 	t.Run("Xfd_pread returns EIO and preserves partial byte count when ReadAt returns error", func(t *testing.T) {
-		s, buf := newTestState()
+		s, buf := newTestState(nil)
 
 		// Build iovec: {bufPtr=iovDataOff, bufLen=10}
 		binary.LittleEndian.PutUint32(buf[iovPtrOff:], uint32(iovDataOff))
@@ -318,7 +318,7 @@ func TestGroupEPositionedIO(t *testing.T) {
 	})
 
 	t.Run("Positioned I/O on unsupported types returns error", func(t *testing.T) {
-		s, buf := newTestState()
+		s, buf := newTestState(nil)
 		dir := t.TempDir()
 		if err := os.WriteFile(dir+"/f.txt", []byte("ABCDE"), 0644); err != nil {
 			t.Fatal(err)
@@ -364,7 +364,7 @@ func TestGroupEPositionedIO(t *testing.T) {
 	})
 
 	t.Run("Xfd_pwrite returns EIO and preserves partial byte count when WriteAt returns error", func(t *testing.T) {
-		s, buf := newTestState()
+		s, buf := newTestState(nil)
 
 		// Put "PARTIALDATA" into the guest buffer at iovDataOff
 		copy(buf[iovDataOff:], "PARTIALDATA")

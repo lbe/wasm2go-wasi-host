@@ -15,7 +15,7 @@ func TestGroup9_10PathRename(t *testing.T) {
 
 	t.Run("moving a directory: source gone, target openable", func(t *testing.T) {
 		t.Parallel()
-		s, buf := newTestState()
+		s, buf := newTestState(nil)
 		hostDir := setupWritableMount(t, s, buf)
 
 		// Create a source directory
@@ -53,7 +53,7 @@ func TestGroup9_10PathRename(t *testing.T) {
 
 	t.Run("moving a file: source gone, target openable", func(t *testing.T) {
 		t.Parallel()
-		s, buf := newTestState()
+		s, buf := newTestState(nil)
 		hostDir := setupWritableMount(t, s, buf)
 
 		// Create a source file
@@ -99,7 +99,7 @@ func TestGroup9_10PathRename(t *testing.T) {
 
 	t.Run("atomic replace: existing target replaced", func(t *testing.T) {
 		t.Parallel()
-		s, buf := newTestState()
+		s, buf := newTestState(nil)
 		hostDir := setupWritableMount(t, s, buf)
 
 		// Create source file
@@ -155,7 +155,7 @@ func TestGroup9_10PathRename(t *testing.T) {
 
 	t.Run("empty directory rename: OS-specific behavior", func(t *testing.T) {
 		t.Parallel()
-		s, buf := newTestState()
+		s, buf := newTestState(nil)
 		hostDir := setupWritableMount(t, s, buf)
 
 		// Create empty source directory
@@ -212,7 +212,7 @@ func TestGroup9_10PathRename(t *testing.T) {
 
 	t.Run("source directory, target directory with file inside: should return ENOTEMPTY or EACCES", func(t *testing.T) {
 		t.Parallel()
-		s, buf := newTestState()
+		s, buf := newTestState(nil)
 		hostDir := setupWritableMount(t, s, buf)
 
 		// Create source directory
@@ -253,7 +253,7 @@ func TestGroup9_10PathRename(t *testing.T) {
 
 	t.Run("source file, target directory: should return EISDIR or EACCES", func(t *testing.T) {
 		t.Parallel()
-		s, buf := newTestState()
+		s, buf := newTestState(nil)
 		hostDir := setupWritableMount(t, s, buf)
 
 		// Create source file
@@ -293,7 +293,7 @@ func TestGroup9_10PathRename(t *testing.T) {
 		if runtime.GOOS == "windows" {
 			t.Skip("path_rename.rs ENOTDIR case is unix-only in this plan")
 		}
-		s, buf := newTestState()
+		s, buf := newTestState(nil)
 		hostDir := setupWritableMount(t, s, buf)
 
 		srcDir := filepath.Join(hostDir, "source")

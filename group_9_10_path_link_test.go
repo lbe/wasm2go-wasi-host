@@ -69,7 +69,7 @@ func TestGroup9_10PathLink(t *testing.T) {
 
 	t.Run("hard link success same dir and subdir", func(t *testing.T) {
 		t.Parallel()
-		s, buf := newTestState()
+		s, buf := newTestState(nil)
 		hostDir := setupWritableMount(t, s, buf)
 
 		if err := os.WriteFile(filepath.Join(hostDir, "file"), []byte("data"), 0644); err != nil {
@@ -159,7 +159,7 @@ func TestGroup9_10PathLink(t *testing.T) {
 
 	t.Run("Xpath_link returns EEXIST when link already exists", func(t *testing.T) {
 		t.Parallel()
-		s, buf := newTestState()
+		s, buf := newTestState(nil)
 		hostDir := setupWritableMount(t, s, buf)
 
 		// Create a file to link to.
@@ -184,7 +184,7 @@ func TestGroup9_10PathLink(t *testing.T) {
 
 	t.Run("Xpath_link returns EEXIST when new path is an existing directory", func(t *testing.T) {
 		t.Parallel()
-		s, buf := newTestState()
+		s, buf := newTestState(nil)
 		hostDir := setupWritableMount(t, s, buf)
 
 		if err := os.WriteFile(filepath.Join(hostDir, "file"), []byte("data"), 0644); err != nil {
@@ -206,7 +206,7 @@ func TestGroup9_10PathLink(t *testing.T) {
 
 	t.Run("Xpath_link returns EEXIST for self-link", func(t *testing.T) {
 		t.Parallel()
-		s, buf := newTestState()
+		s, buf := newTestState(nil)
 		hostDir := setupWritableMount(t, s, buf)
 
 		// Create a file.
@@ -224,7 +224,7 @@ func TestGroup9_10PathLink(t *testing.T) {
 
 	t.Run("Xpath_link returns EPERM or EACCES when linking to a directory", func(t *testing.T) {
 		t.Parallel()
-		s, buf := newTestState()
+		s, buf := newTestState(nil)
 		hostDir := setupWritableMount(t, s, buf)
 
 		// Create a directory to link to.
@@ -243,7 +243,7 @@ func TestGroup9_10PathLink(t *testing.T) {
 
 	t.Run("Xpath_link returns ENOENT when trailing slash on new path for a non-directory", func(t *testing.T) {
 		t.Parallel()
-		s, buf := newTestState()
+		s, buf := newTestState(nil)
 		hostDir := setupWritableMount(t, s, buf)
 
 		// Create a file.
@@ -263,7 +263,7 @@ func TestGroup9_10PathLink(t *testing.T) {
 	// Cycle 3 behavior: path_link hard-links symlink inodes without following and rejects SYMLINK_FOLLOW lookup on symlink paths
 	t.Run("Xpath_link returns ESUCCESS for symlink hard-link and rejects SYMLINK_FOLLOW", func(t *testing.T) {
 		t.Parallel()
-		s, buf := newTestState()
+		s, buf := newTestState(nil)
 		hostDir := setupWritableMount(t, s, buf)
 
 		// Skip if NO_DANGLING_FILESYSTEM is set (parity with wasi-testsuite)

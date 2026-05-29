@@ -45,7 +45,7 @@ func assertTimesUnchanged(t *testing.T, hostPath string, wantAtime, wantMtime ti
 }
 
 func TestFdFilestatSetTimesRejectsContradictoryFlags(t *testing.T) {
-	s, _ := newTestState()
+	s, _ := newTestState(nil)
 	filePath := setupOsFileFd(t, s, 5, []byte("data"))
 
 	// Set both times to a known past value so we can detect unwanted mutation.
@@ -74,7 +74,7 @@ func TestFdFilestatSetTimesRejectsContradictoryFlags(t *testing.T) {
 	// Also verify the same behavior when the fd was opened via path_open
 	// (closes the gap from plan traceability which assumes path_open).
 	t.Run("via_path_open", func(t *testing.T) {
-		s2, buf := newTestState()
+		s2, buf := newTestState(nil)
 		hostDir := setupWritableMount(t, s2, buf)
 		fname := "po_contradictory.txt"
 		hostPath := filepath.Join(hostDir, fname)
@@ -113,7 +113,7 @@ func TestFdFilestatSetTimesRejectsContradictoryFlags(t *testing.T) {
 }
 
 func TestPathFilestatSetTimesRejectsContradictoryFlags(t *testing.T) {
-	s, buf := newTestState()
+	s, buf := newTestState(nil)
 	hostDir := setupWritableMount(t, s, buf)
 	fname := "contradictory.txt"
 	hostPath := filepath.Join(hostDir, fname)

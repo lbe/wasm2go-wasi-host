@@ -17,7 +17,7 @@ func TestWritablePreopenRightsMatchWasiTestsuite(t *testing.T) {
 
 	buf := make([]byte, 65536)
 	tmpDir := t.TempDir()
-	s := New(func() []byte { return buf }, WithHostDirectoryPreopen("/data", tmpDir))
+	s := New(func() []byte { return buf }, NewModuleConfig().WithHostDirectoryPreopen("/data", tmpDir))
 
 	const preopenFd = int32(3)
 

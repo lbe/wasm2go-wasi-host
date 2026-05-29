@@ -7,7 +7,7 @@ import (
 )
 
 func TestFdFilestatSetTimesAtim(t *testing.T) {
-	s, _ := newTestState()
+	s, _ := newTestState(nil)
 	fd := int32(5)
 	filePath := setupOsFileFd(t, s, int(fd), []byte("data"))
 
@@ -55,7 +55,7 @@ func TestFdFilestatSetTimesAtimPreservesExistingTests(t *testing.T) {
 	targetMtimNs := targetMtim.UnixNano()
 
 	t.Run("Xfd_filestat_set_times fstMtim updates mtime on osFile", func(t *testing.T) {
-		s, _ := newTestState()
+		s, _ := newTestState(nil)
 		fd := int32(5)
 		filePath := setupOsFileFd(t, s, int(fd), []byte("data"))
 
@@ -77,7 +77,7 @@ func TestFdFilestatSetTimesAtimPreservesExistingTests(t *testing.T) {
 	})
 
 	t.Run("Xfd_filestat_set_times fstMtimNow updates mtime to current", func(t *testing.T) {
-		s, _ := newTestState()
+		s, _ := newTestState(nil)
 		fd := int32(5)
 		filePath := setupOsFileFd(t, s, int(fd), []byte("data"))
 

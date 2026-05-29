@@ -22,7 +22,7 @@ func TestPathMutationSyscallsConfinement(t *testing.T) {
 
 	buf := make([]byte, 1024)
 	mem := func() []byte { return buf }
-	s := New(mem, WithHostDirectoryPreopen("/data", preopenDir))
+	s := New(mem, NewModuleConfig().WithHostDirectoryPreopen("/data", preopenDir))
 
 	const (
 		dirfd    = int32(3)
@@ -171,7 +171,7 @@ func TestNestedParentSegmentPathsCannotEscapeWritableHostPreopen(t *testing.T) {
 				}
 
 				buf := make([]byte, 1024)
-				s := New(func() []byte { return buf }, WithHostDirectoryPreopen("/data", preopenDir))
+				s := New(func() []byte { return buf }, NewModuleConfig().WithHostDirectoryPreopen("/data", preopenDir))
 				const fdPtr = 480
 				off := int32(100)
 				copy(buf[off:], gp.p)
@@ -200,7 +200,7 @@ func TestNestedParentSegmentPathsCannotEscapeWritableHostPreopen(t *testing.T) {
 				outsideDir := filepath.Join(tmpDir, "outside")
 
 				buf := make([]byte, 1024)
-				s := New(func() []byte { return buf }, WithHostDirectoryPreopen("/data", preopenDir))
+				s := New(func() []byte { return buf }, NewModuleConfig().WithHostDirectoryPreopen("/data", preopenDir))
 				off := int32(100)
 				copy(buf[off:], gp.p)
 				errno := s.Xpath_create_directory(3, off, int32(len(gp.p)))
@@ -227,7 +227,7 @@ func TestNestedParentSegmentPathsCannotEscapeWritableHostPreopen(t *testing.T) {
 				}
 
 				buf := make([]byte, 1024)
-				s := New(func() []byte { return buf }, WithHostDirectoryPreopen("/data", preopenDir))
+				s := New(func() []byte { return buf }, NewModuleConfig().WithHostDirectoryPreopen("/data", preopenDir))
 				off := int32(100)
 				copy(buf[off:], gp.p)
 				errno := s.Xpath_remove_directory(3, off, int32(len(gp.p)))
@@ -254,7 +254,7 @@ func TestNestedParentSegmentPathsCannotEscapeWritableHostPreopen(t *testing.T) {
 				}
 
 				buf := make([]byte, 1024)
-				s := New(func() []byte { return buf }, WithHostDirectoryPreopen("/data", preopenDir))
+				s := New(func() []byte { return buf }, NewModuleConfig().WithHostDirectoryPreopen("/data", preopenDir))
 				off := int32(100)
 				copy(buf[off:], gp.p)
 				errno := s.Xpath_unlink_file(3, off, int32(len(gp.p)))
@@ -282,7 +282,7 @@ func TestNestedParentSegmentPathsCannotEscapeWritableHostPreopen(t *testing.T) {
 				outsideDest := filepath.Join(tmpDir, "outside")
 
 				buf := make([]byte, 1024)
-				s := New(func() []byte { return buf }, WithHostDirectoryPreopen("/data", preopenDir))
+				s := New(func() []byte { return buf }, NewModuleConfig().WithHostDirectoryPreopen("/data", preopenDir))
 				const pathOff1, pathOff2 = 100, 200
 				off1, len1 := int32(pathOff1), int32(copy(buf[pathOff1:], "rename_src"))
 				off2, len2 := int32(pathOff2), int32(copy(buf[pathOff2:], gp.p))
@@ -314,7 +314,7 @@ func TestNestedParentSegmentPathsCannotEscapeWritableHostPreopen(t *testing.T) {
 				outsideLink := filepath.Join(tmpDir, "outside")
 
 				buf := make([]byte, 1024)
-				s := New(func() []byte { return buf }, WithHostDirectoryPreopen("/data", preopenDir))
+				s := New(func() []byte { return buf }, NewModuleConfig().WithHostDirectoryPreopen("/data", preopenDir))
 				const pathOff1, pathOff2 = 100, 200
 				off1, len1 := int32(pathOff1), int32(copy(buf[pathOff1:], "link_src"))
 				off2, len2 := int32(pathOff2), int32(copy(buf[pathOff2:], gp.p))
@@ -339,7 +339,7 @@ func TestNestedParentSegmentPathsCannotEscapeWritableHostPreopen(t *testing.T) {
 				outsideLink := filepath.Join(tmpDir, "outside")
 
 				buf := make([]byte, 1024)
-				s := New(func() []byte { return buf }, WithHostDirectoryPreopen("/data", preopenDir))
+				s := New(func() []byte { return buf }, NewModuleConfig().WithHostDirectoryPreopen("/data", preopenDir))
 				const targetOff, linkOff = 100, 200
 				tlen := int32(copy(buf[targetOff:], "/etc/passwd"))
 				llen := int32(copy(buf[linkOff:], gp.p))
@@ -367,7 +367,7 @@ func TestNestedParentSegmentPathsCannotEscapeWritableHostPreopen(t *testing.T) {
 				}
 
 				buf := make([]byte, 1024)
-				s := New(func() []byte { return buf }, WithHostDirectoryPreopen("/data", preopenDir))
+				s := New(func() []byte { return buf }, NewModuleConfig().WithHostDirectoryPreopen("/data", preopenDir))
 				const bufOff, nreadOff = 300, 400
 				off := int32(100)
 				copy(buf[off:], gp.p)
@@ -416,7 +416,7 @@ func TestNestedParentSegmentPathsPathFilestatCannotEscapeWritableHostPreopen(t *
 			origMtime := fi0.ModTime()
 
 			buf := make([]byte, 4096)
-			s := New(func() []byte { return buf }, WithHostDirectoryPreopen("/data", preopenDir))
+			s := New(func() []byte { return buf }, NewModuleConfig().WithHostDirectoryPreopen("/data", preopenDir))
 			const (
 				dirfd   int32 = 3
 				pathOff int32 = 100

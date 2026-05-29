@@ -14,7 +14,7 @@ func TestFilestatMutations(t *testing.T) {
 	targetMtimNs := targetMtim.UnixNano()
 
 	t.Run("Xfd_filestat_set_size truncates osFile to 5 bytes", func(t *testing.T) {
-		s, _ := newTestState()
+		s, _ := newTestState(nil)
 		filePath := setupOsFileFd(t, s, 5, []byte("ABCDEFGHIJ"))
 
 		errno := s.Xfd_filestat_set_size(5, 5)
@@ -38,7 +38,7 @@ func TestFilestatMutations(t *testing.T) {
 	})
 
 	t.Run("Xfd_filestat_set_size on FSFileWrap returns ESUCCESS with no mutation", func(t *testing.T) {
-		s, _ := newTestState()
+		s, _ := newTestState(nil)
 		dir := t.TempDir()
 		if err := os.WriteFile(filepath.Join(dir, "ro.txt"), []byte("HELLO"), 0644); err != nil {
 			t.Fatal(err)
@@ -69,7 +69,7 @@ func TestFilestatMutations(t *testing.T) {
 	})
 
 	t.Run("Xfd_filestat_set_times fstMtim updates mtime on osFile", func(t *testing.T) {
-		s, _ := newTestState()
+		s, _ := newTestState(nil)
 		filePath := setupOsFileFd(t, s, 5, []byte("data"))
 
 		errno := s.Xfd_filestat_set_times(5, 0, targetMtimNs, fstMtim)
@@ -90,7 +90,7 @@ func TestFilestatMutations(t *testing.T) {
 	})
 
 	t.Run("Xfd_filestat_set_times fstFlags=0 does not mutate mtime", func(t *testing.T) {
-		s, _ := newTestState()
+		s, _ := newTestState(nil)
 		filePath := setupOsFileFd(t, s, 5, []byte("data"))
 		fi0, err := os.Stat(filePath)
 		if err != nil {
@@ -113,7 +113,7 @@ func TestFilestatMutations(t *testing.T) {
 	})
 
 	t.Run("Xpath_filestat_set_times fstMtim updates mtime by path", func(t *testing.T) {
-		s, buf := newTestState()
+		s, buf := newTestState(nil)
 		hostDir := setupWritableMount(t, s, buf)
 		fname := "testfile.txt"
 		if err := os.WriteFile(filepath.Join(hostDir, fname), []byte("content"), 0644); err != nil {
@@ -139,7 +139,7 @@ func TestFilestatMutations(t *testing.T) {
 	})
 
 	t.Run("Xpath_filestat_set_times fstFlags=0 is no-op", func(t *testing.T) {
-		s, buf := newTestState()
+		s, buf := newTestState(nil)
 		hostDir := setupWritableMount(t, s, buf)
 		fname := "noop.txt"
 		if err := os.WriteFile(filepath.Join(hostDir, fname), []byte("x"), 0644); err != nil {
@@ -166,7 +166,7 @@ func TestFilestatMutations(t *testing.T) {
 	})
 
 	t.Run("Xfd_filestat_set_times fstMtimNow updates mtime to current", func(t *testing.T) {
-		s, _ := newTestState()
+		s, _ := newTestState(nil)
 		filePath := setupOsFileFd(t, s, 5, []byte("data"))
 
 		// Set to a past time first to ensure NOW change is visible
@@ -191,7 +191,7 @@ func TestFilestatMutations(t *testing.T) {
 	})
 
 	t.Run("Xfd_filestat_set_times fstAtimNow updates atime but not mtime", func(t *testing.T) {
-		s, _ := newTestState()
+		s, _ := newTestState(nil)
 		filePath := setupOsFileFd(t, s, 5, []byte("data"))
 
 		// Ensure we have a baseline and distinguish from "now"
@@ -231,7 +231,7 @@ func TestFilestatMutations(t *testing.T) {
 	})
 
 	t.Run("Xpath_filestat_set_times error on nonexistent path", func(t *testing.T) {
-		s, buf := newTestState()
+		s, buf := newTestState(nil)
 		_ = setupWritableMount(t, s, buf)
 		pathOff, pathLen := writePath(buf, 500, "/nonexistent/path/deleted.txt")
 		errno := s.Xpath_filestat_set_times(3, 0, pathOff, pathLen, 0, targetMtimNs, fstMtim)
@@ -241,7 +241,7 @@ func TestFilestatMutations(t *testing.T) {
 	})
 
 	t.Run("Xpath_filestat_set_times fstMtimNow updates mtime to current", func(t *testing.T) {
-		s, buf := newTestState()
+		s, buf := newTestState(nil)
 		hostDir := setupWritableMount(t, s, buf)
 		fname := "now.txt"
 		hostPath := filepath.Join(hostDir, fname)
@@ -273,7 +273,7 @@ func TestFilestatMutations(t *testing.T) {
 	})
 
 	t.Run("Xpath_filestat_set_times fstAtim updates atime by path", func(t *testing.T) {
-		s, buf := newTestState()
+		s, buf := newTestState(nil)
 		hostDir := setupWritableMount(t, s, buf)
 		fname := "atim.txt"
 		hostPath := filepath.Join(hostDir, fname)
@@ -321,7 +321,7 @@ func TestFilestatMutations(t *testing.T) {
 	})
 
 	t.Run("Xpath_filestat_set_times fstAtimNow updates atime but not mtime", func(t *testing.T) {
-		s, buf := newTestState()
+		s, buf := newTestState(nil)
 		hostDir := setupWritableMount(t, s, buf)
 		fname := "atim_now.txt"
 		hostPath := filepath.Join(hostDir, fname)

@@ -23,7 +23,7 @@ func (*noSeekerFile) Stat() (fs.FileInfo, error) { return nil, nil }
 func TestWASIStubs(t *testing.T) {
 	t.Parallel()
 
-	s := New(nil)
+	s := New(nil, nil)
 
 	// No-op stubs returning ESuccess.
 	if rc := s.Xfd_fdstat_set_flags(0, 0); rc != wasiESuccess {
@@ -87,19 +87,21 @@ func TestAssertSingleOwner(t *testing.T) {
 	t.Parallel()
 
 	t.Run("disabled by default", func(t *testing.T) {
-		s := New(nil)
+		s := New(nil, nil)
 		s.assertSingleOwner()
 		s.assertSingleOwner() // no panic
 	})
 
 	t.Run("same goroutine ok", func(t *testing.T) {
-		s := New(nil, WithOwnerAssertion())
+		s := New(nil, NewModuleConfig())
+		s.assertOwner = true
 		s.assertSingleOwner() // sets ownerGID
 		s.assertSingleOwner() // same goroutine – ok
 	})
 
 	t.Run("different goroutine panics", func(t *testing.T) {
-		s := New(nil, WithOwnerAssertion())
+		s := New(nil, NewModuleConfig())
+		s.assertOwner = true
 		s.assertSingleOwner() // set owner to current goroutine
 
 		result := make(chan bool, 1)
@@ -118,16 +120,17 @@ func TestAssertSingleOwner(t *testing.T) {
 // TestLogTrace covers the trace-enabled branch of logTrace.
 func TestLogTrace(t *testing.T) {
 	t.Parallel()
-	s := New(nil, WithTracing())
+	s := New(nil, NewModuleConfig())
+	s.trace = true
 	s.logTrace("test value %d", 42) // should not panic
-	s2 := New(nil)
+	s2 := New(nil, nil)
 	s2.logTrace("should not print") // early return branch
 }
 
 // TestWASIReadBytesNilPaths covers the nil-return branches of readBytes.
 func TestWASIReadBytesNilPaths(t *testing.T) {
 	t.Parallel()
-	s := New(nil)
+	s := New(nil, nil)
 	if got := s.readBytes(0, 10); got != nil {
 		t.Errorf("readBytes(0, 10) = %v, want nil", got)
 	}
@@ -141,8 +144,7 @@ func TestResolvePath(t *testing.T) {
 	t.Parallel()
 
 	s := New(nil,
-		WithReadOnlyFS("/", fstest.MapFS{}),
-		WithReadOnlyFS("/lib", fstest.MapFS{}),
+		NewModuleConfig().WithReadOnlyFS("/", fstest.MapFS{}).WithReadOnlyFS("/lib", fstest.MapFS{}),
 	)
 
 	tests := []struct {
@@ -166,7 +168,7 @@ func TestResolvePath(t *testing.T) {
 	}
 
 	// Path that matches no mount → nil.
-	s2 := New(nil, WithReadOnlyFS("/lib", fstest.MapFS{}))
+	s2 := New(nil, NewModuleConfig().WithReadOnlyFS("/lib", fstest.MapFS{}))
 	m, _ := s2.resolvePath("/usr/bin")
 	if m != nil {
 		t.Errorf("expected nil mount for unmatched path, got non-nil")

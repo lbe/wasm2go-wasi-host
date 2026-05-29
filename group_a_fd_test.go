@@ -20,7 +20,7 @@ func newWMState(t *testing.T) (*State, []byte, string) {
 	buf := make([]byte, 65536)
 	tmpDir := t.TempDir()
 	s := New(func() []byte { return buf },
-		WithHostDirectoryPreopen("/tmp", tmpDir),
+		NewModuleConfig().WithHostDirectoryPreopen("/tmp", tmpDir),
 	)
 	return s, buf, tmpDir
 }
@@ -41,7 +41,7 @@ func openHostFile(t *testing.T, s *State, buf []byte, pathOff int32, name string
 func TestMem(t *testing.T) {
 	t.Parallel()
 	buf := make([]byte, 65536)
-	s := New(func() []byte { return buf })
+	s := New(func() []byte { return buf }, nil)
 	got := s.Mem()
 	if len(got) != len(buf) || &got[0] != &buf[0] {
 		t.Error("Mem() did not return the slice from the mem callback")
@@ -380,7 +380,7 @@ func TestFdRead(t *testing.T) {
 
 	t.Run("stdin path", func(t *testing.T) {
 		buf := make([]byte, 65536)
-		s := New(func() []byte { return buf }, WithStdin(strings.NewReader("hello")))
+		s := New(func() []byte { return buf }, NewModuleConfig().WithStdin(strings.NewReader("hello")))
 		binary.LittleEndian.PutUint32(buf[iovsOff:], uint32(dataBuf))
 		binary.LittleEndian.PutUint32(buf[iovsOff+4:], 5)
 		if errno := s.Xfd_read(0, iovsOff, 1, nreadOff); errno != wasiESuccess {
@@ -396,7 +396,7 @@ func TestFdRead(t *testing.T) {
 
 	t.Run("stdin nil returns success nread 0", func(t *testing.T) {
 		buf := make([]byte, 65536)
-		s := New(func() []byte { return buf }) // no WithStdin
+		s := New(func() []byte { return buf }, nil) // no WithStdin
 		binary.LittleEndian.PutUint32(buf[iovsOff:], uint32(dataBuf))
 		binary.LittleEndian.PutUint32(buf[iovsOff+4:], 5)
 		if errno := s.Xfd_read(0, iovsOff, 1, nreadOff); errno != wasiESuccess {
@@ -468,7 +468,7 @@ func TestFdWrite(t *testing.T) {
 	t.Run("stdout path", func(t *testing.T) {
 		buf := make([]byte, 65536)
 		var out bytes.Buffer
-		s := New(func() []byte { return buf }, WithStdout(&out))
+		s := New(func() []byte { return buf }, NewModuleConfig().WithStdout(&out))
 		copy(buf[dataBuf:], "hello")
 		binary.LittleEndian.PutUint32(buf[iovsOff:], uint32(dataBuf))
 		binary.LittleEndian.PutUint32(buf[iovsOff+4:], 5)
@@ -487,7 +487,7 @@ func TestFdWrite(t *testing.T) {
 		buf := make([]byte, 65536)
 		// errorWriter will return n=2 then error
 		ew := &errorWriter{err: fmt.Errorf("disk full"), n: 2}
-		s := New(func() []byte { return buf }, WithStdout(ew))
+		s := New(func() []byte { return buf }, NewModuleConfig().WithStdout(ew))
 
 		copy(buf[dataBuf:], "hello") // 5 bytes
 		binary.LittleEndian.PutUint32(buf[iovsOff:], uint32(dataBuf))
@@ -507,7 +507,7 @@ func TestFdWrite(t *testing.T) {
 	t.Run("stderr path", func(t *testing.T) {
 		buf := make([]byte, 65536)
 		var errOut bytes.Buffer
-		s := New(func() []byte { return buf }, WithStderr(&errOut))
+		s := New(func() []byte { return buf }, NewModuleConfig().WithStderr(&errOut))
 		copy(buf[dataBuf:], "world")
 		binary.LittleEndian.PutUint32(buf[iovsOff:], uint32(dataBuf))
 		binary.LittleEndian.PutUint32(buf[iovsOff+4:], 5)
@@ -521,7 +521,7 @@ func TestFdWrite(t *testing.T) {
 
 	t.Run("stdout nil no panic", func(t *testing.T) {
 		buf := make([]byte, 65536)
-		s := New(func() []byte { return buf }) // no WithStdout
+		s := New(func() []byte { return buf }, nil) // no WithStdout
 		copy(buf[dataBuf:], "data")
 		binary.LittleEndian.PutUint32(buf[iovsOff:], uint32(dataBuf))
 		binary.LittleEndian.PutUint32(buf[iovsOff+4:], 4)
@@ -902,7 +902,7 @@ func TestXpathFilestatGet(t *testing.T) {
 	t.Run("read-only mount file", func(t *testing.T) {
 		buf := make([]byte, 65536)
 		s := New(func() []byte { return buf },
-			WithReadOnlyFS("/tmp", fstest.MapFS{
+			NewModuleConfig().WithReadOnlyFS("/tmp", fstest.MapFS{
 				"a.txt": &fstest.MapFile{Data: []byte("content")},
 			}),
 		)
@@ -937,7 +937,7 @@ func TestXpathFilestatGet(t *testing.T) {
 			"lib/perl.pm": &fstest.MapFile{Data: []byte("# perl")},
 		}
 		s := New(func() []byte { return buf },
-			WithHostDirectoryPreopen("/tmp", tmpDir),
+			NewModuleConfig().WithHostDirectoryPreopen("/tmp", tmpDir),
 		)
 		s.mounts[len(s.mounts)-1].root = overlay
 		p := "lib/perl.pm"
@@ -968,7 +968,7 @@ func TestXpathOpen(t *testing.T) {
 
 	t.Run("/dev/null", func(t *testing.T) {
 		buf := make([]byte, 65536)
-		s := New(func() []byte { return buf })
+		s := New(func() []byte { return buf }, nil)
 		p := "/dev/null"
 		copy(buf[pathOff:], p)
 		if errno := s.Xpath_open(0, 0, pathOff, int32(len(p)), 0, 0, 0, 0, fdPtr); errno != wasiESuccess {
@@ -983,7 +983,7 @@ func TestXpathOpen(t *testing.T) {
 	t.Run("read-only mount file", func(t *testing.T) {
 		buf := make([]byte, 65536)
 		s := New(func() []byte { return buf },
-			WithReadOnlyFS("/tmp", fstest.MapFS{
+			NewModuleConfig().WithReadOnlyFS("/tmp", fstest.MapFS{
 				"a.txt": &fstest.MapFile{Data: []byte("hello")},
 			}),
 		)
@@ -1060,7 +1060,7 @@ func TestPathOpenDistinguishesPermissionDeniedFromMissingOnReadOnlyFS(t *testing
 	)
 	buf := make([]byte, 65536)
 	s := New(func() []byte { return buf },
-		WithReadOnlyFS("/data", errorFS{name: "secret", err: fs.ErrPermission}),
+		NewModuleConfig().WithReadOnlyFS("/data", errorFS{name: "secret", err: fs.ErrPermission}),
 	)
 
 	copy(buf[pathOff:], "secret")
@@ -1251,7 +1251,7 @@ func TestXpathRename(t *testing.T) {
 
 	t.Run("EROFS read-only mount", func(t *testing.T) {
 		buf := make([]byte, 65536)
-		s := New(func() []byte { return buf }, WithReadOnlyFS("/tmp", fstest.MapFS{}))
+		s := New(func() []byte { return buf }, NewModuleConfig().WithReadOnlyFS("/tmp", fstest.MapFS{}))
 		srcPathOff, srcLen := writePath(buf, srcOff, "a.txt")
 		dstPathOff, dstLen := writePath(buf, dstOff, "b.txt")
 		if errno := s.Xpath_rename(3, srcPathOff, srcLen, 3, dstPathOff, dstLen); errno != wasiEROFS {
@@ -1261,7 +1261,7 @@ func TestXpathRename(t *testing.T) {
 
 	t.Run("ENOENT no mounts", func(t *testing.T) {
 		buf := make([]byte, 65536)
-		s := New(func() []byte { return buf })
+		s := New(func() []byte { return buf }, nil)
 		srcPathOff, srcLen := writePath(buf, srcOff, "a.txt")
 		dstPathOff, dstLen := writePath(buf, dstOff, "b.txt")
 		if errno := s.Xpath_rename(0, srcPathOff, srcLen, 0, dstPathOff, dstLen); errno != wasiENoEnt {
@@ -1282,7 +1282,7 @@ func TestXpollOneoff(t *testing.T) {
 
 	t.Run("clock subscription", func(t *testing.T) {
 		buf := make([]byte, 65536)
-		s := New(func() []byte { return buf })
+		s := New(func() []byte { return buf }, nil)
 		// tag=0 (clock) at offset 8, timeout=1ns at offset 24
 		buf[inPtr+8] = 0
 		binary.LittleEndian.PutUint64(buf[inPtr+24:], 1)
@@ -1299,7 +1299,7 @@ func TestXpollOneoff(t *testing.T) {
 
 	t.Run("fd_read valid fd", func(t *testing.T) {
 		buf := make([]byte, 65536)
-		s := New(func() []byte { return buf })
+		s := New(func() []byte { return buf }, nil)
 		binary.LittleEndian.PutUint32(buf[inPtr+8:], 1)  // tag: fd_read
 		binary.LittleEndian.PutUint32(buf[inPtr+16:], 0) // fd=0 (exists)
 		if errno := s.Xpoll_oneoff(inPtr, outPtr, 1, neventsPtr); errno != wasiESuccess {
@@ -1312,7 +1312,7 @@ func TestXpollOneoff(t *testing.T) {
 
 	t.Run("fd_read invalid fd", func(t *testing.T) {
 		buf := make([]byte, 65536)
-		s := New(func() []byte { return buf })
+		s := New(func() []byte { return buf }, nil)
 		binary.LittleEndian.PutUint32(buf[inPtr+8:], 1)   // tag: fd_read
 		binary.LittleEndian.PutUint32(buf[inPtr+16:], 99) // invalid fd
 		if errno := s.Xpoll_oneoff(inPtr, outPtr, 1, neventsPtr); errno != wasiESuccess {
@@ -1328,7 +1328,7 @@ func TestXpollOneoff(t *testing.T) {
 
 	t.Run("multiple subscriptions", func(t *testing.T) {
 		buf := make([]byte, 65536)
-		s := New(func() []byte { return buf })
+		s := New(func() []byte { return buf }, nil)
 		// Sub 0: clock, 1ns
 		binary.LittleEndian.PutUint32(buf[inPtr+8:], 0)  // tag: clock
 		binary.LittleEndian.PutUint64(buf[inPtr+24:], 1) // timeout: 1ns

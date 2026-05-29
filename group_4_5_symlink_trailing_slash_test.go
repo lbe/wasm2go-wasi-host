@@ -24,7 +24,7 @@ func TestPathSymlinkTrailingSlashSemantics(t *testing.T) {
 			t.Skip("NO_DANGLING_FILESYSTEM is set")
 		}
 
-		s, buf := newTestState()
+		s, buf := newTestState(nil)
 		hostDir := setupWritableMount(t, s, buf)
 		copy(buf[oldPathOff:], "source")
 
@@ -59,7 +59,7 @@ func TestPathSymlinkTrailingSlashSemantics(t *testing.T) {
 	// --- Existing directory cases ---
 	t.Run("existing directory", func(t *testing.T) {
 		t.Parallel()
-		s, buf := newTestState()
+		s, buf := newTestState(nil)
 		hostDir := setupWritableMount(t, s, buf)
 		_ = hostDir
 		copy(buf[oldPathOff:], "source")
@@ -94,7 +94,7 @@ func TestPathSymlinkTrailingSlashSemantics(t *testing.T) {
 	// --- Existing file cases ---
 	t.Run("existing file", func(t *testing.T) {
 		t.Parallel()
-		s, buf := newTestState()
+		s, buf := newTestState(nil)
 		hostDir := setupWritableMount(t, s, buf)
 		copy(buf[oldPathOff:], "source")
 

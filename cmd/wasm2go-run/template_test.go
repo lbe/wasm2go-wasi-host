@@ -23,14 +23,14 @@ func TestGenerateMain(t *testing.T) {
 			t.Fatalf("generateMain failed: %v", err)
 		}
 
-		// Ensure it parses
+		// Ensure generated code is valid Go syntax
 		fset := token.NewFileSet()
 		_, err = parser.ParseFile(fset, "main.go", got, 0)
 		if err != nil {
 			t.Errorf("generated code does not parse: %v\nCode:\n%s", err, got)
 		}
 
-		// Check package and import
+		// Check package and import declarations
 		if !strings.Contains(got, "package main") {
 			t.Error("expected 'package main'")
 		}
@@ -38,14 +38,15 @@ func TestGenerateMain(t *testing.T) {
 			t.Error("expected aliased import: wasm \"myreplacemod/module\"")
 		}
 
-		// Check configuration wiring
+		// Check configuration wiring via expected code snippets
 		expectedSnippets := []string{
 			`WithArgs("foo.wasm", "a")`,
-			`WithEnv("K=V")`,
+			`WithEnv("K", "V")`,
 			`WithHostDirectoryPreopen("g", "/h")`,
 			`WithStdin`,
 			`WithStdout`,
 			`WithStderr`,
+			`NewModuleConfig()`,
 			`wasm.New(state)`,
 			`mod.X_start()`,
 			`ExitError`,
@@ -55,6 +56,26 @@ func TestGenerateMain(t *testing.T) {
 		for _, snippet := range expectedSnippets {
 			if !strings.Contains(got, snippet) {
 				t.Errorf("missing snippet: %s", snippet)
+			}
+		}
+
+		// Verify no WithEnvRaw remains — all env must use WithEnv(key, value)
+		if strings.Contains(got, "WithEnvRaw") {
+			t.Error("generated code still uses WithEnvRaw; expected WithEnv(key, value) builder only")
+		}
+
+		// Verify no root option function references exist in generated code
+		// All options should be called on ModuleConfig, not as package-level functions
+		for _, rootFn := range []string{
+			"wasihost.WithStdin",
+			"wasihost.WithStdout",
+			"wasihost.WithStderr",
+			"wasihost.WithArgs",
+			"wasihost.WithEnvRaw",
+			"wasihost.WithHostDirectoryPreopen",
+		} {
+			if strings.Contains(got, rootFn) {
+				t.Errorf("generated code contains root option function reference: %s", rootFn)
 			}
 		}
 	})
@@ -82,7 +103,7 @@ func TestGenerateMain(t *testing.T) {
 			t.Errorf("generated code with escapes does not parse: %v\nCode:\n%s", err, got)
 		}
 
-		if !strings.Contains(got, `"b=escap \" ing"`) {
+		if !strings.Contains(got, `WithEnv("b", "escap \" ing")`) {
 			t.Error("expected escaped environment variable string")
 		}
 	})

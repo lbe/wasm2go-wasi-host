@@ -24,7 +24,7 @@ func TestReadOnlyFSPreopen(t *testing.T) {
 	mem := func() []byte { return buf }
 
 	// API expectation: WithReadOnlyFS
-	s := New(mem, WithReadOnlyFS(guestPath, readOnlyFS))
+	s := New(mem, NewModuleConfig().WithReadOnlyFS(guestPath, readOnlyFS))
 
 	t.Run("open and read existing file succeeds", func(t *testing.T) {
 		const fdPtr = 100

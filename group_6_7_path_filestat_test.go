@@ -20,7 +20,7 @@ func TestPathFilestatOpenFdFlagsAndSetTimes(t *testing.T) {
 		fdstatFlagsOff int32 = 2 // fdstat fs_flags field
 	)
 
-	s, buf := newTestState()
+	s, buf := newTestState(nil)
 	_ = setupWritableMount(t, s, buf)
 
 	const fname = "file"
@@ -102,7 +102,7 @@ func TestPathAndFdFilestatDevIno(t *testing.T) {
 		fdPtrB    int32 = 604
 	)
 
-	s, buf := newTestState()
+	s, buf := newTestState(nil)
 	hostDir := setupWritableMount(t, s, buf)
 
 	for _, name := range []string{"a.txt", "b.txt"} {
@@ -214,7 +214,7 @@ func TestFdFilestatSetSizeAndTimes(t *testing.T) {
 		statOff int32 = 700
 	)
 
-	s, buf := newTestState()
+	s, buf := newTestState(nil)
 	_ = setupWritableMount(t, s, buf)
 
 	const fname = "file"

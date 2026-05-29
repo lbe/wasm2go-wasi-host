@@ -18,7 +18,7 @@ func TestPathOpenTruncationUsesPathFilestatSetSizeRight(t *testing.T) {
 		statPtr int32 = 800
 	)
 
-	s, buf := newTestState()
+	s, buf := newTestState(nil)
 	hostDir := t.TempDir()
 	baseMask := wasiTestsuiteDirectoryBaseRightsMask()
 	inheritingMask := wasiTestsuiteDirectoryInheritingRightsMask()

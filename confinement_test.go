@@ -29,7 +29,7 @@ func TestHostDirectoryPreopenConfinement(t *testing.T) {
 	buf := make([]byte, 1024)
 	mem := func() []byte { return buf }
 
-	s := New(mem, WithHostDirectoryPreopen(guestPath, root))
+	s := New(mem, NewModuleConfig().WithHostDirectoryPreopen(guestPath, root))
 
 	// WASI error for capability violations (ENOTCAPABLE = 76).
 	const wasiENotCap int32 = 76

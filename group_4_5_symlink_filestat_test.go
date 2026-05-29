@@ -11,7 +11,7 @@ import (
 // path_filestat_set_times distinguish a symlink from its target based on the
 // LOOKUPFLAGS_SYMLINK_FOLLOW flag.
 func TestPathFilestatSymlinkFollowSemantics(t *testing.T) {
-	s, buf := newTestState()
+	s, buf := newTestState(nil)
 	hostDir := setupWritableMount(t, s, buf)
 
 	const (

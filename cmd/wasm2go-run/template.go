@@ -7,10 +7,8 @@ import (
 	"text/template"
 )
 
-// generateMain renders the wrapper main.go that wires wasihost to the
-// transpiled wasm2go module.
-func generateMain(cfg Config, imports []string, moduleName string) (string, error) {
-	const mainTmpl = `package main
+// mainTmpl is the Go template for generating the runner main.go file.
+const mainTmpl = `package main
 
 import (
 	"os"
@@ -23,16 +21,10 @@ func main() {
 	var mod *wasm.Module
 	state := wasihost.New(
 		func() []byte { return *mod.Xmemory().Slice() },
-		wasihost.WithArgs({{.WasmArgs}}),
-{{- range .Env}}
-		wasihost.WithEnv({{.}}),
-{{- end}}
-{{- range .Dirs}}
-		wasihost.WithHostDirectoryPreopen({{.Guest}}, {{.Host}}),
-{{- end}}
-		wasihost.WithStdin(os.Stdin),
-		wasihost.WithStdout(os.Stdout),
-		wasihost.WithStderr(os.Stderr),
+		wasihost.NewModuleConfig().{{.WasmArgs}}{{.Env}}{{.Dirs}}
+		WithStdin(os.Stdin).
+		WithStdout(os.Stdout).
+		WithStderr(os.Stderr),
 	)
 
 	mod = wasm.New({{.Imports}})
@@ -49,50 +41,21 @@ func main() {
 	mod.X_start()
 }
 `
+
+// generateMain renders the wrapper main.go that wires wasihost to the
+// transpiled wasm2go module.
+func generateMain(cfg Config, imports []string, moduleName string) (string, error) {
 	tmpl, err := template.New("main").Parse(mainTmpl)
 	if err != nil {
 		return "", err
 	}
 
-	wasmArgs := []string{strconv.Quote(cfg.WasmPath)}
-	for _, arg := range cfg.WasmArgs {
-		wasmArgs = append(wasmArgs, strconv.Quote(arg))
-	}
-
-	envQuoted := make([]string, len(cfg.Env))
-	for i, e := range cfg.Env {
-		envQuoted[i] = strconv.Quote(e)
-	}
-
-	type DirQuoted struct {
-		Host  string
-		Guest string
-	}
-	dirsQuoted := make([]DirQuoted, len(cfg.Dirs))
-	for i, d := range cfg.Dirs {
-		dirsQuoted[i] = DirQuoted{
-			Host:  strconv.Quote(d.Host),
-			Guest: strconv.Quote(d.Guest),
-		}
-	}
-
-	importsList := make([]string, len(imports))
-	for i := range imports {
-		importsList[i] = "state"
-	}
-
-	data := struct {
-		ModuleName string
-		WasmArgs   string
-		Env        []string
-		Dirs       []DirQuoted
-		Imports    string
-	}{
+	data := templateData{
 		ModuleName: moduleName,
-		WasmArgs:   strings.Join(wasmArgs, ", "),
-		Env:        envQuoted,
-		Dirs:       dirsQuoted,
-		Imports:    strings.Join(importsList, ", "),
+		WasmArgs:   formatWasmArgs(cfg),
+		Env:        formatEnvVars(cfg.Env),
+		Dirs:       formatDirMounts(cfg.Dirs),
+		Imports:    strings.Join(importsList(imports), ", "),
 	}
 
 	var buf bytes.Buffer
@@ -101,6 +64,74 @@ func main() {
 	}
 
 	return buf.String(), nil
+}
+
+// templateData holds the data passed to the main template.
+type templateData struct {
+	ModuleName string
+	WasmArgs   string
+	Env        string
+	Dirs       string
+	Imports    string
+}
+
+// formatWasmArgs generates the WithArgs configuration line for the WASM module.
+// Returns an empty string if no path or arguments are provided.
+func formatWasmArgs(cfg Config) string {
+	if cfg.WasmPath == "" && len(cfg.WasmArgs) == 0 {
+		return ""
+	}
+	allArgs := []string{strconv.Quote(cfg.WasmPath)}
+	for _, arg := range cfg.WasmArgs {
+		allArgs = append(allArgs, strconv.Quote(arg))
+	}
+	return "\n\t\tWithArgs(" + strings.Join(allArgs, ", ") + ")."
+}
+
+// parseEnvVar splits an environment variable string "KEY=VALUE" into key and value.
+// If no '=' is present, value is empty.
+func parseEnvVar(e string) (key, value string) {
+	if idx := strings.Index(e, "="); idx >= 0 {
+		return e[:idx], e[idx+1:]
+	}
+	return e, ""
+}
+
+// formatEnvVars generates WithEnv lines for each environment variable.
+// Each env string is expected to be in "KEY=VALUE" format.
+func formatEnvVars(env []string) string {
+	var sb strings.Builder
+	for _, e := range env {
+		key, value := parseEnvVar(e)
+		sb.WriteString("\n\t\tWithEnv(")
+		sb.WriteString(strconv.Quote(key))
+		sb.WriteString(", ")
+		sb.WriteString(strconv.Quote(value))
+		sb.WriteString(").")
+	}
+	return sb.String()
+}
+
+// formatDirMounts generates WithHostDirectoryPreopen lines for each directory mount.
+func formatDirMounts(dirs []DirMount) string {
+	var sb strings.Builder
+	for _, d := range dirs {
+		sb.WriteString("\n\t\tWithHostDirectoryPreopen(")
+		sb.WriteString(strconv.Quote(d.Guest))
+		sb.WriteString(", ")
+		sb.WriteString(strconv.Quote(d.Host))
+		sb.WriteString(").")
+	}
+	return sb.String()
+}
+
+// importsList returns a list of import names, all set to "state".
+func importsList(imports []string) []string {
+	result := make([]string, len(imports))
+	for i := range imports {
+		result[i] = "state"
+	}
+	return result
 }
 
 // generateGoMod returns a minimal go.mod for the ephemeral runner workspace.

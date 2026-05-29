@@ -15,7 +15,7 @@ func TestPathUnlinkFileTrailingSlashSemantics(t *testing.T) {
 
 	const pathOff = 1000
 
-	s, buf := newTestState()
+	s, buf := newTestState(nil)
 	hostDir := setupWritableMount(t, s, buf)
 
 	// --- Directory cases ---

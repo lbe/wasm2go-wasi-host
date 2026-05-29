@@ -95,7 +95,7 @@ func TestFdReaddirHostSyntheticDots(t *testing.T) {
 	t.Run("writable host preopen", func(t *testing.T) {
 		buf := make([]byte, 65536)
 		mem := func() []byte { return buf }
-		s := New(mem, WithHostDirectoryPreopen("/data", tmpDir))
+		s := New(mem, NewModuleConfig().WithHostDirectoryPreopen("/data", tmpDir))
 
 		// fd 3 is the preopen
 		errno := s.Xfd_readdir(3, rdBufPtr, rdBufLen, 0, usedPtr)
@@ -116,7 +116,7 @@ func TestFdReaddirHostSyntheticDots(t *testing.T) {
 	t.Run("path_open'd directory fd", func(t *testing.T) {
 		buf := make([]byte, 65536)
 		mem := func() []byte { return buf }
-		s := New(mem, WithHostDirectoryPreopen("/data", tmpDir))
+		s := New(mem, NewModuleConfig().WithHostDirectoryPreopen("/data", tmpDir))
 
 		// fd 3 is the preopen for "/data". Open the temp dir itself via path_open.
 		// We use "." as the path relative to the preopen fd to get a new fd for the same dir.
@@ -165,7 +165,7 @@ func TestFdReaddirCachingAndPagination(t *testing.T) {
 	t.Run("full buffer returns all 5 entries", func(t *testing.T) {
 		buf := make([]byte, 65536)
 		mem := func() []byte { return buf }
-		s := New(mem, WithHostDirectoryPreopen("/data", tmpDir))
+		s := New(mem, NewModuleConfig().WithHostDirectoryPreopen("/data", tmpDir))
 
 		errno := s.Xfd_readdir(3, rdBufPtr, rdBufLen, 0, usedPtr)
 		if errno != wasiESuccess {
@@ -193,7 +193,7 @@ func TestFdReaddirCachingAndPagination(t *testing.T) {
 	t.Run("pagination with exact buffer", func(t *testing.T) {
 		buf := make([]byte, 65536)
 		mem := func() []byte { return buf }
-		s := New(mem, WithHostDirectoryPreopen("/data", tmpDir))
+		s := New(mem, NewModuleConfig().WithHostDirectoryPreopen("/data", tmpDir))
 
 		// First call: cookie=0, bufLen=77 fits exactly 3 dirents (., .., f1)
 		errno := s.Xfd_readdir(3, rdBufPtr, exactBufLen, 0, usedPtr)
@@ -254,7 +254,7 @@ func TestFdReaddirCachingAndPagination(t *testing.T) {
 	t.Run("cache is stable across continuation cookies", func(t *testing.T) {
 		buf := make([]byte, 65536)
 		mem := func() []byte { return buf }
-		s := New(mem, WithHostDirectoryPreopen("/data", tmpDir))
+		s := New(mem, NewModuleConfig().WithHostDirectoryPreopen("/data", tmpDir))
 
 		// First call: read just . and .. (buf fits exactly 2 dirents: 25+26=51)
 		errno := s.Xfd_readdir(3, rdBufPtr, 51, 0, usedPtr)
@@ -318,7 +318,7 @@ func TestFdReaddirCachingAndPagination(t *testing.T) {
 
 		buf := make([]byte, 65536)
 		mem := func() []byte { return buf }
-		s := New(mem, WithHostDirectoryPreopen("/data", contDir))
+		s := New(mem, NewModuleConfig().WithHostDirectoryPreopen("/data", contDir))
 
 		// path_open the directory to get an osFile-backed fd
 		copy(buf[dirPathOff:], ".")
@@ -391,7 +391,7 @@ func TestFdReaddirCachingAndPagination(t *testing.T) {
 
 		buf := make([]byte, 65536)
 		mem := func() []byte { return buf }
-		s := New(mem, WithHostDirectoryPreopen("/data", mutDir))
+		s := New(mem, NewModuleConfig().WithHostDirectoryPreopen("/data", mutDir))
 
 		// First call populates the cache with all 5 entries
 		errno := s.Xfd_readdir(3, rdBufPtr, rdBufLen, 0, usedPtr)
@@ -455,7 +455,7 @@ func TestFd_filestat_get_host_ino(t *testing.T) {
 
 		buf := make([]byte, 65536)
 		mem := func() []byte { return buf }
-		s := New(mem, WithHostDirectoryPreopen("/data", tmpDir))
+		s := New(mem, NewModuleConfig().WithHostDirectoryPreopen("/data", tmpDir))
 
 		// fd 3 is the first (only) preopen
 		const bufPtr = 100
@@ -488,7 +488,7 @@ func TestFd_filestat_get_host_ino(t *testing.T) {
 		mem := func() []byte { return buf }
 
 		// Use a simple in-memory FS so there is no host backing
-		s := New(mem, WithReadOnlyFS("/ro", fstest.MapFS{
+		s := New(mem, NewModuleConfig().WithReadOnlyFS("/ro", fstest.MapFS{
 			"hello.txt": &fstest.MapFile{Data: []byte("hello")},
 		}))
 
@@ -536,7 +536,7 @@ func TestFdReaddirSyntheticDots(t *testing.T) {
 		"mydir/hello.txt": &fstest.MapFile{Data: []byte("hello")},
 	}
 
-	s := New(mem, WithReadOnlyFS("/data", mapFS))
+	s := New(mem, NewModuleConfig().WithReadOnlyFS("/data", mapFS))
 
 	// fd 3 is the preopen for "/data". Open "mydir" via path_open.
 	copy(buf[dirPathOff:], "mydir")
@@ -664,7 +664,7 @@ func TestFdReaddirParentDino(t *testing.T) {
 
 	buf := make([]byte, 65536)
 	mem := func() []byte { return buf }
-	s := New(mem, WithHostDirectoryPreopen("/data", subDir))
+	s := New(mem, NewModuleConfig().WithHostDirectoryPreopen("/data", subDir))
 
 	// fd 3 is the preopen for /data → subDir.
 	errno := s.Xfd_readdir(3, rdBufPtr, rdBufLen, 0, usedPtr)
@@ -721,7 +721,7 @@ func TestFdReaddirEdgeCases(t *testing.T) {
 
 		buf := make([]byte, 65536)
 		mem := func() []byte { return buf }
-		s := New(mem, WithHostDirectoryPreopen("/data", tmpDir))
+		s := New(mem, NewModuleConfig().WithHostDirectoryPreopen("/data", tmpDir))
 
 		// fd 3 is the preopen. bufLen=1 is too small for any dirent
 		// (smallest dirent is "." at 24+1=25 bytes).
@@ -744,7 +744,7 @@ func TestFdReaddirEdgeCases(t *testing.T) {
 
 		buf := make([]byte, 65536)
 		mem := func() []byte { return buf }
-		s := New(mem, WithHostDirectoryPreopen("/data", tmpDir))
+		s := New(mem, NewModuleConfig().WithHostDirectoryPreopen("/data", tmpDir))
 
 		// First call: read all entries to find the last cookie.
 		errno := s.Xfd_readdir(3, rdBufPtr, rdBufLen, 0, usedPtr)
@@ -778,7 +778,7 @@ func TestFdReaddirEdgeCases(t *testing.T) {
 	t.Run("invalid fd returns EBADF", func(t *testing.T) {
 		buf := make([]byte, 65536)
 		mem := func() []byte { return buf }
-		s := New(mem)
+		s := New(mem, nil)
 
 		errno := s.Xfd_readdir(999, rdBufPtr, rdBufLen, 0, usedPtr)
 		if errno != wasiEBadf {
@@ -790,7 +790,7 @@ func TestFdReaddirEdgeCases(t *testing.T) {
 	t.Run("seek error returns EIO", func(t *testing.T) {
 		buf := make([]byte, 65536)
 		mem := func() []byte { return buf }
-		s := New(mem)
+		s := New(mem, nil)
 
 		// Override fd 3 with our seek-error file.
 		// Grow fds slice to make room.

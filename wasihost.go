@@ -3,9 +3,8 @@
 // the env.call_host_function stub used by some wasm2go modules.
 //
 // Filesystem access is capability-oriented: guests see only preopened
-// directories, either read-only [fs.FS] mounts ([WithReadOnlyFS]) or writable
-// host directories ([WithHostDirectoryPreopen]). See ARCHITECTURE.md for the
-// source layout and syscall flow.
+// directories, either read-only [fs.FS] mounts or writable host directories.
+// See ARCHITECTURE.md for the source layout and syscall flow.
 //
 // # Usage
 //
@@ -13,11 +12,10 @@
 // linear memory slice. The callback is re-invoked on every syscall so memory
 // growth is handled transparently:
 //
-//	state := wasihost.New(
-//	    func() []byte { return *mod.Xmemory().Slice() },
-//	    wasihost.WithArgs("app"),
-//	    wasihost.WithHostDirectoryPreopen("/", hostDir),
-//	)
+//	cfg := wasihost.NewModuleConfig().
+//	    WithArgs("app").
+//	    WithHostDirectoryPreopen("/", hostDir)
+//	state := wasihost.New(func() []byte { return *mod.Xmemory().Slice() }, cfg)
 //	mod := generated.New(state, state)
 //
 // Recover [ExitError] at the module boundary to obtain the guest exit code.
@@ -25,8 +23,7 @@
 // # Concurrency
 //
 // [State] is not safe for concurrent use. Each wasm2go module instance needs
-// its own State, used from a single goroutine. [WithOwnerAssertion] panics when
-// a different goroutine calls into the host.
+// its own State, used from a single goroutine.
 //
 // # Memory layout
 //
@@ -39,12 +36,13 @@ import (
 	"fmt"
 	"io"
 	"io/fs"
-	"os"
 	"runtime"
 	"strconv"
 	"strings"
 	"sync"
 	"time"
+
+	"github.com/lbe/wasm2go-wasi-host/internal/wasi"
 )
 
 // State is a WASI snapshot-preview1 host for a single wasm2go Module
@@ -55,6 +53,7 @@ import (
 // State is not safe for concurrent use.
 type State struct {
 	mem         func() []byte
+	ctx         *wasi.Context
 	fds         []fdEntry
 	preopens    []fdEntry
 	mounts      []mountEntry
@@ -105,10 +104,6 @@ type mountEntry struct {
 	readonly  bool // explicitly read-only via WithReadOnlyFS
 }
 
-// Option is a functional option for configuring a [State] at construction
-// time. Options are applied in the order they are passed to [New].
-type Option func(*State)
-
 // ExitError is the panic value raised by proc_exit. Embedding applications
 // must recover it at the wasm eval boundary to obtain the guest exit code:
 //
@@ -133,15 +128,15 @@ func (e ExitError) Error() string { return fmt.Sprintf("exit status %d", e.Code)
 // by wasm2go. Pass it as both import arguments to the generated module's
 // New constructor:
 //
-//	state := wasihost.New(func() []byte { return *mod.Xmemory().Slice() }, opts...)
+//	state := wasihost.New(func() []byte { return *mod.Xmemory().Slice() }, cfg)
 //	mod   := generated.New(state, state)
 //
 // If mem is nil, any method that accesses guest memory will panic. A nil
 // mem is only safe for tests that do not exercise memory-reading methods.
-func New(mem func() []byte, opts ...Option) *State {
+func New(mem func() []byte, config *ModuleConfig) *State {
 	s := &State{mem: mem, startTime: time.Now(), invalidated: make(map[int]bool)}
-	for _, opt := range opts {
-		opt(s)
+	if config != nil {
+		s.applyModuleConfig(config)
 	}
 	// Initialize fd table
 	s.fds = make([]fdEntry, 3+len(s.mounts), 8+len(s.mounts))
@@ -169,55 +164,6 @@ func New(mem func() []byte, opts ...Option) *State {
 
 	return s
 }
-
-// WithArgs sets the argv for the WASI process, used by args_get and
-// args_sizes_get. Defaults to no arguments. Multiple calls append.
-func WithArgs(args ...string) Option { return func(s *State) { s.args = append(s.args, args...) } }
-
-// WithEnv sets the full environment variable list as "KEY=VALUE" strings,
-// used by environ_get and environ_sizes_get. Callers are responsible for
-// including all required entries such as PERL5LIB. Multiple calls append.
-func WithEnv(env ...string) Option { return func(s *State) { s.env = append(s.env, env...) } }
-
-// WithReadOnlyFS adds a read-only guest filesystem mount that is explicitly
-// marked as read-only in WASI preopens, reporting no write or mutation rights.
-func WithReadOnlyFS(guestPath string, root fs.FS) Option {
-	return func(s *State) {
-		s.mounts = append(s.mounts, mountEntry{guestPath: guestPath, root: root, writable: false, readonly: true})
-	}
-}
-
-// WithHostDirectoryPreopen adds a writable host directory preopen at guestPath.
-// The mount uses os.DirFS for reads and direct host path operations for writes.
-func WithHostDirectoryPreopen(guestPath, hostPath string) Option {
-	return func(s *State) {
-		s.mounts = append(s.mounts, mountEntry{guestPath: guestPath, hostRoot: hostPath, root: os.DirFS(hostPath), writable: true})
-	}
-}
-
-// WithStdin sets the io.Reader for guest fd 0. Defaults to a reader that
-// returns (0, io.EOF) immediately. Defaulting to os.Stdin is deliberately
-// avoided: this host is designed for embedded server use where the process
-// stdin is unrelated to the guest.
-func WithStdin(r io.Reader) Option { return func(s *State) { s.stdin = r } }
-
-// WithStdout sets the io.Writer for guest fd 1. Defaults to io.Discard.
-// Defaulting to os.Stdout is deliberately avoided; accidental stdout
-// leakage is a correctness hazard in embedded server use.
-func WithStdout(w io.Writer) Option { return func(s *State) { s.stdout = w } }
-
-// WithStderr sets the io.Writer for guest fd 2. Defaults to io.Discard.
-// See [WithStdout] for rationale.
-func WithStderr(w io.Writer) Option { return func(s *State) { s.stderr = w } }
-
-// WithTracing enables per-syscall trace logging to os.Stdout. Off by
-// default.
-func WithTracing() Option { return func(s *State) { s.trace = true } }
-
-// WithOwnerAssertion enables a runtime goroutine-ownership assertion. When
-// enabled, any WASI call from a goroutine other than the first caller
-// panics with a descriptive message. Off by default.
-func WithOwnerAssertion() Option { return func(s *State) { s.assertOwner = true } }
 
 // Mem returns the current guest linear memory slice by invoking the mem
 // callback passed to [New]. The returned slice may be replaced after any
@@ -274,8 +220,8 @@ func (s *State) logTrace(format string, args ...interface{}) {
 }
 
 // assertSingleOwner panics if the calling goroutine is not the goroutine
-// that first called a method on this State. Has no effect when
-// WithOwnerAssertion was not passed to New.
+// that first called a method on this State. Has no effect when owner
+// assertion is disabled on this State.
 func (s *State) assertSingleOwner() {
 	if !s.assertOwner {
 		return

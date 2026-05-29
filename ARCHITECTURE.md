@@ -16,9 +16,13 @@ The authoritative check is the `wasi-testsuite` submodule running its full `wasm
 
 ### Core structures
 
-- **`State`**: FD table, mounts, args/env, clocks, stdio, optional tracing and goroutine-owner assertion.
+- **`State`**: FD table, legacy mounts/args/env/stdio fields, optional internal tracing and goroutine-owner assertion, and a built **`wasi.Context`** (`ctx`).
+- **`ModuleConfig` / `FSConfig`**: Immutable configuration builders in `wasihost_config.go` and `wasihost_fsconfig.go`. [`New`](wasihost.go) accepts `*ModuleConfig` only (no functional options).
+- **`internal/wasi.Context`**: Runtime view built from `ModuleConfig` — args, environ, stdio, FS context, clocks (defaults today), random source. Syscall bodies still read legacy `State` fields; method migration will route through `ctx`.
 - **`mountEntry`**: Guest path prefix → `fs.FS` (read path) and optional `hostRoot` (writable mutations).
 - **`fdEntry`**: Open file or directory, rights, offset, preopen flag, optional `ReadDirFile` / readdir cache.
+
+During config-layer construction, `applyModuleConfig` **dual-writes**: it builds `ctx` via `wasi.NewContext` and populates legacy `State` fields (`args`, `env`, `mounts`, stdio) so existing syscall code and tests keep working until method migration lands.
 
 ### Source file map
 
@@ -26,7 +30,9 @@ Portable `package wasihost` on **Linux** and **Darwin** (small build-tagged file
 
 | Area | File |
 |------|------|
-| `State`, `New`, options, FD table | `wasihost.go` |
+| `State`, `New`, FD table | `wasihost.go` |
+| `ModuleConfig`, `applyModuleConfig` | `wasihost_config.go` |
+| `FSConfig`, mount builders | `wasihost_fsconfig.go` |
 | WASI errno / rights constants | `wasihost_const.go` |
 | `mapOSError`, errno helpers | `wasihost_errno.go` |
 | `fsFile`, `osFile`, `FSFileWrap`, `DirEntriesFile` | `wasihost_adapters.go` |
@@ -66,7 +72,7 @@ sequenceDiagram
 
 ### Filesystem layer
 
-Access is **capability-oriented**: guests use **preopened directories** only (plus FDs opened beneath them). read-only fs.FS preopens via `WithReadOnlyFS` report no write or path-mutation rights. Writable mounts use `WithHostDirectoryPreopen`: reads go through `os.DirFS`, writes and path operations use `hostRoot` with confinement checks (lexical preopen bounds, symlink follow rules, `filepath.EvalSymlinks` where required).
+Access is **capability-oriented**: guests use **preopened directories** only (plus FDs opened beneath them). Configure mounts via `ModuleConfig.WithReadOnlyFS`, `WithHostDirectoryPreopen`, or `WithFS(NewFSConfig()…)`. Read-only `fs.FS` preopens report no write or path-mutation rights. Writable mounts use host directory preopens: reads go through `os.DirFS`, writes and path operations use `hostRoot` with confinement checks (lexical preopen bounds, symlink follow rules, `filepath.EvalSymlinks` where required).
 
 ```mermaid
 graph TD
@@ -105,7 +111,7 @@ graph LR
 
 1. **CLI** (`config.go`): `-dir`, `-env`, `-cache off`, `-version`, guest args after `--`.
 2. **Transpile** (`transpile.go`, `cache.go`): invoke `wasm2go`; optional tier-1 cache of transpiled `module.go` (keyed by WASM hash, wasm2go identity, post-process version). Compile always uses a fresh temp workspace.
-3. **Wrapper** (`template.go`): `main.go` calling `wasihost.New` with mounts/env/stdio and `generated.New(state, state)`; recover `ExitError`.
+3. **Wrapper** (`template.go`): `main.go` calling `wasihost.New` with a `NewModuleConfig()` builder chain (args, env, mounts, stdio) and `generated.New(state, state)`; recover `ExitError`.
 4. **Build path** (`compile.go`): `WASM2GO_WASIHOST_PATH` or dev `replace` to this repo; `go mod tidy` + `go build`.
 5. **Execute** (`execute.go`): run binary, propagate exit code, delete temp dir.
 
@@ -117,7 +123,11 @@ Environment variables: `WASM2GO_RUN_CACHE`, `WASM2GO_RUN_CACHE_DIR`, `WASM2GO_WA
 
 ## Concurrency
 
-Same as the library: one `State` per guest instance, single goroutine unless debugging with `WithOwnerAssertion`.
+One `State` per guest instance, single goroutine. There is no public API to enable goroutine-owner assertion; `State` is not safe for concurrent use.
+
+## Next: method migration
+
+The config layer is in place. **`pi-method-migration`** will move WASI syscall bodies from legacy `State` fields to `internal/wasi.Context` (and wire clock/random config through `ctx`). Until that lands, both paths are populated at construction time.
 
 ## Related docs
 

@@ -188,7 +188,7 @@ func TestFdAllocate(t *testing.T) {
 			t.Fatal(err)
 		}
 		t.Cleanup(func() { _ = f.Close() })
-		s2, _ := newTestState()
+		s2, _ := newTestState(nil)
 		for len(s2.fds) <= wrapFd {
 			s2.fds = append(s2.fds, fdEntry{})
 		}

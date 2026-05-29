@@ -22,7 +22,7 @@ func TestPollOneoffFdReadStdin(t *testing.T) {
 
 	// Create a buffer and state with stdin set to an empty reader.
 	buf := make([]byte, 65536)
-	s := New(func() []byte { return buf }, WithStdin(strings.NewReader("")))
+	s := New(func() []byte { return buf }, NewModuleConfig().WithStdin(strings.NewReader("")))
 
 	t.Run("fd_read on fd=0 alone", func(t *testing.T) {
 		userdata := uint64(111)

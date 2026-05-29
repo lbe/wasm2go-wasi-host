@@ -33,7 +33,7 @@ func TestPathCreateDirectoryRejectsSymlinkEscapePrefix(t *testing.T) {
 
 	buf := make([]byte, 2048)
 	mem := func() []byte { return buf }
-	s := New(mem, WithHostDirectoryPreopen("/data", root))
+	s := New(mem, NewModuleConfig().WithHostDirectoryPreopen("/data", root))
 
 	const (
 		dirfd   int32 = 3
@@ -96,7 +96,7 @@ func TestPathFilestatSetTimesRejectsSymlinkEscapeFollow(t *testing.T) {
 
 	buf := make([]byte, 2048)
 	mem := func() []byte { return buf }
-	s := New(mem, WithHostDirectoryPreopen("/data", root))
+	s := New(mem, NewModuleConfig().WithHostDirectoryPreopen("/data", root))
 
 	const (
 		dirfd   int32 = 3
@@ -169,7 +169,7 @@ func setupSymlinkEscapePrefixFixture(t *testing.T) symlinkEscapePrefixSetup {
 
 	buf := make([]byte, 2048)
 	mem := func() []byte { return buf }
-	s := New(mem, WithHostDirectoryPreopen("/data", root))
+	s := New(mem, NewModuleConfig().WithHostDirectoryPreopen("/data", root))
 
 	return symlinkEscapePrefixSetup{
 		s:             s,
@@ -351,7 +351,7 @@ func TestPathMutationsAllowSymlinkInTree(t *testing.T) {
 
 	buf := make([]byte, 2048)
 	mem := func() []byte { return buf }
-	s := New(mem, WithHostDirectoryPreopen("/data", root))
+	s := New(mem, NewModuleConfig().WithHostDirectoryPreopen("/data", root))
 
 	const (
 		dirfd   int32 = 3
@@ -403,7 +403,7 @@ func TestPathLinkToSymlinkLoopOnNestedDirfd(t *testing.T) {
 	}
 
 	buf := make([]byte, 2048)
-	s := New(func() []byte { return buf }, WithHostDirectoryPreopen("/data", root))
+	s := New(func() []byte { return buf }, NewModuleConfig().WithHostDirectoryPreopen("/data", root))
 
 	const scratch = "scratch"
 	copy(buf[scratchOff:], scratch)

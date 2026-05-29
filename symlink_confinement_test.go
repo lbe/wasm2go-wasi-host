@@ -41,7 +41,7 @@ func TestWritableHostPreopenRejectsSymlinkEscapeToOutsidePath(t *testing.T) {
 
 	buf := make([]byte, 2048)
 	mem := func() []byte { return buf }
-	s := New(mem, WithHostDirectoryPreopen("/data", root))
+	s := New(mem, NewModuleConfig().WithHostDirectoryPreopen("/data", root))
 
 	const (
 		dirfd        int32 = 3
@@ -128,7 +128,7 @@ func TestPathOpenWithoutSymlinkFollowReturnsLoopForEscapeSymlinkWithoutTouchingO
 
 	buf := make([]byte, 2048)
 	mem := func() []byte { return buf }
-	s := New(mem, WithHostDirectoryPreopen("/data", root))
+	s := New(mem, NewModuleConfig().WithHostDirectoryPreopen("/data", root))
 
 	const (
 		dirfd           int32 = 3
@@ -198,7 +198,7 @@ func TestPathFilestatGetWithoutSymlinkFollowReflectsSymlinkInodeNotEscapedTarget
 
 	buf := make([]byte, 2048)
 	mem := func() []byte { return buf }
-	s := New(mem, WithHostDirectoryPreopen("/data", root))
+	s := New(mem, NewModuleConfig().WithHostDirectoryPreopen("/data", root))
 
 	const (
 		dirfd     int32 = 3
