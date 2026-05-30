@@ -9,7 +9,7 @@ import (
 func TestFdFilestatSetTimesAtim(t *testing.T) {
 	s, _ := newTestState(nil)
 	fd := int32(5)
-	filePath := setupOsFileFd(t, s, int(fd), []byte("data"))
+	filePath := setupOsFileFd(t, s, fd, []byte("data"))
 
 	// targetAtim is far in the past to be distinguishable
 	targetAtim := time.Date(2010, 1, 1, 0, 0, 0, 0, time.UTC)
@@ -57,7 +57,7 @@ func TestFdFilestatSetTimesAtimPreservesExistingTests(t *testing.T) {
 	t.Run("Xfd_filestat_set_times fstMtim updates mtime on osFile", func(t *testing.T) {
 		s, _ := newTestState(nil)
 		fd := int32(5)
-		filePath := setupOsFileFd(t, s, int(fd), []byte("data"))
+		filePath := setupOsFileFd(t, s, fd, []byte("data"))
 
 		errno := s.Xfd_filestat_set_times(fd, 0, targetMtimNs, fstMtim)
 		if errno != wasiESuccess {
@@ -79,7 +79,7 @@ func TestFdFilestatSetTimesAtimPreservesExistingTests(t *testing.T) {
 	t.Run("Xfd_filestat_set_times fstMtimNow updates mtime to current", func(t *testing.T) {
 		s, _ := newTestState(nil)
 		fd := int32(5)
-		filePath := setupOsFileFd(t, s, int(fd), []byte("data"))
+		filePath := setupOsFileFd(t, s, fd, []byte("data"))
 
 		past := time.Now().Add(-1 * time.Hour)
 		if err := os.Chtimes(filePath, past, past); err != nil {

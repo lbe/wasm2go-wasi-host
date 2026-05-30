@@ -19,10 +19,10 @@ func TestPathOpenTruncationUsesPathFilestatSetSizeRight(t *testing.T) {
 	)
 
 	s, buf := newTestState(nil)
-	hostDir := t.TempDir()
+	hostDir := setupWritableMount(t, s, buf)
 	baseMask := wasiTestsuiteDirectoryBaseRightsMask()
 	inheritingMask := wasiTestsuiteDirectoryInheritingRightsMask()
-	setupMountAtDirfd(t, s, mountEntry{guestPath: "tmp", writable: true, hostRoot: hostDir}, baseMask, inheritingMask)
+	setupMountAtDirfd(t, s, "tmp", hostDir, true, baseMask, inheritingMask)
 
 	if errno := s.Xfd_fdstat_get(dirfd, statPtr); errno != wasiESuccess {
 		t.Fatalf("Xfd_fdstat_get(preopen) = %d, want ESUCCESS", errno)

@@ -3,11 +3,9 @@ package wasihost
 import (
 	"io"
 	"io/fs"
-	"os"
 	"time"
 
 	"github.com/lbe/wasm2go-wasi-host/internal/wasi"
-	"github.com/lbe/wasm2go-wasi-host/internal/wasi/sysfs"
 )
 
 // ModuleConfig holds configuration for a WASI module execution.
@@ -88,85 +86,72 @@ func (c *ModuleConfig) FSConfig() ([]wasi.FS, []string) {
 	return c.fsConfig.preopens()
 }
 
-// mountEntries builds State mount table entries from FSConfig preopens.
-func (c *ModuleConfig) mountEntries() []mountEntry {
+// FSPreopens returns preopens with mount guest paths for ctx.FS() path resolution.
+func (c *ModuleConfig) FSPreopens() ([]wasi.FS, []string) {
 	if c.fsConfig == nil {
-		return nil
+		return nil, nil
 	}
-	fsList, guestPaths := c.fsConfig.mountPreopens()
-	mounts := make([]mountEntry, 0, len(fsList))
-	for i, fsys := range fsList {
-		mounts = append(mounts, mountEntryFromWasiFS(fsys, guestPaths[i]))
-	}
-	return mounts
+	return c.fsConfig.mountPreopens()
 }
 
-func mountEntryFromWasiFS(fsys wasi.FS, guestPath string) mountEntry {
-	switch f := fsys.(type) {
-	case sysfs.DirFS:
-		return mountEntry{
-			guestPath: guestPath,
-			hostRoot:  f.Path,
-			root:      os.DirFS(f.Path),
-			writable:  true,
-		}
-	case *sysfs.DirFS:
-		return mountEntry{
-			guestPath: guestPath,
-			hostRoot:  f.Path,
-			root:      os.DirFS(f.Path),
-			writable:  true,
-		}
-	case sysfs.ReadFS:
-		return mountEntryFromWasiFS(f.FS, guestPath)
-	case *sysfs.ReadFS:
-		return mountEntryFromWasiFS(f.FS, guestPath)
-	case sysfs.AdaptFS:
-		return mountEntry{
-			guestPath: guestPath,
-			root:      f.FS,
-			readonly:  true,
-		}
-	case *sysfs.AdaptFS:
-		return mountEntry{
-			guestPath: guestPath,
-			root:      f.FS,
-			readonly:  true,
-		}
-	default:
-		return mountEntry{guestPath: guestPath, root: os.DirFS("."), readonly: true}
+// ClockWalltime returns configured walltime when set.
+func (c *ModuleConfig) ClockWalltime() (wasi.Walltime, wasi.ClockResolution, bool) {
+	if c.walltime == nil {
+		return nil, 0, false
 	}
+	return c.walltime, c.walltimeRes, true
+}
+
+// ClockNanotime returns configured nanotime when set.
+func (c *ModuleConfig) ClockNanotime() (wasi.Nanotime, wasi.ClockResolution, bool) {
+	if c.nanotime == nil {
+		return nil, 0, false
+	}
+	return c.nanotime, c.nanotimeRes, true
+}
+
+// ClockNanosleep returns configured nanosleep when set.
+func (c *ModuleConfig) ClockNanosleep() (wasi.Nanosleep, bool) {
+	if c.nanosleep == nil {
+		return nil, false
+	}
+	return c.nanosleep, true
 }
 
 // applyModuleConfig applies a ModuleConfig to the State. It sets the
-// WASI context, args, environ, stdio, and mounts from the config. Panics
-// if the WASI context cannot be created.
+// WASI context from the config. Panics if the WASI context cannot be created.
 func (s *State) applyModuleConfig(cfg *ModuleConfig) {
 	ctx, err := wasi.NewContext(cfg)
 	if err != nil {
 		panic(err)
 	}
 	s.ctx = ctx
-	args := make([]string, len(cfg.args))
-	for i, a := range cfg.args {
-		args[i] = string(a)
+	s.seedPreopenRights(cfg)
+}
+
+func (s *State) seedPreopenRights(cfg *ModuleConfig) {
+	if cfg == nil || cfg.fsConfig == nil || s.ctx == nil || s.ctx.FSContext() == nil {
+		return
 	}
-	s.args = args
-	env := make([]string, len(cfg.environ))
-	for i, e := range cfg.environ {
-		env[i] = string(e)
+	fsList, _ := cfg.fsConfig.preopens()
+	_, mountPaths := cfg.fsConfig.mountPreopens()
+	for i, fsys := range fsList {
+		fd := int32(3 + i)
+		fe, ok := s.lookupFD(fd)
+		if !ok {
+			continue
+		}
+		if i < len(mountPaths) {
+			fe.GuestPath = mountPaths[i]
+		}
+		if fsysReadOnly(fsys) {
+			fe.RightsBase = rightsReadOnlyDirPreopen
+			fe.RightsInheriting = rightsReadOnlyDirPreopen
+		} else {
+			fe.RightsBase = rightsWritableDirPreopenBase
+			fe.RightsInheriting = rightsWritableDirPreopenInheriting
+		}
 	}
-	s.env = env
-	if cfg.stdin != nil {
-		s.stdin = cfg.stdin
-	}
-	if cfg.stdout != nil {
-		s.stdout = cfg.stdout
-	}
-	if cfg.stderr != nil {
-		s.stderr = cfg.stderr
-	}
-	s.mounts = append(s.mounts, cfg.mountEntries()...)
 }
 
 // --- Builder methods ---
@@ -287,10 +272,11 @@ func (c *ModuleConfig) WithNanotime(n wasi.Nanotime, res wasi.ClockResolution) *
 	return clone
 }
 
-// WithSysNanotime returns a new ModuleConfig with nanotime sourced from time.Now.
+// WithSysNanotime returns a new ModuleConfig with monotonic time from time.Since.
 func (c *ModuleConfig) WithSysNanotime() *ModuleConfig {
+	start := time.Now()
 	return c.WithNanotime(func() int64 {
-		return time.Now().UnixNano()
+		return time.Since(start).Nanoseconds()
 	}, SysClockResolutionNanotime)
 }
 

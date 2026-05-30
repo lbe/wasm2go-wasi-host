@@ -11,6 +11,7 @@ import (
 const mainTmpl = `package main
 
 import (
+	"crypto/rand"
 	"os"
 
 	"github.com/lbe/wasm2go-wasi-host"
@@ -22,6 +23,10 @@ func main() {
 	state := wasihost.New(
 		func() []byte { return *mod.Xmemory().Slice() },
 		wasihost.NewModuleConfig().{{.WasmArgs}}{{.Env}}{{.Dirs}}
+		WithSysWalltime().
+		WithSysNanotime().
+		WithSysNanosleep().
+		WithRandSource(rand.Reader).
 		WithStdin(os.Stdin).
 		WithStdout(os.Stdout).
 		WithStderr(os.Stderr),

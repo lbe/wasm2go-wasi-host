@@ -4,6 +4,7 @@ import (
 	"errors"
 	"io"
 	"os"
+	"syscall"
 )
 
 // UnwrapOSError returns an Errno or zero if the input is nil.
@@ -18,16 +19,36 @@ func UnwrapOSError(err error) Errno {
 	if errors.As(err, &pathErr) {
 		return mapOSError(pathErr.Err)
 	}
-	return EIO
+	return mapOSError(err)
 }
 
 func mapOSError(err error) Errno {
-	switch err {
-	case os.ErrPermission:
-		return EPERM
-	case os.ErrNotExist:
+	if errors.Is(err, os.ErrNotExist) {
 		return ENOENT
-	default:
-		return EIO
 	}
+	if errors.Is(err, os.ErrExist) {
+		return EEXIST
+	}
+	if errors.Is(err, os.ErrPermission) {
+		return EACCES
+	}
+	if errors.Is(err, syscall.EACCES) {
+		return EACCES
+	}
+	if errors.Is(err, syscall.EPERM) {
+		return EPERM
+	}
+	if errors.Is(err, syscall.ENOTDIR) {
+		return ENOTDIR
+	}
+	if errors.Is(err, syscall.EISDIR) {
+		return EISDIR
+	}
+	if errors.Is(err, syscall.EROFS) {
+		return EROFS
+	}
+	if errors.Is(err, syscall.EINVAL) {
+		return EINVAL
+	}
+	return EIO
 }

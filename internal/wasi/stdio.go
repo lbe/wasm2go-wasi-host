@@ -68,9 +68,9 @@ type noopStdoutFile struct {
 	noopStdioFile
 }
 
-// Write silently discards all data and reports success.
-func (noopStdoutFile) Write(buf []byte) (int, Errno) {
-	return len(buf), 0
+// Write silently discards all data and reports zero bytes written.
+func (noopStdoutFile) Write([]byte) (int, Errno) {
+	return 0, 0
 }
 
 // noopStdioFile provides default implementations for stdio files.

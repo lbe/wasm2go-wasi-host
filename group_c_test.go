@@ -49,10 +49,7 @@ func TestFilestatMutations(t *testing.T) {
 			t.Fatal(err)
 		}
 		t.Cleanup(func() { f.Close() })
-		for len(s.fds) <= 5 {
-			s.fds = append(s.fds, fdEntry{})
-		}
-		s.fds[5] = fdEntry{fdType: 4, file: &FSFileWrap{File: f}}
+		insertStubFD(s, 5, wrapGoFSFile(f), 0)
 
 		errno := s.Xfd_filestat_set_size(5, 99)
 		if errno != wasiESuccess {

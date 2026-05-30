@@ -34,13 +34,10 @@ package wasihost
 import (
 	"encoding/binary"
 	"fmt"
-	"io"
-	"io/fs"
 	"runtime"
 	"strconv"
 	"strings"
 	"sync"
-	"time"
 
 	"github.com/lbe/wasm2go-wasi-host/internal/wasi"
 )
@@ -54,54 +51,10 @@ import (
 type State struct {
 	mem         func() []byte
 	ctx         *wasi.Context
-	fds         []fdEntry
-	preopens    []fdEntry
-	mounts      []mountEntry
-	env         []string
-	args        []string
-	startTime   time.Time
-	stdin       io.Reader
-	stdout      io.Writer
-	stderr      io.Writer
 	trace       bool
 	assertOwner bool
 	ownerMu     sync.Mutex
 	ownerGID    uint64
-	invalidated map[int]bool // fd_renumber invalidates source slots; cleared on Xfd_close and storeOpenedFD reuse
-}
-
-// fdEntry is one slot in the WASI file-descriptor table. Slots 0-2 are
-// stdin, stdout, and stderr (fdCharDev). Slots 3 through 3+len(mounts)-1
-// are preopen directory entries. Higher slots are allocated dynamically
-// by path_open and freed by fd_close.
-type fdEntry struct {
-	file             fsFile
-	path             string
-	fdType           byte
-	offset           int64
-	mount            int
-	preopen          bool
-	dirFile          fs.ReadDirFile
-	readdirSnapshot  []fs.DirEntry
-	rightsBase       uint64
-	rightsInheriting uint64
-	fdFlags          uint16
-}
-
-func (e fdEntry) isUnused() bool {
-	return e.file == nil && e.fdType == 0
-}
-
-// mountEntry maps a guest path prefix to a host filesystem. If writable
-// is true and hostRoot is set, write operations (os.Create, os.Remove,
-// os.Mkdir, os.Rename, etc.) are applied to the host filesystem rooted at
-// hostRoot. root is used for read-through lookups.
-type mountEntry struct {
-	guestPath string
-	root      fs.FS
-	hostRoot  string
-	writable  bool
-	readonly  bool // explicitly read-only via WithReadOnlyFS
 }
 
 // ExitError is the panic value raised by proc_exit. Embedding applications
@@ -134,34 +87,11 @@ func (e ExitError) Error() string { return fmt.Sprintf("exit status %d", e.Code)
 // If mem is nil, any method that accesses guest memory will panic. A nil
 // mem is only safe for tests that do not exercise memory-reading methods.
 func New(mem func() []byte, config *ModuleConfig) *State {
-	s := &State{mem: mem, startTime: time.Now(), invalidated: make(map[int]bool)}
-	if config != nil {
-		s.applyModuleConfig(config)
+	if config == nil {
+		config = NewModuleConfig().WithSysWalltime().WithSysNanotime().WithSysNanosleep()
 	}
-	// Initialize fd table
-	s.fds = make([]fdEntry, 3+len(s.mounts), 8+len(s.mounts))
-	s.fds[StdinFD] = fdEntry{fdType: fdCharDev, path: "stdin", rightsBase: rightsCharDev, rightsInheriting: 0}
-	s.fds[StdoutFD] = fdEntry{fdType: fdCharDev, path: "stdout", rightsBase: rightsCharDev, rightsInheriting: 0}
-	s.fds[StderrFD] = fdEntry{fdType: fdCharDev, path: "stderr", rightsBase: rightsCharDev, rightsInheriting: 0}
-
-	for i := range s.mounts {
-		rb := rightsWritableDirPreopenBase
-		ri := rightsWritableDirPreopenInheriting
-		if s.mounts[i].readonly {
-			rb = rightsReadOnlyDirPreopen
-			ri = rightsReadOnlyDirPreopen
-		}
-		s.fds[3+i] = fdEntry{
-			path:             s.mounts[i].guestPath,
-			fdType:           fdDir,
-			mount:            i,
-			preopen:          true,
-			rightsBase:       rb,
-			rightsInheriting: ri,
-		}
-	}
-	s.preopens = s.fds[3 : 3+len(s.mounts)]
-
+	s := &State{mem: mem}
+	s.applyModuleConfig(config)
 	return s
 }
 
@@ -170,45 +100,62 @@ func New(mem func() []byte, config *ModuleConfig) *State {
 // memory growth event; callers must not retain it across calls.
 func (s *State) Mem() []byte { return s.mem() }
 
-// allocFD returns the index of the first empty fd-table slot above the
-// preopen range. It extends the table by one slot if no free slot exists.
-func (s *State) allocFD() int32 {
-	s.assertSingleOwner()
-	start := 3 + len(s.preopens)
-	for i := start; i < len(s.fds); i++ {
-		if s.fds[i].isUnused() {
-			return int32(i)
-		}
+// lookupFD resolves fd through ctx.FSContext().LookupFile.
+func (s *State) lookupFD(fd int32) (*wasi.FileEntry, bool) {
+	if s.ctx == nil {
+		return nil, false
 	}
-	idx := int32(len(s.fds))
-	s.fds = append(s.fds, fdEntry{})
-	return idx
+	fsc := s.ctx.FSContext()
+	if fsc == nil {
+		return nil, false
+	}
+	return fsc.LookupFile(fd)
 }
 
-// storeOpenedFD records an opened file in the fd table, computes stored rights
-// via [pathOpenStoredRights], and writes the allocated fd number to guest
-// memory at fdPtr. If fdType is fdDir and file implements [fs.ReadDirFile],
-// entry.dirFile is set so directory iteration works.
-func (s *State) storeOpenedFD(file fsFile, guestPath string, fdType byte, parentBase, parentInh uint64, fdRightsBase, fdRightsInheriting int64, fdFlags int32, fdPtr int32) int32 {
-	rb, ri := pathOpenStoredRights(parentBase, parentInh, fdType, fdRightsBase, fdRightsInheriting)
-	fd := s.allocFD()
-	// Clear any prior invalidation for this slot.
-	delete(s.invalidated, int(fd))
-	entry := fdEntry{
-		file:             file,
-		path:             guestPath,
-		fdType:           fdType,
-		rightsBase:       rb,
-		rightsInheriting: ri,
-		fdFlags:          uint16(fdFlags),
+func (s *State) abortPathOpenFD(fd int32) {
+	if s.ctx != nil && s.ctx.FSContext() != nil {
+		_ = s.ctx.FSContext().CloseFile(fd)
 	}
-	if fdType == fdDir {
-		if df, ok := file.(fs.ReadDirFile); ok {
-			entry.dirFile = df
-		}
+}
+
+// pathOpenStoredGuestPath returns the guest-absolute path for an opened fd.
+func (s *State) pathOpenStoredGuestPath(preopen *PreopenEntry, relPath, guestPath string, dirfd int32) string {
+	if fe, ok := s.lookupFD(dirfd); ok && fe.IsPreopen {
+		return preopenGuestPathForRel(preopen, relPath)
 	}
-	s.fds[fd] = entry
+	fe, _ := s.lookupFD(dirfd)
+	return s.guestAbsPathForFE(dirfd, guestPath, fe)
+}
+
+func (s *State) writeGuestFD(fd, fdPtr int32) {
 	binary.LittleEndian.PutUint32(s.mem()[fdPtr:], uint32(fd))
+}
+
+// bridgePathOpenFD records rights and guest path on a FileEntry opened via FSContext.OpenFile.
+func (s *State) bridgePathOpenFD(fd int32, preopen *PreopenEntry, relPath, guestPath string, dirfd int32, parentBase, parentInh uint64, fdRightsBase, fdRightsInheriting int64, fdFlags int32, fdPtr int32) int32 {
+	fe, ok := s.lookupFD(fd)
+	if !ok || fe == nil || fe.File == nil {
+		s.abortPathOpenFD(fd)
+		return wasiEBadf
+	}
+	st, werrno := fe.File.Stat()
+	if werrno != 0 {
+		s.abortPathOpenFD(fd)
+		return errnoFromWasi(werrno)
+	}
+	fdType := filestatFdTypeFromMode(st.Mode)
+	rb, ri := pathOpenStoredRights(parentBase, parentInh, fdType, fdRightsBase, fdRightsInheriting)
+	fe.RightsBase = rb
+	fe.RightsInheriting = ri
+	fe.FdFlags = uint16(fdFlags)
+	fe.GuestPath = s.pathOpenStoredGuestPath(preopen, relPath, guestPath, dirfd)
+	if fdFlags&fdFlagsAppend != 0 {
+		_ = fe.File.SetAppend(true)
+	}
+	if pf, ok := fe.File.(wasi.PollableFile); ok && fdFlags&fdFlagsNonBlock != 0 {
+		_ = pf.SetNonblock(true)
+	}
+	s.writeGuestFD(fd, fdPtr)
 	return wasiESuccess
 }
 

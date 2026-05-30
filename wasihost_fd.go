@@ -2,460 +2,313 @@ package wasihost
 
 import (
 	"encoding/binary"
-	"errors"
 	"io"
-	"io/fs"
 	"os"
 	"path/filepath"
-	"syscall"
+	"strings"
+
+	"github.com/lbe/wasm2go-wasi-host/internal/wasi"
 )
 
-// Xfd_close implements fd_close. Closes the file associated with fd and
-// clears the fd-table slot. Returns EBADF if fd is invalid or invalidated.
 func (s *State) Xfd_close(fd int32) int32 {
 	s.assertSingleOwner()
-	if fd < 0 || int(fd) >= len(s.fds) {
+	if _, ok := s.lookupFD(fd); !ok {
 		return wasiEBadf
 	}
-	entry := s.fds[fd]
-	if entry.isUnused() || s.invalidated[int(fd)] {
+	if s.ctx == nil || s.ctx.FSContext() == nil {
 		return wasiEBadf
 	}
-	if entry.file != nil {
-		entry.file.Close()
+	if closeErr := s.ctx.FSContext().CloseFile(fd); closeErr != 0 {
+		return errnoFromWasi(closeErr)
 	}
-	s.fds[fd] = fdEntry{}
-	// Clear any invalidation entry for this fd.
-	delete(s.invalidated, int(fd))
 	return wasiESuccess
 }
 
-// Xfd_read implements fd_read. For fd 0 (stdin), reads from the
-// io.Reader configured by [WithStdin]. For other fds, seeks to the
-// current fd offset then reads sequentially. Returns EISDIR for
-// directory fds, ENOTCAPABLE when FD_READ is not set in the
-// fd's rights_base.
+func guestIOV(mem []byte, iovsPtr, i int32) []byte {
+	off := iovsPtr + i*8
+	bufPtr := int32(binary.LittleEndian.Uint32(mem[off:]))
+	bufLen := int32(binary.LittleEndian.Uint32(mem[off+4:]))
+	if bufLen == 0 {
+		return nil
+	}
+	return mem[bufPtr : bufPtr+bufLen]
+}
+
+func (s *State) fdFileSize(fe *wasi.FileEntry) (size int64, errno int32) {
+	if fe == nil || fe.File == nil {
+		return 0, wasiEBadf
+	}
+	st, werrno := fe.File.Stat()
+	if werrno != 0 {
+		return 0, errnoFromWasi(werrno)
+	}
+	return st.Size, 0
+}
+
 func (s *State) Xfd_read(fd int32, iovsPtr int32, iovsCount int32, nreadPtr int32) int32 {
 	s.assertSingleOwner()
-	if fd < 0 || int(fd) >= len(s.fds) {
-		return wasiEBadf
-	}
-	entry := s.fds[fd]
-	if entry.isUnused() {
+	fe, ok := s.lookupFD(fd)
+	if !ok || fe.File == nil {
 		return wasiEBadf
 	}
 	mem := s.mem()
 	if fd == StdinFD {
-		if errno := errnoIfFDRightsMissing(entry.rightsBase, rightFDRead); errno != 0 {
+		if errno := errnoIfFDRightsMissing(fe.RightsBase, rightFDRead); errno != 0 {
 			return errno
 		}
 		var total uint32
 		for i := int32(0); i < iovsCount; i++ {
-			off := iovsPtr + i*8
-			bufPtr := int32(binary.LittleEndian.Uint32(mem[off:]))
-			bufLen := int32(binary.LittleEndian.Uint32(mem[off+4:]))
-			if bufLen == 0 {
+			buf := guestIOV(mem, iovsPtr, i)
+			if buf == nil {
 				continue
 			}
-			var n int
-			var err error
-			if s.stdin != nil {
-				n, err = s.stdin.Read(mem[bufPtr : bufPtr+bufLen])
-			} else {
-				n, err = 0, io.EOF
-			}
+			n, werrno := fe.File.Read(buf)
 			total += uint32(n)
-			if err != nil {
+			if werrno != 0 && werrno != wasi.EAGAIN {
 				binary.LittleEndian.PutUint32(mem[nreadPtr:], total)
-				if err != io.EOF {
+				if werrno == wasi.EIO {
 					return wasiEIo
 				}
-				return wasiESuccess
+				return errnoFromWasi(werrno)
 			}
-			if n < int(bufLen) {
+			if n < len(buf) {
 				break
 			}
 		}
 		binary.LittleEndian.PutUint32(mem[nreadPtr:], total)
 		return wasiESuccess
 	}
-	if entry.file == nil {
-		return wasiEBadf
-	}
-	if errno := errnoForDirectoryFDOp(entry); errno != 0 {
+	if errno := errnoForDirectoryFDOp(fe); errno != 0 {
 		return errno
 	}
-	if errno := errnoIfFDRightsMissing(entry.rightsBase, rightFDRead); errno != 0 {
+	if errno := errnoIfFDRightsMissing(fe.RightsBase, rightFDRead); errno != 0 {
 		return errno
 	}
 	var total uint32
-	// For io.Seeker-backed fds (e.g., osFile), sync the OS kernel position
-	// with entry.offset so that subsequent SEEK_CUR via Xfd_seek is correct.
-	if seeker, ok := entry.file.(io.Seeker); ok {
-		if _, err := seeker.Seek(entry.offset, io.SeekStart); err != nil {
-			s.fds[fd] = entry
-			binary.LittleEndian.PutUint32(mem[nreadPtr:], total)
-			return wasiEIo
-		}
-	}
 	for i := int32(0); i < iovsCount; i++ {
-		off := iovsPtr + i*8
-		bufPtr := int32(binary.LittleEndian.Uint32(mem[off:]))
-		bufLen := int32(binary.LittleEndian.Uint32(mem[off+4:]))
-		if bufLen == 0 {
+		buf := guestIOV(mem, iovsPtr, i)
+		if buf == nil {
 			continue
 		}
-		var n int
-		var err error
-		n, err = entry.file.Read(mem[bufPtr : bufPtr+bufLen])
+		n, werrno := fe.File.Pread(buf, fe.Offset)
+		errno := errnoFromWasi(werrno)
 		total += uint32(n)
-		entry.offset += int64(n)
-		if err != nil {
-			if err == io.EOF {
-				break
-			}
-			s.fds[fd] = entry
+		if errno != 0 {
 			binary.LittleEndian.PutUint32(mem[nreadPtr:], total)
-			return wasiEIo
+			return errno
 		}
-		if n < int(bufLen) {
+		fe.Offset += int64(n)
+		if n < len(buf) {
 			break
 		}
 	}
-	s.fds[fd] = entry
 	binary.LittleEndian.PutUint32(mem[nreadPtr:], total)
 	return wasiESuccess
 }
 
-// Xfd_write implements fd_write. For fd 1 and 2 (stdout/stderr), writes
-// to the io.Writers configured by [WithStdout] and [WithStderr]. For
-// other fds backed by io.Seeker (e.g., osFile), seeks to the current
-// fd offset then writes sequentially so that the OS kernel position
-// advances; uses WriteAt as a fallback for non-seeker files. Returns
-// EISDIR for directory fds, ENOTCAPABLE when FD_WRITE is not set in
-// the fd's rights_base.
 func (s *State) Xfd_write(fd int32, iovsPtr int32, iovsCount int32, nwrittenPtr int32) int32 {
 	s.assertSingleOwner()
-	if fd < 0 || int(fd) >= len(s.fds) {
+	fe, ok := s.lookupFD(fd)
+	if !ok || fe.File == nil {
 		return wasiEBadf
 	}
-	entry := s.fds[fd]
 	mem := s.mem()
 	if fd == StdoutFD || fd == StderrFD {
-		if errno := errnoIfFDRightsMissing(entry.rightsBase, rightFDWrite); errno != 0 {
+		if errno := errnoIfFDRightsMissing(fe.RightsBase, rightFDWrite); errno != 0 {
 			return errno
 		}
 		var total uint32
 		for i := int32(0); i < iovsCount; i++ {
-			off := iovsPtr + i*8
-			bufPtr := int32(binary.LittleEndian.Uint32(mem[off:]))
-			bufLen := int32(binary.LittleEndian.Uint32(mem[off+4:]))
-			data := mem[bufPtr : bufPtr+bufLen]
-			var n int
-			var err error
-			if fd == StdoutFD {
-				if s.stdout != nil {
-					n, err = s.stdout.Write(data)
-				}
-			} else {
-				if s.stderr != nil {
-					n, err = s.stderr.Write(data)
-				}
+			data := guestIOV(mem, iovsPtr, i)
+			if data == nil {
+				continue
 			}
+			n, werrno := fe.File.Write(data)
 			total += uint32(n)
-			if err != nil {
+			if werrno != 0 {
 				binary.LittleEndian.PutUint32(mem[nwrittenPtr:], total)
-				return wasiEIo
+				return errnoFromWasi(werrno)
 			}
 		}
 		binary.LittleEndian.PutUint32(mem[nwrittenPtr:], total)
 		return wasiESuccess
 	}
-	if entry.file == nil {
-		return wasiEBadf
-	}
-	if errno := errnoForDirectoryFDOp(entry); errno != 0 {
+	if errno := errnoForDirectoryFDOp(fe); errno != 0 {
 		return errno
 	}
-	if errno := errnoIfFDRightsMissing(entry.rightsBase, rightFDWrite); errno != 0 {
+	if errno := errnoIfFDRightsMissing(fe.RightsBase, rightFDWrite); errno != 0 {
 		return errno
+	}
+	curOff := fe.Offset
+	if fileAppendEnabled(fe) {
+		size, errno := s.fdFileSize(fe)
+		if errno != 0 {
+			binary.LittleEndian.PutUint32(mem[nwrittenPtr:], 0)
+			return errno
+		}
+		curOff = size
+		fe.Offset = curOff
 	}
 	var total uint32
-	// For io.Seeker-backed fds (e.g., osFile), sync the OS kernel position
-	// with entry.offset (for normal writes) or the end of the file (for
-	// APPEND) so that subsequent SEEK_CUR via Xfd_seek is correct.
-	if seeker, ok := entry.file.(io.Seeker); ok {
-		if entry.fdFlags&uint16(fdFlagsAppend) != 0 {
-			// For APPEND, seek to end before writing so Write() goes to
-			// the correct OS position regardless of entry.offset.
-			if pos, err := seeker.Seek(0, io.SeekEnd); err == nil {
-				entry.offset = pos
-			}
-		} else {
-			if _, err := seeker.Seek(entry.offset, io.SeekStart); err != nil {
-				s.fds[fd] = entry
-				binary.LittleEndian.PutUint32(mem[nwrittenPtr:], total)
-				return wasiEIo
-			}
-		}
-	}
 	for i := int32(0); i < iovsCount; i++ {
-		off := iovsPtr + i*8
-		bufPtr := int32(binary.LittleEndian.Uint32(mem[off:]))
-		bufLen := int32(binary.LittleEndian.Uint32(mem[off+4:]))
-		if bufLen == 0 {
+		data := guestIOV(mem, iovsPtr, i)
+		if data == nil {
 			continue
 		}
-		// Use io.Writer (Write) for osFile-backed entries that implement
-		// io.Writer (all osFile entries do). Fall back to WriteAt for
-		// non-Writer files.
-		w, ok := entry.file.(io.Writer)
-		if !ok {
-			wa, ok2 := entry.file.(interface {
-				WriteAt([]byte, int64) (int, error)
-			})
-			if !ok2 {
-				break
-			}
-			n, err := wa.WriteAt(mem[bufPtr:bufPtr+bufLen], entry.offset)
-			entry.offset += int64(n)
-			total += uint32(n)
-			if err != nil {
-				s.fds[fd] = entry
-				binary.LittleEndian.PutUint32(mem[nwrittenPtr:], total)
-				return wasiEIo
-			}
-			continue
-		}
-		n, err := w.Write(mem[bufPtr : bufPtr+bufLen])
+		n, werrno := fe.File.Pwrite(data, curOff)
+		errno := errnoFromWasi(werrno)
 		total += uint32(n)
-		if entry.fdFlags&uint16(fdFlagsAppend) != 0 {
-			// For APPEND, the actual OS position may differ from
-			// entry.offset + n. Seek to 0, SEEK_CUR to capture the
-			// real OS position.
-			if seeker, ok2 := entry.file.(io.Seeker); ok2 {
-				if pos, seekErr := seeker.Seek(0, io.SeekCurrent); seekErr == nil {
-					entry.offset = pos
-				}
-			}
-		} else {
-			entry.offset += int64(n)
-		}
-		if err != nil {
-			s.fds[fd] = entry
+		if errno != 0 {
 			binary.LittleEndian.PutUint32(mem[nwrittenPtr:], total)
-			return wasiEIo
+			return errno
 		}
+		curOff += int64(n)
+		fe.Offset = curOff
 	}
-	s.fds[fd] = entry
 	binary.LittleEndian.PutUint32(mem[nwrittenPtr:], total)
 	return wasiESuccess
 }
 
-// Xfd_seek implements fd_seek. Delegates to the underlying io.Seeker, stores
-// the resulting position in entry.offset, and writes it to guest memory.
-// Subsequent fd_read and fd_write on seeker-backed fds seek to entry.offset
-// before I/O. Returns EISDIR for directory fds, EINVAL if the file does not
-// implement io.Seeker.
 func (s *State) Xfd_seek(fd int32, offset int64, whence, newOffsetPtr int32) int32 {
 	s.assertSingleOwner()
-	if fd < 0 || int(fd) >= len(s.fds) {
+	fe, ok := s.lookupFD(fd)
+	if !ok || fe.File == nil {
 		return wasiEBadf
 	}
-	entry := s.fds[fd]
-	if entry.file == nil || entry.preopen {
+	if fe.IsPreopen {
 		return wasiEBadf
 	}
-	if errno := errnoForDirectoryFDOp(entry); errno != 0 {
+	if errno := errnoForDirectoryFDOp(fe); errno != 0 {
 		return errno
 	}
-	sk, ok := entry.file.(io.Seeker)
-	if !ok {
+	curOff := fe.Offset
+	var n int64
+	switch int(whence) {
+	case io.SeekStart:
+		n = offset
+	case io.SeekCurrent:
+		n = curOff + offset
+	case io.SeekEnd:
+		size, errno := s.fdFileSize(fe)
+		if errno != 0 {
+			if errno == wasiENoEnt {
+				return wasiEInval
+			}
+			return errno
+		}
+		n = size + offset
+	default:
 		return wasiEInval
 	}
-	n, err := sk.Seek(offset, int(whence))
-	if err != nil {
-		if errors.Is(err, syscall.EINVAL) {
+	if n < 0 {
+		return wasiEInval
+	}
+	if _, werrno := fe.File.Seek(n, io.SeekStart); werrno != 0 {
+		if werrno == wasi.ENOTSUP || werrno == wasi.ENOSYS {
 			return wasiEInval
 		}
-		return wasiEIo
+		return errnoFromWasi(werrno)
 	}
-	entry.offset = n
-	s.fds[fd] = entry
+	fe.Offset = n
 	binary.LittleEndian.PutUint64(s.mem()[newOffsetPtr:], uint64(n))
 	return wasiESuccess
 }
 
-// Xfd_readdir implements fd_readdir. Writes WASI dirent structs into
-// guest memory starting from the entry at cookie. Each dirent is
-// 24 + len(name) bytes. For preopen fds backed by fs.ReadDirFS, the
-// directory listing is loaded on first call and cached in the fd entry.
+func writeWASIDirent(mem []byte, off int32, cookie uint64, ino uint64, fileType byte, name string) {
+	nameLen := uint32(len(name))
+	binary.LittleEndian.PutUint64(mem[off:], cookie)
+	binary.LittleEndian.PutUint64(mem[off+8:], ino)
+	binary.LittleEndian.PutUint32(mem[off+16:], nameLen)
+	binary.LittleEndian.PutUint32(mem[off+20:], uint32(fileType))
+	copy(mem[off+24:], name)
+}
+
+func readdirEntryLen(nameLen uint32) uint32 {
+	return 24 + nameLen
+}
+
+func readdirMaxEntries(bufLen int32) uint32 {
+	return uint32(bufLen)/25 + 1
+}
+
+func readdirResumeBufUsed(bufUsed, bufLen uint32, wrotePartial bool) uint32 {
+	if wrotePartial && bufUsed > 0 && bufUsed < bufLen {
+		return bufLen
+	}
+	return bufUsed
+}
+
+// TODO(post-merge): readdirDotDotIno uses os.Stat on host paths directly, bypassing
+// wasi.FS. Prefer a VFS method (e.g. parent Stat/Lstat on guest-relative path) so
+// inode lookup stays inside the FS abstraction and works for non-host backends.
+func (s *State) readdirDotDotIno(fe *wasi.FileEntry) uint64 {
+	if fe == nil || fe.FS == nil || fsysReadOnly(fe.FS) {
+		return 0
+	}
+	hostRoot := preopenHostRootFromFS(fe.FS)
+	if hostRoot == "" {
+		return 0
+	}
+	if fe.IsPreopen {
+		if fi, err := os.Stat(filepath.Dir(hostRoot)); err == nil {
+			_, ino := statDevIno(fi)
+			return ino
+		}
+		return 0
+	}
+	rel := strings.TrimPrefix(fe.Name, "/")
+	parentPath := filepath.Dir(filepath.Join(hostRoot, filepath.FromSlash(rel)))
+	if fi, err := os.Stat(parentPath); err == nil {
+		_, ino := statDevIno(fi)
+		return ino
+	}
+	return 0
+}
+
 func (s *State) Xfd_readdir(fd int32, bufPtr int32, bufLen int32, cookie int64, bufUsedPtr int32) int32 {
 	s.assertSingleOwner()
-	if fd < 0 || int(fd) >= len(s.fds) {
+	fe, ok := s.lookupFD(fd)
+	if !ok || fe.File == nil {
 		return wasiEBadf
 	}
-	entry := &s.fds[fd]
-	if entry.isUnused() {
-		return wasiEBadf
+	cache, werrno := fe.DirentCache()
+	if werrno != 0 {
+		return errnoFromWasi(werrno)
+	}
+	if ino := s.readdirDotDotIno(fe); ino != 0 {
+		cache.SetDotDotIno(wasi.Inode(ino))
 	}
 	mem := s.mem()
-
-	// cookie=0 invalidates the per-fd listing snapshot so the next call
-	// re-reads from the host. cookie>0 uses the warm snapshot without
-	// touching the host (stable across host directory mutations).
-	if cookie == 0 {
-		entry.readdirSnapshot = nil
-		entry.dirFile = nil
-		if _, ok := entry.file.(*DirEntriesFile); ok {
-			entry.file = nil
-		}
-	}
-
-	// If a snapshot already exists (from a prior cookie=0 call), use it
-	// instead of re-reading from the host.
-	if entry.readdirSnapshot == nil {
-		// Cache listing on first call for preopens or any directory fd.
-		if entry.dirFile == nil {
-			if entry.preopen {
-				if entry.mount < 0 || entry.mount >= len(s.mounts) {
-					return wasiEBadf
-				}
-				if entry.file == nil {
-					if d, ok := s.mounts[entry.mount].root.(fs.ReadDirFS); ok {
-						entries, err := d.ReadDir(".")
-						if err != nil {
-							return wasiEIo
-						}
-						entry.file = &DirEntriesFile{Entries: entries}
-					}
-				}
-			}
-			if entry.file == nil {
-				return wasiEBadf
-			}
-			var df fs.ReadDirFile
-			switch f := entry.file.(type) {
-			case fs.ReadDirFile:
-				df = f
-			case *FSFileWrap:
-				df, _ = f.File.(fs.ReadDirFile)
-			}
-			if df == nil {
-				return wasiENotDir
-			}
-			entry.dirFile = df
-		}
-
-		// Seek back to the start before reading: ReadDir(-1) returns all
-		// entries from the current file offset. A non-zero offset would
-		// produce a truncated listing.
-		if seeker, ok := entry.file.(io.Seeker); ok {
-			// os.File (writable host paths) always supports seeking;
-			// a Seek error on those is a genuine fault.  FSFileWrap
-			// may fail Seek when the underlying fs.FS doesn't support
-			// it — that is benign for ReadDir.
-			if _, seekErr := seeker.Seek(0, io.SeekStart); seekErr != nil {
-				if _, isWrap := entry.file.(*FSFileWrap); !isWrap {
-					return wasiEIo
-				}
-			}
-		}
-		rawEntries, err := entry.dirFile.ReadDir(-1)
-		if err != nil && err != io.EOF {
-			return wasiEIo
-		}
-
-		// Restore entries to the file if it's our own DirEntriesFile adapter,
-		// so that subsequent calls with cookies can still access them.
-		if de, ok := entry.file.(*DirEntriesFile); ok {
-			de.idx = 0
-		}
-
-		// Prepend synthetic . and .. entries and store the full listing
-		// as the per-fd snapshot.
-		entries := make([]fs.DirEntry, 0, 2+len(rawEntries))
-		entries = append(entries, synthDirEntry{"."}, synthDirEntry{".."})
-		entries = append(entries, rawEntries...)
-		entry.readdirSnapshot = entries
-	}
-
-	entries := entry.readdirSnapshot
-
-	// Pre-compute inodes for synthetic . and .. entries.
-	var selfIno, parentIno uint64
-	if m := entry.mount; m >= 0 && m < len(s.mounts) && s.mounts[m].writable && s.mounts[m].hostRoot != "" {
-		if entry.preopen {
-			if fi, err := os.Stat(s.mounts[m].hostRoot); err == nil {
-				_, selfIno = statDevIno(fi)
-			}
-			if fi, err := os.Stat(filepath.Dir(s.mounts[m].hostRoot)); err == nil {
-				_, parentIno = statDevIno(fi)
-			}
-		} else {
-			if fi, err := entry.file.Stat(); err == nil {
-				_, selfIno = statDevIno(fi)
-			}
-			parentPath := filepath.Dir(filepath.Join(s.mounts[m].hostRoot, entry.path))
-			if fi, err := os.Stat(parentPath); err == nil {
-				_, parentIno = statDevIno(fi)
-			}
-		}
-	}
-
-	if int(cookie) >= len(entries) {
+	if bufLen < 25 {
 		binary.LittleEndian.PutUint32(mem[bufUsedPtr:], 0)
 		return wasiESuccess
 	}
-	var bufUsed uint32
-	var i int
-	for i = int(cookie); i < len(entries); i++ {
-		name := entries[i].Name()
-		var ftype byte
-		if entries[i].IsDir() {
-			ftype = fdDir
-		} else {
-			ftype = fdFile
+
+	dirents, werrno := cache.Read(uint64(cookie), readdirMaxEntries(bufLen))
+	if werrno != 0 {
+		if werrno == wasi.ENOENT {
+			binary.LittleEndian.PutUint32(mem[bufUsedPtr:], 0)
+			return wasiESuccess
 		}
-		nameLen := uint32(len(name))
-		entryLen := uint32(24 + nameLen)
+		return errnoFromWasi(werrno)
+	}
+
+	var bufUsed uint32
+	idx := int(cookie)
+	wrotePartial := false
+	for i, d := range dirents {
+		nameLen := uint32(len(d.Name))
+		entryLen := readdirEntryLen(nameLen)
 		if bufUsed+entryLen > uint32(bufLen) {
+			wrotePartial = i > 0
 			break
 		}
-		off := bufPtr + int32(bufUsed)
-		binary.LittleEndian.PutUint64(mem[off:], uint64(i+1))
-		var ino uint64
-		switch i {
-		case 0:
-			// Synthetic "." entry: use the directory's own inode.
-			ino = selfIno
-		case 1:
-			// Synthetic ".." entry: use the parent directory inode.
-			ino = parentIno
-		default:
-			// Real entries: extract ino from DirEntry.Info().Sys() when available.
-			if info, err := entries[i].Info(); err == nil {
-				if st, ok := info.Sys().(*syscall.Stat_t); ok {
-					ino = st.Ino
-				}
-			}
-		}
-		binary.LittleEndian.PutUint64(mem[off+8:], ino)
-		binary.LittleEndian.PutUint32(mem[off+16:], nameLen)
-		binary.LittleEndian.PutUint32(mem[off+20:], uint32(ftype))
-		copy(mem[off+24:], name)
+		ino := uint64(d.Ino)
+		writeWASIDirent(mem, bufPtr+int32(bufUsed), uint64(idx+1), ino, filestatFdTypeFromMode(d.Type), d.Name)
 		bufUsed += entryLen
+		idx++
 	}
-	// WASI cookie-based resume: when more entries remain but the last one did
-	// not fit in buf, report bufLen in bufUsed. The caller detects this and
-	// resumes via the cookie (otherwise it would think the directory is done).
-	if i < len(entries) && bufUsed > 0 && bufUsed < uint32(bufLen) {
-		bufUsed = uint32(bufLen)
-	}
-	binary.LittleEndian.PutUint32(mem[bufUsedPtr:], bufUsed)
+
+	binary.LittleEndian.PutUint32(mem[bufUsedPtr:], readdirResumeBufUsed(bufUsed, uint32(bufLen), wrotePartial))
 	return wasiESuccess
 }
-
-// Xfd_filestat_get implements fd_filestat_get. Writes a 64-byte filestat
-// struct for the open fd. For preopen directory fds, stats the mount root
-// via fs.Stat.

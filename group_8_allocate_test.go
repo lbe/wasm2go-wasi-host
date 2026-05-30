@@ -189,14 +189,7 @@ func TestFdAllocate(t *testing.T) {
 		}
 		t.Cleanup(func() { _ = f.Close() })
 		s2, _ := newTestState(nil)
-		for len(s2.fds) <= wrapFd {
-			s2.fds = append(s2.fds, fdEntry{})
-		}
-		s2.fds[wrapFd] = fdEntry{
-			fdType:     fdFile,
-			file:       &FSFileWrap{File: f},
-			rightsBase: rightFDAllocate,
-		}
+		insertStubFD(s2, wrapFd, wrapGoFSFile(f), rightFDAllocate)
 		errno := s2.Xfd_allocate(wrapFd, 0, 10)
 		if errno != wasiENotSup {
 			t.Errorf("Xfd_allocate on FSFileWrap = %d, want ENOTSUP (%d)", errno, wasiENotSup)

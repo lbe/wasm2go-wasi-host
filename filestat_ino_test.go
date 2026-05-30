@@ -2,13 +2,14 @@ package wasihost
 
 import (
 	"encoding/binary"
-	"io"
 	"io/fs"
 	"os"
 	"path/filepath"
 	"syscall"
 	"testing"
 	"testing/fstest"
+
+	"github.com/lbe/wasm2go-wasi-host/internal/wasi"
 )
 
 // TestFdReaddirHostSyntheticDots verifies that fd_readdir on a host-backed
@@ -613,16 +614,13 @@ func TestFdReaddirSyntheticDots(t *testing.T) {
 // TestFdReaddirEdgeCases verifies fd_readdir behavior for a buffer too small
 // to hold any dirent, an exhausted cookie past the last entry, and an invalid
 // file descriptor.
-// errThrowSeeker implements fs.ReadDirFile and io.Seeker; Seek returns io.ErrClosedPipe.
-type errThrowSeeker struct {
-	fs.File
-}
 
-func (errThrowSeeker) Read([]byte) (int, error)             { return 0, io.EOF }
-func (errThrowSeeker) Stat() (fs.FileInfo, error)           { return nil, nil }
-func (errThrowSeeker) Close() error                         { return nil }
-func (errThrowSeeker) ReadDir(_ int) ([]fs.DirEntry, error) { return nil, nil }
-func (errThrowSeeker) Seek(_ int64, _ int) (int64, error)   { return 0, io.ErrClosedPipe }
+type errThrowSeekerWasi struct{ wasi.UnimplementedFile }
+
+func (errThrowSeekerWasi) IsDir() (bool, wasi.Errno) { return true, 0 }
+func (errThrowSeekerWasi) Readdir(int) ([]wasi.Dirent, wasi.Errno) {
+	return nil, wasi.EIO
+}
 
 // TestFdReaddirParentDino verifies that synthetic ".." on writable host paths
 // gets the parent directory inode, not the directory's own inode.
@@ -790,17 +788,15 @@ func TestFdReaddirEdgeCases(t *testing.T) {
 	t.Run("seek error returns EIO", func(t *testing.T) {
 		buf := make([]byte, 65536)
 		mem := func() []byte { return buf }
-		s := New(mem, nil)
+		s := New(mem, NewModuleConfig().WithHostDirectoryPreopen("/", t.TempDir()))
 
-		// Override fd 3 with our seek-error file.
-		// Grow fds slice to make room.
-		for len(s.fds) < 4 {
-			s.fds = append(s.fds, fdEntry{})
-		}
-		s.fds[3] = fdEntry{
-			file:   &errThrowSeeker{},
-			fdType: 3,
-		}
+		insertTestFileAt(s, 3, &wasi.FileEntry{
+			File:       &errThrowSeekerWasi{},
+			IsPreopen:  true,
+			Name:       "/",
+			GuestPath:  "/",
+			RightsBase: rightsReadOnlyDirPreopen,
+		})
 
 		errno := s.Xfd_readdir(3, rdBufPtr, rdBufLen, 0, usedPtr)
 		if errno != wasiEIo {

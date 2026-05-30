@@ -35,7 +35,8 @@ Portable `package wasihost` on **Linux** and **Darwin** (small build-tagged file
 | `FSConfig`, mount builders | `wasihost_fsconfig.go` |
 | WASI errno / rights constants | `wasihost_const.go` |
 | `mapOSError`, errno helpers | `wasihost_errno.go` |
-| `fsFile`, `osFile`, `FSFileWrap`, `DirEntriesFile` | `wasihost_adapters.go` |
+| `fsFile` (fd-table file interface) | `wasihost_adapters.go` |
+| Legacy fd adapters (`osFile`, `FSFileWrap`, `DirEntriesFile`, …) | `wasihost_adapters_stubs.go` |
 | Guest memory / string tables | `wasihost_mem.go` |
 | Path resolution and confinement | `wasihost_path_resolve.go` |
 | `path_open` | `wasihost_open.go` |
@@ -72,7 +73,7 @@ sequenceDiagram
 
 ### Filesystem layer
 
-Access is **capability-oriented**: guests use **preopened directories** only (plus FDs opened beneath them). Configure mounts via `ModuleConfig.WithReadOnlyFS`, `WithHostDirectoryPreopen`, or `WithFS(NewFSConfig()…)`. Read-only `fs.FS` preopens report no write or path-mutation rights. Writable mounts use host directory preopens: reads go through `os.DirFS`, writes and path operations use `hostRoot` with confinement checks (lexical preopen bounds, symlink follow rules, `filepath.EvalSymlinks` where required).
+Access is **capability-oriented**: guests use **preopened directories** only (plus FDs opened beneath them). Configure mounts via `ModuleConfig.WithReadOnlyFS`, `WithHostDirectoryPreopen`, or `WithFS(NewFSConfig()…)`. Read-only `fs.FS` preopens report no write or path-mutation rights. Embedded bundles use read-only fs.FS preopens. Writable mounts use host directory preopens: reads go through `os.DirFS`, writes and path operations use `hostRoot` with confinement checks (lexical preopen bounds, symlink follow rules, `filepath.EvalSymlinks` where required).
 
 ```mermaid
 graph TD

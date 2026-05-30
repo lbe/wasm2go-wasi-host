@@ -5,6 +5,8 @@ import (
 	"os"
 	"path/filepath"
 	"testing"
+
+	"github.com/lbe/wasm2go-wasi-host/internal/wasi"
 )
 
 // TestFdRenumberClosesDestination covers fd_renumber: closes the destination fd,
@@ -47,7 +49,11 @@ func TestFdRenumberClosesDestination(t *testing.T) {
 	recordedRightsBase := binary.LittleEndian.Uint64(buf[statPtr+8 : statPtr+16])
 	recordedRightsInheriting := binary.LittleEndian.Uint64(buf[statPtr+16 : statPtr+24])
 
-	prevDestFile := s.fds[fdTo].file
+	prevDestFE, _ := s.lookupFD(fdTo)
+	var prevDestFile wasi.File
+	if prevDestFE != nil {
+		prevDestFile = prevDestFE.File
+	}
 
 	// Call Xfd_renumber(fd_from, fd_to) should return ESUCCESS.
 	if errno := s.Xfd_renumber(fdFrom, fdTo); errno != wasiESuccess {
@@ -55,7 +61,7 @@ func TestFdRenumberClosesDestination(t *testing.T) {
 	}
 
 	if prevDestFile != nil {
-		if _, err := prevDestFile.Read(make([]byte, 1)); err == nil {
+		if _, errno := prevDestFile.Read(make([]byte, 1)); errno == 0 {
 			t.Fatal("destination open file still readable after renumber; fd_to was not closed")
 		}
 	}
@@ -106,5 +112,57 @@ func TestFdRenumberClosesDestination(t *testing.T) {
 	}
 	if err := os.Remove(filepath.Join(tmpDir, file2)); err != nil {
 		t.Fatalf("failed to remove file2.txt: %v", err)
+	}
+}
+
+func TestFdRenumberOverPreopen(t *testing.T) {
+	const (
+		pathOff = 2000
+		fdPtr   = 1000
+	)
+	s, buf, tmpDir := newWMState(t)
+	// Mimic open_scratch_directory: path_open(".") on preopen fd 3.
+	copy(buf[pathOff:], ".")
+	errno := s.Xpath_open(3, 0, pathOff, 1, int32(oflagDir), int64(rightFDRead|rightFDReaddir), int64(rightFDRead), 0, fdPtr)
+	if errno != wasiESuccess {
+		t.Fatalf("Xpath_open(.) = %d", errno)
+	}
+	baseDirFd := int32(binary.LittleEndian.Uint32(buf[fdPtr : fdPtr+4]))
+	// Mimic create_tmp_dir: mkdir + path_open subdir with directory rights.
+	const dirName = "overwrite_preopen_dir.cleanup"
+	copy(buf[pathOff:], dirName)
+	if errno = s.Xpath_create_directory(baseDirFd, pathOff, int32(len(dirName))); errno != wasiESuccess {
+		t.Fatalf("Xpath_create_directory = %d", errno)
+	}
+	errno = s.Xpath_open(baseDirFd, 0, pathOff, int32(len(dirName)), int32(oflagDir),
+		int64(rightsWritableDirPreopen), int64(rightFDRead|rightFDWrite|rightFDReaddir), 0, fdPtr)
+	if errno != wasiESuccess {
+		t.Fatalf("Xpath_open(subdir) = %d", errno)
+	}
+	dirFd := int32(binary.LittleEndian.Uint32(buf[fdPtr : fdPtr+4]))
+	_ = tmpDir
+	if errno := s.Xfd_renumber(dirFd, 3); errno != wasiESuccess {
+		t.Fatalf("Xfd_renumber(dirFd, preopen) = %d, want ESUCCESS", errno)
+	}
+}
+
+// TestFdRenumberToHighEmptySlot verifies fd_renumber can target an unallocated
+// fd >= 64; FileTable grows via InsertAt rather than rejecting high slots.
+func TestFdRenumberToHighEmptySlot(t *testing.T) {
+	t.Parallel()
+	s, _ := newTestState(nil)
+	const (
+		fdFrom int32 = 5
+		fdTo   int32 = 100
+	)
+	insertStubFD(s, fdFrom, wrapStubFSFile(stubFSFile{}), rightFDRead)
+	if errno := s.Xfd_renumber(fdFrom, fdTo); errno != wasiESuccess {
+		t.Fatalf("Xfd_renumber(%d, %d) = %d, want ESUCCESS", fdFrom, fdTo, errno)
+	}
+	if _, ok := s.lookupFD(fdFrom); ok {
+		t.Errorf("fd %d still open after renumber", fdFrom)
+	}
+	if _, ok := s.lookupFD(fdTo); !ok {
+		t.Errorf("fd %d not open after renumber to empty high slot", fdTo)
 	}
 }

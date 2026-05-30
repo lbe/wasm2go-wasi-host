@@ -3,7 +3,6 @@ package wasihost
 import (
 	"encoding/binary"
 	"testing"
-	"time"
 )
 
 func TestClockAndArgQueries(t *testing.T) {
@@ -29,8 +28,7 @@ func TestClockAndArgQueries(t *testing.T) {
 	})
 
 	t.Run("Xclock_time_get monotonic is non-decreasing", func(t *testing.T) {
-		s, buf := newTestState(nil)
-		s.startTime = time.Now()
+		s, buf := newTestState(NewModuleConfig().WithSysNanotime())
 		errno := s.Xclock_time_get(1, 0, clockOff)
 		if errno != wasiESuccess {
 			t.Fatalf("Xclock_time_get(1) returned %d, want ESUCCESS", errno)
@@ -74,8 +72,7 @@ func TestClockAndArgQueries(t *testing.T) {
 	})
 
 	t.Run("Xargs_sizes_get writes count and buf_size", func(t *testing.T) {
-		s, buf := newTestState(nil)
-		s.args = []string{"prog", "--flag", "val"}
+		s, buf := newTestState(NewModuleConfig().WithArgs("prog", "--flag", "val"))
 		errno := s.Xargs_sizes_get(argcOff, argvSzOff)
 		if errno != wasiESuccess {
 			t.Fatalf("Xargs_sizes_get returned %d, want ESUCCESS", errno)
@@ -91,8 +88,7 @@ func TestClockAndArgQueries(t *testing.T) {
 	})
 
 	t.Run("Xargs_get writes pointer array and null-terminated strings", func(t *testing.T) {
-		s, buf := newTestState(nil)
-		s.args = []string{"prog", "--flag", "val"}
+		s, buf := newTestState(NewModuleConfig().WithArgs("prog", "--flag", "val"))
 		_ = s.Xargs_get(argvOff, argvBufOff)
 		// Check pointer array
 		p0 := binary.LittleEndian.Uint32(buf[argvOff : argvOff+4])

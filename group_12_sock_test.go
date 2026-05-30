@@ -36,17 +36,10 @@ func TestXsockShutdownInvalidFd(t *testing.T) {
 
 	t.Run("closed fd returns EBADF", func(t *testing.T) {
 		s, _ := newTestState(nil)
-		// Grow the fd table so we can allocate fd 10.
-		for len(s.fds) <= 10 {
-			s.fds = append(s.fds, fdEntry{})
-		}
-		// Place a valid (non-socket) entry at fd 10.
-		s.fds[10] = fdEntry{fdType: fdFile}
-		// Close it so the slot becomes unused.
+		insertStubFD(s, 10, wrapStubFSFile(stubFSFile{}), rightFDRead)
 		if errno := s.Xfd_close(10); errno != wasiESuccess {
 			t.Fatalf("Xfd_close(10) = %d, want ESUCCESS", errno)
 		}
-		// sock_shutdown on the closed (now unused) fd should return EBADF.
 		if got := s.Xsock_shutdown(10, 0); got != wasiEBadf {
 			t.Errorf("Xsock_shutdown(closed fd 10, 0) = %d, want EBADF (%d)", got, wasiEBadf)
 		}

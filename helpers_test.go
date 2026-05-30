@@ -54,17 +54,17 @@ func TestWASIStubs(t *testing.T) {
 		}
 	}
 
-	// Xfd_renumber: out-of-range fd returns EBadf; valid renumber succeeds.
+	// Xfd_renumber: invalid fd returns EBadf; valid renumber succeeds.
 	if rc := s.Xfd_renumber(-1, 0); rc != wasiEBadf {
 		t.Errorf("Xfd_renumber(-1, 0) = %d, want EBadf", rc)
 	}
-	if rc := s.Xfd_renumber(0, 100); rc != wasiEBadf {
-		t.Errorf("Xfd_renumber(0, 100) = %d, want EBadf", rc)
-	}
-
-	// Xfd_renumber success: fds 0 and 2 are both valid in a 3-fd table.
+	// Xfd_renumber success: fds 0 and 2 are both valid in the default stdio table.
 	if rc := s.Xfd_renumber(0, 2); rc != wasiESuccess {
 		t.Errorf("Xfd_renumber(0, 2) = %d, want ESuccess", rc)
+	}
+	// High unallocated fd_to is valid; FileTable grows via InsertAt.
+	if rc := s.Xfd_renumber(1, 100); rc != wasiESuccess {
+		t.Errorf("Xfd_renumber(1, 100) = %d, want ESuccess", rc)
 	}
 
 	// Path mutation functions: with no mounts configured, all return EROFS.

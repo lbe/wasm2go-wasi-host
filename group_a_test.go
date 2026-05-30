@@ -4,8 +4,10 @@ import (
 	"encoding/binary"
 	"io"
 	"io/fs"
-	"reflect"
 	"testing"
+
+	"github.com/lbe/wasm2go-wasi-host/internal/wasi"
+	"github.com/lbe/wasm2go-wasi-host/internal/wasi/sysfs"
 )
 
 type stubFSFile struct{}
@@ -49,7 +51,6 @@ func TestGroupAFoundation(t *testing.T) {
 
 	t.Run("environ_sizes_get writes count and total length", func(t *testing.T) {
 		s, buf := newTestState(NewModuleConfig().WithEnvRaw("A=1").WithEnvRaw("BC=2"))
-		s.env = []string{"A=1", "BC=2"}
 		errno := s.Xenviron_sizes_get(countOff, bufSizeOff)
 		if errno != 0 {
 			t.Fatalf("expected ESUCCESS, got %d", errno)
@@ -65,8 +66,7 @@ func TestGroupAFoundation(t *testing.T) {
 	})
 
 	t.Run("environ_get writes strings and pointers", func(t *testing.T) {
-		s, buf := newTestState(nil)
-		s.env = []string{"A=1", "BC=2"}
+		s, buf := newTestState(NewModuleConfig().WithEnvRaw("A=1").WithEnvRaw("BC=2"))
 		errno := s.Xenviron_get(envPtrOff, envBufOff)
 		if errno != 0 {
 			t.Fatalf("expected ESUCCESS, got %d", errno)
@@ -91,12 +91,7 @@ func TestGroupAFoundation(t *testing.T) {
 
 	t.Run("fd_prestat_get and fd_prestat_dir_name", func(t *testing.T) {
 		s, buf := newTestState(nil)
-		s.mounts = []mountEntry{{guestPath: "tmp"}}
-		s.preopens = []fdEntry{{path: "tmp", fdType: 3, mount: 0, preopen: true}}
-		for len(s.fds) < 4 {
-			s.fds = append(s.fds, fdEntry{})
-		}
-		s.fds[3] = fdEntry{path: "tmp", fdType: 3, mount: 0, preopen: true}
+		installPreopenAt(t, s, 3, "tmp", t.TempDir(), false)
 
 		t.Run("fd_prestat_get success", func(t *testing.T) {
 			errno := s.Xfd_prestat_get(3, prestatOff)
@@ -134,14 +129,8 @@ func TestGroupAFoundation(t *testing.T) {
 
 	t.Run("fd_fdstat_get", func(t *testing.T) {
 		s, buf := newTestState(nil)
-		for len(s.fds) <= 5 {
-			s.fds = append(s.fds, fdEntry{})
-		}
-		s.fds[0] = fdEntry{fdType: 2} // stdin
-		s.fds[1] = fdEntry{fdType: 2} // stdout
-		s.fds[2] = fdEntry{fdType: 2} // stderr
-		s.fds[3] = fdEntry{fdType: 3} // preopen
-		s.fds[5] = fdEntry{fdType: 4, file: &stubFSFile{}}
+		installPreopenAt(t, s, 3, "tmp", t.TempDir(), false)
+		insertStubFD(s, 5, wrapStubFSFile(stubFSFile{}), 0)
 
 		cases := []struct {
 			fd   int32
@@ -173,20 +162,17 @@ func TestGroupAFoundation(t *testing.T) {
 
 	t.Run("fd_renumber", func(t *testing.T) {
 		s, _ := newTestState(nil)
-		for len(s.fds) <= 6 {
-			s.fds = append(s.fds, fdEntry{})
-		}
-		s.fds[5] = fdEntry{fdType: 4, path: "testfile"}
-		original := s.fds[5]
+		insertStubFD(s, 5, wrapStubFSFile(stubFSFile{}), 0)
+		origRights := lookupFETest(s, 5).RightsBase
 		errno := s.Xfd_renumber(5, 6)
 		if errno != 0 {
 			t.Fatalf("expected ESUCCESS, got %d", errno)
 		}
-		if !reflect.DeepEqual(s.fds[6], original) {
-			t.Errorf("fd 6 does not match original")
+		if _, ok := s.lookupFD(5); ok {
+			t.Errorf("fd 5 still open after renumber")
 		}
-		if !reflect.DeepEqual(s.fds[5], fdEntry{}) {
-			t.Errorf("fd 5 is not empty after renumber")
+		if fe6, ok := s.lookupFD(6); !ok || fe6.RightsBase != origRights {
+			t.Errorf("fd 6 does not match original")
 		}
 	})
 
@@ -223,11 +209,9 @@ func TestGroupAFoundation(t *testing.T) {
 	})
 
 	t.Run("resolvePath", func(t *testing.T) {
-		s, _ := newTestState(nil)
-		s.mounts = []mountEntry{
-			{guestPath: "/"},
-			{guestPath: "zeroperl"},
-		}
+		s, _ := newTestState(NewModuleConfig().
+			WithReadOnlyFS("/", emptyMapFS()).
+			WithReadOnlyFS("zeroperl", emptyMapFS()))
 		m, rel := s.resolvePath("/zeroperl/lib/x")
 		if m == nil {
 			t.Fatal("expected a mount, got nil")
@@ -248,13 +232,17 @@ func TestGroupAFoundation(t *testing.T) {
 	})
 
 	t.Run("resolveDirfdPath non-preopen dir fd", func(t *testing.T) {
-		s, _ := newTestState(nil)
-		s.mounts = []mountEntry{{guestPath: "/tmp", writable: false}}
-		for len(s.fds) <= 5 {
-			s.fds = append(s.fds, fdEntry{})
+		s, _ := newTestState(NewModuleConfig().WithReadOnlyFS("/tmp", emptyMapFS()))
+		installPreopenAt(t, s, 3, "/tmp", t.TempDir(), false)
+		subdir := t.TempDir()
+		wf, errno := sysfs.DirFS{Path: subdir}.OpenFile(".", wasi.O_RDONLY|wasi.O_DIRECTORY, 0)
+		if errno != 0 {
+			t.Fatal(errno)
 		}
-		// fd 5 is a non-preopen dir fd whose stored path is "/tmp/subdir"
-		s.fds[5] = fdEntry{fdType: fdDir, path: "/tmp/subdir", preopen: false}
+		insertTestFileAt(s, 5, &wasi.FileEntry{
+			GuestPath: "/tmp/subdir",
+			File:      wf,
+		})
 		buf := make([]byte, 65536)
 		s.mem = func() []byte { return buf }
 		copy(buf[1000:], "child.txt")

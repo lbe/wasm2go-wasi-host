@@ -214,7 +214,7 @@ func (f *osFile) Write(buf []byte) (n int, errno wasi.Errno) {
 }
 
 func (f *osFile) Pwrite(buf []byte, off int64) (n int, errno wasi.Errno) {
-	if n, errno = pwrite(f.file, buf, off); errno != 0 {
+	if n, errno = pwriteFd(f.fd, buf, off); errno != 0 {
 		errno = fileError(f, f.closed, errno)
 	}
 	return
@@ -256,4 +256,13 @@ func (f *osFile) Close() wasi.Errno {
 
 func (f *osFile) close() wasi.Errno {
 	return wasi.UnwrapOSError(f.file.Close())
+}
+
+// UnderlyingOSFile returns the wrapped *os.File when f is an os-backed sysfs file.
+func UnderlyingOSFile(f wasi.File) (*os.File, bool) {
+	o, ok := f.(*osFile)
+	if !ok || o == nil {
+		return nil, false
+	}
+	return o.file, true
 }

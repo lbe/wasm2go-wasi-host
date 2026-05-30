@@ -20,7 +20,7 @@ func TestUnwrapOSError(t *testing.T) {
 		{
 			name:     "PathError ErrPermission",
 			input:    &os.PathError{Err: os.ErrPermission},
-			expected: EPERM,
+			expected: EACCES,
 		},
 		{
 			name:     "PathError ErrNotExist",

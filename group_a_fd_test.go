@@ -11,6 +11,9 @@ import (
 	"strings"
 	"testing"
 	"testing/fstest"
+
+	"github.com/lbe/wasm2go-wasi-host/internal/wasi"
+	"github.com/lbe/wasm2go-wasi-host/internal/wasi/sysfs"
 )
 
 // newWMState creates a State with a single writable mount at guest path "/tmp"
@@ -441,10 +444,7 @@ func TestFdRead(t *testing.T) {
 
 	t.Run("EBADF nil file slot", func(t *testing.T) {
 		s, buf, _ := newWMState(t)
-		for len(s.fds) <= 5 {
-			s.fds = append(s.fds, fdEntry{})
-		}
-		s.fds[5] = fdEntry{fdType: fdFile, file: nil}
+		insertTestFileAt(s, 5, &wasi.FileEntry{File: nil})
 		binary.LittleEndian.PutUint32(buf[iovsOff:], uint32(dataBuf))
 		binary.LittleEndian.PutUint32(buf[iovsOff+4:], 4)
 		if errno := s.Xfd_read(5, iovsOff, 1, nreadOff); errno != wasiEBadf {
@@ -723,10 +723,7 @@ func TestFdSeek(t *testing.T) {
 	t.Run("EINVAL non-seeker fd", func(t *testing.T) {
 		// stubFSFile (defined in group_a_test.go) does not implement io.Seeker.
 		s, _, _ := newWMState(t)
-		for len(s.fds) <= 5 {
-			s.fds = append(s.fds, fdEntry{})
-		}
-		s.fds[5] = fdEntry{fdType: fdFile, file: &stubFSFile{}}
+		insertStubFD(s, 5, wrapStubFSFile(stubFSFile{}), 0)
 		if errno := s.Xfd_seek(5, 0, 0, resultPtr); errno != wasiEInval {
 			t.Errorf("non-seeker seek = %d, want EINVAL", errno)
 		}
@@ -931,15 +928,11 @@ func TestXpathFilestatGet(t *testing.T) {
 	})
 
 	t.Run("writable mount overlay fallback", func(t *testing.T) {
-		buf := make([]byte, 65536)
 		tmpDir := t.TempDir()
 		overlay := fstest.MapFS{
 			"lib/perl.pm": &fstest.MapFile{Data: []byte("# perl")},
 		}
-		s := New(func() []byte { return buf },
-			NewModuleConfig().WithHostDirectoryPreopen("/tmp", tmpDir),
-		)
-		s.mounts[len(s.mounts)-1].root = overlay
+		s, buf := setupMountWithOverlay(t, "/tmp", tmpDir, overlay)
 		p := "lib/perl.pm"
 		copy(buf[pathOff:], p)
 		if errno := s.Xpath_filestat_get(3, 0, pathOff, int32(len(p)), statPtr); errno != wasiESuccess {
@@ -975,8 +968,13 @@ func TestXpathOpen(t *testing.T) {
 			t.Fatalf("Xpath_open /dev/null = %d", errno)
 		}
 		fd := int32(binary.LittleEndian.Uint32(buf[fdPtr : fdPtr+4]))
-		if s.fds[fd].fdType != fdCharDev {
-			t.Errorf("fdType = %d, want fdCharDev (%d)", s.fds[fd].fdType, fdCharDev)
+		fe, ok := s.lookupFD(fd)
+		if !ok {
+			t.Fatal("lookupFD failed")
+		}
+		fdType, errno := fileEntryFdType(fe)
+		if errno != 0 || fdType != fdCharDev {
+			t.Errorf("fdType = %d, want fdCharDev (%d)", fdType, fdCharDev)
 		}
 	})
 
@@ -1008,8 +1006,9 @@ func TestXpathOpen(t *testing.T) {
 			t.Fatalf("Xpath_open host = %d", errno)
 		}
 		fd := int32(binary.LittleEndian.Uint32(buf[fdPtr : fdPtr+4]))
-		if _, ok := s.fds[fd].file.(*osFile); !ok {
-			t.Errorf("expected *osFile, got %T", s.fds[fd].file)
+		fe, _ := s.lookupFD(fd)
+		if _, ok := sysfs.UnderlyingOSFile(fe.File); !ok {
+			t.Errorf("expected underlying os file, got %T", fe.File)
 		}
 	})
 
@@ -1035,8 +1034,13 @@ func TestXpathOpen(t *testing.T) {
 			t.Fatalf("Xpath_open dir = %d", errno)
 		}
 		fd := int32(binary.LittleEndian.Uint32(buf[fdPtr : fdPtr+4]))
-		if s.fds[fd].fdType != fdDir {
-			t.Errorf("fdType = %d, want fdDir (%d)", s.fds[fd].fdType, fdDir)
+		fe, ok := s.lookupFD(fd)
+		if !ok {
+			t.Fatal("lookupFD failed")
+		}
+		fdType, errno := fileEntryFdType(fe)
+		if errno != 0 || fdType != fdDir {
+			t.Errorf("fdType = %d, want fdDir (%d)", fdType, fdDir)
 		}
 	})
 

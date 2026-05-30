@@ -5,6 +5,8 @@ import (
 	"math"
 	"os"
 	"syscall"
+
+	"github.com/lbe/wasm2go-wasi-host/internal/wasi"
 )
 
 // fileRangeEnd returns offset+length when offset and length are non-negative
@@ -53,13 +55,17 @@ func errnoIfContradictoryFstFlags(fstFlags int32) int32 {
 	return wasiESuccess
 }
 
-// errnoForDirectoryFDOp returns EISDIR when the fd entry refers to a
-// directory, because byte-oriented I/O (fd_read, fd_pread, fd_write,
-// fd_pwrite) and position/size operations (fd_seek, fd_tell,
-// fd_allocate, fd_filestat_set_size) are not defined on directories.
-// Returns 0 for non-directory entries.
-func errnoForDirectoryFDOp(entry fdEntry) int32 {
-	if entry.fdType == fdDir {
+// errnoForDirectoryFDOp returns EISDIR when fe refers to a directory, because
+// byte-oriented I/O (fd_read, fd_pread, fd_write, fd_pwrite) and position/size
+// operations (fd_seek, fd_tell, fd_allocate, fd_filestat_set_size) are not
+// defined on directories. Returns 0 for non-directory entries.
+func errnoForDirectoryFDOp(fe *wasi.FileEntry) int32 {
+	if fe == nil || fe.File == nil {
+		return 0
+	}
+	if isDir, errno := fe.File.IsDir(); errno != 0 {
+		return errnoFromWasi(errno)
+	} else if isDir {
 		return wasiEIsdir
 	}
 	return 0
@@ -121,4 +127,47 @@ func mapOSError(err error) int32 {
 		return wasiEInval
 	}
 	return wasiEIo
+}
+
+// errnoFromWasi maps internal/wasi.Errno (sys.File, FSContext) to WASI
+// snapshot-preview1 errno values returned to the guest. Used by fd_read,
+// fd_write, fd_seek, and other methods that call fe.File after FSContext migration.
+func errnoFromWasi(errno wasi.Errno) int32 {
+	if errno == 0 {
+		return wasiESuccess
+	}
+	switch errno {
+	case wasi.EACCES:
+		return wasiEAcces
+	case wasi.EBADF:
+		return wasiEBadf
+	case wasi.EEXIST:
+		return wasiEExist
+	case wasi.EINVAL:
+		return wasiEInval
+	case wasi.EIO:
+		return wasiEIo
+	case wasi.EISDIR:
+		return wasiEIsdir
+	case wasi.ELOOP:
+		return wasiELoop
+	case wasi.ENOENT:
+		return wasiENoEnt
+	case wasi.ENOSYS:
+		return wasiENoSys
+	case wasi.ENOTDIR:
+		return wasiENotDir
+	case wasi.ENOTEMPTY:
+		return wasiENotEmpty
+	case wasi.ENOTSOCK:
+		return wasiENotSock
+	case wasi.ENOTSUP:
+		return wasiENotSup
+	case wasi.EPERM:
+		return wasiEPerm
+	case wasi.EROFS:
+		return wasiEROFS
+	default:
+		return wasiEIo
+	}
 }

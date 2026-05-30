@@ -481,9 +481,9 @@ func TestPathOpenNormalizesInPreopenRelativePath(t *testing.T) {
 
 	// Verify the host path resolved to the normalized path.
 	expectedGuestPath := path.Clean("/data/interesting_paths_dir/dir/nested/file")
-	if entry, ok := s.fdEntry(fileFd); ok {
-		if entry.path != expectedGuestPath {
-			t.Fatalf("opened file guest path = %q, want %q", entry.path, expectedGuestPath)
+	if fe, ok := s.lookupFD(fileFd); ok {
+		if fe.GuestPath != expectedGuestPath {
+			t.Fatalf("opened file guest path = %q, want %q", fe.GuestPath, expectedGuestPath)
 		}
 	} else {
 		t.Fatalf("fd %d not found in fd table", fileFd)

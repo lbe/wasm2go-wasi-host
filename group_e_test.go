@@ -6,40 +6,49 @@ import (
 	"os"
 	"syscall"
 	"testing"
+
+	"github.com/lbe/wasm2go-wasi-host/internal/wasi"
 )
 
 type readAtStub struct {
-	fsFile
+	wasi.UnimplementedFile
 	readAt func([]byte, int64) (int, error)
 }
 
-func (r *readAtStub) ReadAt(p []byte, off int64) (int, error) {
-	return r.readAt(p, off)
+func (r *readAtStub) Pread(buf []byte, off int64) (int, wasi.Errno) {
+	n, err := r.readAt(buf, off)
+	return n, unwrapLegacyIO(err)
 }
 
 type writeAtStub struct {
-	fsFile
+	wasi.UnimplementedFile
 	writeAt func([]byte, int64) (int, error)
 }
 
-func (w *writeAtStub) WriteAt(p []byte, off int64) (int, error) {
-	return w.writeAt(p, off)
+func (w *writeAtStub) Pwrite(buf []byte, off int64) (int, wasi.Errno) {
+	n, err := w.writeAt(buf, off)
+	return n, unwrapLegacyIO(err)
 }
 
 type syncStub struct {
-	fsFile
+	wasi.UnimplementedFile
 	syncCalled int
 	syncErr    error
 }
 
-func (s *syncStub) Sync() error {
+func (s *syncStub) Sync() wasi.Errno {
 	s.syncCalled++
-	return s.syncErr
+	if s.syncErr != nil {
+		return wasi.EINVAL
+	}
+	return 0
 }
+
+func (s *syncStub) Datasync() wasi.Errno { return s.Sync() }
 
 // setupOsFileFd creates a real OS-backed file fd entry at the given fd slot.
 // Returns the file path for later verification.
-func setupOsFileFd(t *testing.T, s *State, fdIdx int, content []byte) string {
+func setupOsFileFd(t *testing.T, s *State, fdIdx int32, content []byte) string {
 	t.Helper()
 	dir := t.TempDir()
 	path := dir + "/testfile"
@@ -51,14 +60,10 @@ func setupOsFileFd(t *testing.T, s *State, fdIdx int, content []byte) string {
 		t.Fatal(err)
 	}
 	t.Cleanup(func() { f.Close() })
-	for len(s.fds) <= fdIdx {
-		s.fds = append(s.fds, fdEntry{})
-	}
-	s.fds[fdIdx] = fdEntry{
-		fdType:     fdFile,
-		file:       &osFile{f},
-		rightsBase: rightsRegularFile | rightFDAllocate,
-	}
+	insertTestFileAt(s, fdIdx, &wasi.FileEntry{
+		File:       wrapOSFile(f),
+		RightsBase: rightsRegularFile | rightFDAllocate,
+	})
 	return path
 }
 
@@ -169,8 +174,7 @@ func TestGroupEPositionedIO(t *testing.T) {
 
 		t.Run("returns ESUCCESS and calls Sync once for sync-capable file", func(t *testing.T) {
 			stub := &syncStub{}
-			s.fds = append(s.fds, fdEntry{fdType: fdFile, file: stub})
-			fd := int32(len(s.fds) - 1)
+			fd := allocStubFD(s, stub, 0)
 
 			if errno := s.Xfd_datasync(fd); errno != wasiESuccess {
 				t.Errorf("got %d, want ESUCCESS", errno)
@@ -182,8 +186,7 @@ func TestGroupEPositionedIO(t *testing.T) {
 
 		t.Run("returns mapped WASI errno when Sync fails (EINVAL -> EINVAL)", func(t *testing.T) {
 			stub := &syncStub{syncErr: syscall.EINVAL}
-			s.fds = append(s.fds, fdEntry{fdType: fdFile, file: stub})
-			fd := int32(len(s.fds) - 1)
+			fd := allocStubFD(s, stub, 0)
 
 			if errno := s.Xfd_datasync(fd); errno != wasiEInval {
 				t.Errorf("got %d, want EINVAL (%d)", errno, wasiEInval)
@@ -219,10 +222,7 @@ func TestGroupEPositionedIO(t *testing.T) {
 			t.Fatal(err)
 		}
 		t.Cleanup(func() { f.Close() })
-		for len(s.fds) <= 5 {
-			s.fds = append(s.fds, fdEntry{})
-		}
-		s.fds[5] = fdEntry{fdType: fdFile, file: &FSFileWrap{File: f}}
+		insertStubFD(s, 5, wrapGoFSFile(f), 0)
 		if errno := s.Xfd_datasync(5); errno != wasiESuccess {
 			t.Errorf("got %d, want ESUCCESS", errno)
 		}
@@ -247,7 +247,7 @@ func TestGroupEPositionedIO(t *testing.T) {
 	t.Run("Xfd_allocate returns ENOTCAPABLE without FD_ALLOCATE", func(t *testing.T) {
 		s, _ := newTestState(nil)
 		_ = setupOsFileFd(t, s, 5, []byte{})
-		s.fds[5].rightsBase &^= rightFDAllocate
+		lookupFETest(s, 5).RightsBase &^= rightFDAllocate
 		if errno := s.Xfd_allocate(5, 0, 16); errno != wasiENotCap {
 			t.Errorf("Xfd_allocate without FD_ALLOCATE = %d, want ENOTCAPABLE (%d)", errno, wasiENotCap)
 		}
@@ -299,8 +299,7 @@ func TestGroupEPositionedIO(t *testing.T) {
 				return 7, errors.New("real error")
 			},
 		}
-		s.fds = append(s.fds, fdEntry{fdType: fdFile, file: stub, rightsBase: rightFDRead})
-		fd := int32(len(s.fds) - 1)
+		fd := allocStubFD(s, stub, rightFDRead)
 
 		binary.LittleEndian.PutUint32(buf[nresOff:], 999) // poison
 		errno := s.Xfd_pread(fd, iovPtrOff, 1, 0, nresOff)
@@ -329,11 +328,7 @@ func TestGroupEPositionedIO(t *testing.T) {
 			t.Fatal(err)
 		}
 		t.Cleanup(func() { f.Close() })
-		for len(s.fds) <= 6 {
-			s.fds = append(s.fds, fdEntry{})
-		}
-		// FSFileWrap (from os.DirFS) does not support io.ReaderAt or io.WriterAt.
-		s.fds[5] = fdEntry{fdType: fdFile, file: &FSFileWrap{File: f}, rightsBase: rightFDRead | rightFDWrite}
+		insertStubFD(s, 5, wrapGoFSFile(f), rightFDRead|rightFDWrite)
 
 		binary.LittleEndian.PutUint32(buf[iovPtrOff:], uint32(iovDataOff))
 		binary.LittleEndian.PutUint32(buf[iovPtrOff+4:], 4)
@@ -383,8 +378,7 @@ func TestGroupEPositionedIO(t *testing.T) {
 				return 7, errors.New("real error")
 			},
 		}
-		s.fds = append(s.fds, fdEntry{fdType: fdFile, file: stub, rightsBase: rightFDWrite})
-		fd := int32(len(s.fds) - 1)
+		fd := allocStubFD(s, stub, rightFDWrite)
 
 		binary.LittleEndian.PutUint32(buf[nresOff:], 999) // poison
 		errno := s.Xfd_pwrite(fd, iovPtrOff, 1, 100, nresOff)

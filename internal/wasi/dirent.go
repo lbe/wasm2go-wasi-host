@@ -3,11 +3,20 @@ package wasi
 import (
 	"io"
 	"io/fs"
+	"os"
 	"reflect"
 )
 
+// TODO: replace extractFS reflection with an optional ReadDirBacking interface:
+//
+//	type ReadDirBacking interface { ReadDirFS() fs.FS }
+//
+// Implement on sysfs.DirFS, AdaptFS, and ReadFS (delegate to inner). In
+// FileEntry.DirentCache, type-assert f.FS.(ReadDirBacking) before extractFS;
+// when nil, keep the existing File.Readdir fallback.
+//
 // DirentCache is a caching abstraction of File.Readdir that synthesizes
-// dot (".") and dotdot (".") entries and supports a sliding-window read
+// dot (".") and dotdot ("..") entries and supports a sliding-window read
 // pattern for incremental directory listing.
 type DirentCache struct {
 	// f is the underlying file
@@ -34,6 +43,10 @@ type DirentCache struct {
 
 	// eof is true when the underlying file is at EOF.
 	eof bool
+
+	// fsDirents holds the full directory listing when falling back to fs.ReadDir.
+	fsDirents       []Dirent
+	fsDirentsLoaded bool
 }
 
 // extractFS attempts to extract an fs.FS from a wasi.FS using reflection.
@@ -55,7 +68,19 @@ func extractFS(wfs FS) fs.FS {
 			return fsys
 		}
 	}
+	if field := v.FieldByName("Path"); field.IsValid() && field.Kind() == reflect.String {
+		if path, ok := field.Interface().(string); ok && path != "" {
+			return os.DirFS(path)
+		}
+	}
 	return nil
+}
+
+// SetDotDotIno sets the inode for the synthetic ".." entry when known (writable host mounts).
+func (d *DirentCache) SetDotDotIno(ino Inode) {
+	if len(d.dotEntries) > 1 {
+		d.dotEntries[1].Ino = ino
+	}
 }
 
 // readFileDir reads up to n directory entries from fsys at path,
@@ -70,9 +95,51 @@ func readFileDir(fsys fs.FS, path string, n int) ([]Dirent, error) {
 	}
 	dirents := make([]Dirent, 0, len(entries))
 	for _, e := range entries {
-		dirents = append(dirents, Dirent{Name: e.Name(), Type: e.Type()})
+		d := Dirent{Name: e.Name(), Type: e.Type()}
+		if info, err := e.Info(); err == nil {
+			d.Ino = NewStat_t(info).Ino
+		}
+		dirents = append(dirents, d)
 	}
 	return dirents, nil
+}
+
+// readFSFallbackDir returns up to countToRead real directory entries from the
+// fs.ReadDir fallback cache, loading the full listing on first use.
+func (d *DirentCache) readFSFallbackDir(countToRead int) (newDirents []Dirent, errno Errno) {
+	if d.fs == nil {
+		return nil, ENOSYS
+	}
+	if !d.fsDirentsLoaded {
+		var err error
+		d.fsDirents, err = readFileDir(d.fs, d.readPath, 0)
+		if err != nil {
+			return nil, UnwrapOSError(err)
+		}
+		d.fsDirentsLoaded = true
+	}
+	offset := int(d.countRead - 2)
+	if offset >= len(d.fsDirents) {
+		d.eof = true
+		return nil, 0
+	}
+	end := len(d.fsDirents)
+	if countToRead > 0 && offset+countToRead < end {
+		end = offset + countToRead
+	}
+	newDirents = d.fsDirents[offset:end]
+	if end >= len(d.fsDirents) {
+		d.eof = true
+	}
+	return newDirents, 0
+}
+
+// readMoreDirents loads up to countToRead real entries after the synthetic dot entries.
+func (d *DirentCache) readMoreDirents(countToRead int) (newDirents []Dirent, errno Errno) {
+	if d.fs != nil {
+		return d.readFSFallbackDir(countToRead)
+	}
+	return d.f.Readdir(countToRead)
 }
 
 // Read returns up to n dirents starting at position pos.
@@ -89,6 +156,9 @@ func (d *DirentCache) Read(pos uint64, n uint32) (dirents []Dirent, errno Errno)
 		}
 		d.dirents = nil
 		d.countRead = 0
+		d.fsDirents = nil
+		d.fsDirentsLoaded = false
+		d.eof = false
 	}
 
 	if n == 0 {
@@ -102,19 +172,7 @@ func (d *DirentCache) Read(pos uint64, n uint32) (dirents []Dirent, errno Errno)
 
 		if countToRead := int(n - 2); countToRead > 0 {
 			var newDirents []Dirent
-			var err error
-			// Try File.Readdir first, then fall back to fs.ReadDir.
-			newDirents, errno = d.f.Readdir(countToRead)
-			if errno == ENOSYS && d.fs != nil {
-				// Fall back to reading from the underlying fs.FS.
-				// Use d.readPath which is the directory path from FileEntry.Name.
-				newDirents, err = readFileDir(d.fs, d.readPath, countToRead)
-				if err != nil {
-					errno = UnwrapOSError(err)
-				} else {
-					errno = 0
-				}
-			}
+			newDirents, errno = d.readMoreDirents(countToRead)
 			if errno != 0 {
 				return
 			} else if countRead := len(newDirents); countRead > 0 {
@@ -141,17 +199,7 @@ func (d *DirentCache) Read(pos uint64, n uint32) (dirents []Dirent, errno Errno)
 
 	if countToRead := int(n) - len(d.dirents); countToRead > 0 && !d.eof {
 		var newDirents []Dirent
-		var err error
-		newDirents, errno = d.f.Readdir(countToRead)
-		if errno == ENOSYS && d.fs != nil {
-			// Use d.readPath which is the directory path from FileEntry.Name.
-			newDirents, err = readFileDir(d.fs, d.readPath, countToRead)
-			if err != nil {
-				errno = UnwrapOSError(err)
-			} else {
-				errno = 0
-			}
-		}
+		newDirents, errno = d.readMoreDirents(countToRead)
 		if errno != 0 {
 			return
 		} else if countRead := len(newDirents); countRead > 0 {

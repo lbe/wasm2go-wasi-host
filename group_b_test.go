@@ -5,44 +5,43 @@ import (
 	"os"
 	"path/filepath"
 	"testing"
+
+	"github.com/lbe/wasm2go-wasi-host/internal/wasi/sysfs"
 )
 
 const dirfd = int32(3)
 
-// setupMountAtDirfd installs mount on preopen fd 3 with the given rights masks.
-func setupMountAtDirfd(t *testing.T, s *State, mount mountEntry, rightsBase, rightsInheriting uint64) {
+func setupMountAtDirfd(t *testing.T, s *State, guestPath, hostDir string, writable bool, rightsBase, rightsInheriting uint64) {
 	t.Helper()
-	s.mounts = []mountEntry{mount}
-	s.preopens = []fdEntry{{path: "tmp", fdType: 3, mount: 0, preopen: true}}
-	for len(s.fds) < 4 {
-		s.fds = append(s.fds, fdEntry{})
+	fe, ok := s.lookupFD(3)
+	if !ok || fe == nil {
+		t.Fatal("preopen fd 3 not found")
 	}
-	s.fds[3] = fdEntry{
-		path:             "tmp",
-		fdType:           3,
-		mount:            0,
-		preopen:          true,
-		rightsBase:       rightsBase,
-		rightsInheriting: rightsInheriting,
+	fe.RightsBase = rightsBase
+	fe.RightsInheriting = rightsInheriting
+	fe.Name = guestPath
+	fe.GuestPath = guestPath
+	if writable {
+		fe.FS = sysfs.DirFS{Path: hostDir}
 	}
 }
 
-// setupWritableMount sets up a writable mount at guest path "tmp" on dirfd=3.
-// Returns the host directory path (= t.TempDir()).
-func setupWritableMount(t *testing.T, s *State, buf []byte) string {
+func newWritableMountState(t *testing.T) (*State, []byte, string) {
 	t.Helper()
 	dir := t.TempDir()
-	setupMountAtDirfd(t, s, mountEntry{guestPath: "tmp", writable: true, hostRoot: dir}, rightsWritableDirPreopenBase, rightsWritableDirPreopenInheriting)
-	_ = buf
-	return dir
+	s, buf := newTestState(NewModuleConfig().WithHostDirectoryPreopen("tmp", dir))
+	setupMountAtDirfd(t, s, "tmp", dir, true, rightsWritableDirPreopenBase, rightsWritableDirPreopenInheriting)
+	return s, buf, dir
 }
 
-// setupReadOnlyMount sets up a read-only mount at guest path "tmp" on dirfd=3.
-func setupReadOnlyMount(t *testing.T, s *State, buf []byte, dir string) {
+func newReadOnlyMountState(t *testing.T, dir string) (*State, []byte) {
 	t.Helper()
-	setupMountAtDirfd(t, s, mountEntry{guestPath: "tmp", writable: false}, rightsReadOnlyDirPreopen, rightsReadOnlyDirPreopen)
-	_ = buf
-	_ = dir
+	if dir == "" {
+		dir = t.TempDir()
+	}
+	s, buf := newTestState(NewModuleConfig().WithReadOnlyFS("tmp", os.DirFS(dir)))
+	setupMountAtDirfd(t, s, "tmp", dir, false, rightsReadOnlyDirPreopen, rightsReadOnlyDirPreopen)
+	return s, buf
 }
 
 // writePath writes a path string into the guest buffer at offset off. Returns (off, len).
@@ -60,8 +59,7 @@ func TestGroupBFilesystemMutations(t *testing.T) {
 	)
 
 	t.Run("Xpath_create_directory creates dir", func(t *testing.T) {
-		s, buf := newTestState(nil)
-		hostDir := setupWritableMount(t, s, buf)
+		s, buf, hostDir := newWritableMountState(t)
 		nameOff, nameLen := writePath(buf, pathOff1, "newdir")
 		errno := s.Xpath_create_directory(dirfd, nameOff, nameLen)
 		if errno != wasiESuccess {
@@ -73,8 +71,7 @@ func TestGroupBFilesystemMutations(t *testing.T) {
 	})
 
 	t.Run("Xpath_create_directory second call returns EEXIST", func(t *testing.T) {
-		s, buf := newTestState(nil)
-		hostDir := setupWritableMount(t, s, buf)
+		s, buf, hostDir := newWritableMountState(t)
 		if err := os.Mkdir(filepath.Join(hostDir, "existing"), 0755); err != nil {
 			t.Fatal(err)
 		}
@@ -86,8 +83,7 @@ func TestGroupBFilesystemMutations(t *testing.T) {
 	})
 
 	t.Run("Xpath_remove_directory removes empty dir", func(t *testing.T) {
-		s, buf := newTestState(nil)
-		hostDir := setupWritableMount(t, s, buf)
+		s, buf, hostDir := newWritableMountState(t)
 		if err := os.Mkdir(filepath.Join(hostDir, "emptydir"), 0755); err != nil {
 			t.Fatal(err)
 		}
@@ -102,8 +98,7 @@ func TestGroupBFilesystemMutations(t *testing.T) {
 	})
 
 	t.Run("Xpath_remove_directory on non-empty dir returns ENOTEMPTY", func(t *testing.T) {
-		s, buf := newTestState(nil)
-		hostDir := setupWritableMount(t, s, buf)
+		s, buf, hostDir := newWritableMountState(t)
 		if err := os.MkdirAll(filepath.Join(hostDir, "nonempty/child"), 0755); err != nil {
 			t.Fatal(err)
 		}
@@ -115,8 +110,7 @@ func TestGroupBFilesystemMutations(t *testing.T) {
 	})
 
 	t.Run("Xpath_remove_directory on file returns ENOTDIR", func(t *testing.T) {
-		s, buf := newTestState(nil)
-		hostDir := setupWritableMount(t, s, buf)
+		s, buf, hostDir := newWritableMountState(t)
 		if err := os.WriteFile(filepath.Join(hostDir, "afile"), []byte("x"), 0644); err != nil {
 			t.Fatal(err)
 		}
@@ -128,8 +122,7 @@ func TestGroupBFilesystemMutations(t *testing.T) {
 	})
 
 	t.Run("Xpath_unlink_file removes a file", func(t *testing.T) {
-		s, buf := newTestState(nil)
-		hostDir := setupWritableMount(t, s, buf)
+		s, buf, hostDir := newWritableMountState(t)
 		if err := os.WriteFile(filepath.Join(hostDir, "todelete"), []byte("x"), 0644); err != nil {
 			t.Fatal(err)
 		}
@@ -144,8 +137,7 @@ func TestGroupBFilesystemMutations(t *testing.T) {
 	})
 
 	t.Run("Xpath_unlink_file second call returns ENOENT", func(t *testing.T) {
-		s, buf := newTestState(nil)
-		hostDir := setupWritableMount(t, s, buf)
+		s, buf, hostDir := newWritableMountState(t)
 		_ = hostDir
 		nameOff, nameLen := writePath(buf, pathOff1, "nonexistent")
 		errno := s.Xpath_unlink_file(dirfd, nameOff, nameLen)
@@ -155,8 +147,7 @@ func TestGroupBFilesystemMutations(t *testing.T) {
 	})
 
 	t.Run("Xpath_unlink_file on directory returns EISDIR", func(t *testing.T) {
-		s, buf := newTestState(nil)
-		hostDir := setupWritableMount(t, s, buf)
+		s, buf, hostDir := newWritableMountState(t)
 		if err := os.Mkdir(filepath.Join(hostDir, "adir"), 0755); err != nil {
 			t.Fatal(err)
 		}
@@ -168,8 +159,7 @@ func TestGroupBFilesystemMutations(t *testing.T) {
 	})
 
 	t.Run("Xpath_readlink returns target and nread", func(t *testing.T) {
-		s, buf := newTestState(nil)
-		hostDir := setupWritableMount(t, s, buf)
+		s, buf, hostDir := newWritableMountState(t)
 		// Create a symlink on the host
 		if err := os.Symlink("/target/path", filepath.Join(hostDir, "mylink")); err != nil {
 			t.Fatal(err)
@@ -190,8 +180,7 @@ func TestGroupBFilesystemMutations(t *testing.T) {
 	})
 
 	t.Run("Xpath_symlink creates a symlink", func(t *testing.T) {
-		s, buf := newTestState(nil)
-		hostDir := setupWritableMount(t, s, buf)
+		s, buf, hostDir := newWritableMountState(t)
 		targetOff, targetLen := writePath(buf, pathOff1, "/some/target")
 		nameOff, nameLen := writePath(buf, pathOff2, "newsym")
 		errno := s.Xpath_symlink(targetOff, targetLen, dirfd, nameOff, nameLen)
@@ -207,8 +196,7 @@ func TestGroupBFilesystemMutations(t *testing.T) {
 	})
 
 	t.Run("Xpath_link creates a hard link", func(t *testing.T) {
-		s, buf := newTestState(nil)
-		hostDir := setupWritableMount(t, s, buf)
+		s, buf, hostDir := newWritableMountState(t)
 		origPath := filepath.Join(hostDir, "original")
 		if err := os.WriteFile(origPath, []byte("data"), 0644); err != nil {
 			t.Fatal(err)
@@ -230,8 +218,7 @@ func TestGroupBFilesystemMutations(t *testing.T) {
 	})
 
 	t.Run("all six functions return EROFS on read-only mount", func(t *testing.T) {
-		s, buf := newTestState(nil)
-		setupReadOnlyMount(t, s, buf, t.TempDir())
+		s, buf := newReadOnlyMountState(t, t.TempDir())
 
 		pathOff, pathLen := writePath(buf, pathOff1, "name")
 		path2Off, path2Len := writePath(buf, pathOff2, "name2")

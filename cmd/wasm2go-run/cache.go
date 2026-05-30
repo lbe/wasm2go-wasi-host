@@ -377,7 +377,7 @@ func cacheGetBuild(key string) ([]byte, bool) {
 
 // buildKeyVersion is a monotonic integer that must be bumped whenever
 // the runner build logic changes, invalidating prior tier-2 cache entries.
-var buildKeyVersion = 1
+var buildKeyVersion = 2
 
 // buildCacheKey returns a deterministic tier-2 build cache key for a WASM
 // module and runner configuration.
@@ -436,20 +436,60 @@ func canonicalConfigJSON(cfg Config) string {
 	return string(b)
 }
 
-// wasiHostFingerprint returns a SHA-256 hex digest of the wasihost.go
-// source file in the directory returned by wasiHostPath. An empty string
-// is returned when the host directory or source file cannot be located.
+// wasiHostFingerprint returns a SHA-256 hex digest of wasihost production
+// sources under wasiHostPath (root package, internal/wasi, internal/wasi/sysfs).
 // It is a variable so tests can substitute a stub.
 var wasiHostFingerprint = func() string {
 	dir := wasiHostPath()
 	if dir == "" {
 		return ""
 	}
-	h, err := hashOfFile(filepath.Join(dir, "wasihost.go"))
-	if err != nil {
+	paths := wasihostFingerprintFiles(dir)
+	if len(paths) == 0 {
 		return ""
 	}
+	h := sha256.New()
+	for _, path := range paths {
+		fh, err := hashOfFile(path)
+		if err != nil {
+			return ""
+		}
+		_, _ = h.Write([]byte(path))
+		_, _ = h.Write(fh.Sum(nil))
+	}
 	return hex.EncodeToString(h.Sum(nil))
+}
+
+func wasihostFingerprintFiles(root string) []string {
+	var paths []string
+	if p := filepath.Join(root, "wasihost.go"); fileExists(p) {
+		paths = append(paths, p)
+	}
+	paths = append(paths, globGoFiles(filepath.Join(root, "wasihost_*.go"))...)
+	for _, sub := range []string{"internal/wasi", "internal/wasi/sysfs"} {
+		paths = append(paths, globGoFiles(filepath.Join(root, sub, "*.go"))...)
+	}
+	sort.Strings(paths)
+	return paths
+}
+
+func globGoFiles(pattern string) []string {
+	matches, err := filepath.Glob(pattern)
+	if err != nil {
+		return nil
+	}
+	var out []string
+	for _, p := range matches {
+		if !strings.HasSuffix(p, "_test.go") {
+			out = append(out, p)
+		}
+	}
+	return out
+}
+
+func fileExists(path string) bool {
+	_, err := os.Stat(path)
+	return err == nil
 }
 
 var (

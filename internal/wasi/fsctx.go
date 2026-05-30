@@ -36,6 +36,15 @@ type FileEntry struct {
 	// RightsInheriting is the set of rights inherited by child file descriptors.
 	RightsInheriting uint64
 
+	// GuestPath is the guest-absolute path for path_open resolution on non-preopen fds.
+	GuestPath string
+
+	// FdFlags holds WASI fd_flags set at path_open (append, sync, etc.).
+	FdFlags uint16
+
+	// Overlay is an optional embedded fs.FS fallback for writable host preopens.
+	Overlay fs.FS
+
 	direntCache *DirentCache
 }
 
@@ -61,9 +70,9 @@ func (f *FileEntry) DirentCache() (*DirentCache, Errno) {
 	dotEntries := [2]Dirent{}
 	dotEntries[0] = Dirent{Name: ".", Ino: dotIno, Type: fs.ModeDir}
 	dotEntries[1] = Dirent{Name: "..", Ino: 0, Type: fs.ModeDir}
-	// Normalize readPath: "" or "/" becomes "." for fs.ReadDir fallback.
+	// Normalize readPath: preopens and "" or "/" read from "." via fs.ReadDir fallback.
 	readPath := f.Name
-	if readPath == "" || readPath == "/" {
+	if f.IsPreopen || readPath == "" || readPath == "/" {
 		readPath = "."
 	}
 	f.direntCache = &DirentCache{f: f.File, fs: extractFS(f.FS), readPath: readPath, dotEntries: dotEntries[:]}
@@ -78,6 +87,7 @@ type FileTable = Table[int32, *FileEntry]
 // open, close, renumber, and lookup operations.
 type FSContext struct {
 	openedFiles FileTable
+	invalidated map[int32]bool
 }
 
 // InitFSContext creates an FSContext with:
@@ -90,22 +100,31 @@ func InitFSContext(
 	stdout, stderr io.Writer,
 	fsList []FS, guestPaths []string,
 ) (*FSContext, error) {
-	c := &FSContext{}
+	c := &FSContext{invalidated: make(map[int32]bool)}
 
 	// Insert stdio entries.
-	inFile := &FileEntry{Name: "stdin", IsPreopen: true, File: &noopStdinFile{}}
+	inFile := &FileEntry{
+		Name: "stdin", IsPreopen: true, File: &noopStdinFile{},
+		RightsBase: rightsCharDev, RightsInheriting: 0,
+	}
 	if stdin != nil {
 		inFile.File = &StdinFile{Reader: stdin}
 	}
 	c.openedFiles.InsertAt(inFile, FdStdin)
 
-	outFile := &FileEntry{Name: "stdout", IsPreopen: true, File: &noopStdoutFile{}}
+	outFile := &FileEntry{
+		Name: "stdout", IsPreopen: true, File: &noopStdoutFile{},
+		RightsBase: rightsCharDev, RightsInheriting: 0,
+	}
 	if stdout != nil {
 		outFile.File = &writerFile{w: stdout}
 	}
 	c.openedFiles.InsertAt(outFile, FdStdout)
 
-	errFile := &FileEntry{Name: "stderr", IsPreopen: true, File: &noopStdoutFile{}}
+	errFile := &FileEntry{
+		Name: "stderr", IsPreopen: true, File: &noopStdoutFile{},
+		RightsBase: rightsCharDev, RightsInheriting: 0,
+	}
 	if stderr != nil {
 		errFile.File = &writerFile{w: stderr}
 	}
@@ -129,6 +148,9 @@ func InitFSContext(
 // LookupFile returns the FileEntry for the given file descriptor and true,
 // or nil and false if the descriptor is not open.
 func (c *FSContext) LookupFile(fd int32) (*FileEntry, bool) {
+	if c.invalidated[fd] {
+		return nil, false
+	}
 	return c.openedFiles.Lookup(fd)
 }
 
@@ -148,8 +170,28 @@ func (c *FSContext) OpenFile(fsys FS, path string, flag Oflag, perm fs.FileMode)
 	if newFD, ok := c.openedFiles.Insert(fe); !ok {
 		return 0, EBADF
 	} else {
+		delete(c.invalidated, newFD)
 		return newFD, 0
 	}
+}
+
+// InsertFileAt stores fe at the exact file descriptor.
+func (c *FSContext) InsertFileAt(fe *FileEntry, fd int32) Errno {
+	if !c.openedFiles.InsertAt(fe, fd) {
+		return EBADF
+	}
+	delete(c.invalidated, fd)
+	return 0
+}
+
+// AllocFile inserts fe at the first free descriptor slot and returns it.
+func (c *FSContext) AllocFile(fe *FileEntry) (int32, Errno) {
+	fd, ok := c.openedFiles.Insert(fe)
+	if !ok {
+		return 0, EBADF
+	}
+	delete(c.invalidated, fd)
+	return fd, 0
 }
 
 // CloseFile closes the file at fd and removes it from the table.
@@ -163,23 +205,23 @@ func (c *FSContext) CloseFile(fd int32) Errno {
 		return errno
 	}
 	c.openedFiles.Delete(fd)
+	delete(c.invalidated, fd)
 	return 0
 }
 
 // Renumber moves the file descriptor from to to.
-// If to is already open and not a preopen, its file is closed first.
-// Returns ENOTSUP if to is a preopen descriptor, or EBADF for invalid fds.
+// If to is already open, its file is closed first (including preopens).
+// Returns EBADF for invalid fds.
 func (c *FSContext) Renumber(from, to int32) Errno {
+	if c.invalidated[to] {
+		return EBADF
+	}
 	fromFile, ok := c.openedFiles.Lookup(from)
 	if !ok || to < 0 {
 		return EBADF
 	}
 
-	// If toFile is already open, we close it to prevent windows lock issues.
 	if toFile, ok := c.openedFiles.Lookup(to); ok {
-		if toFile.IsPreopen {
-			return ENOTSUP
-		}
 		_ = toFile.File.Close()
 	}
 
@@ -187,6 +229,8 @@ func (c *FSContext) Renumber(from, to int32) Errno {
 	if !c.openedFiles.InsertAt(fromFile, to) {
 		return EBADF
 	}
+	c.invalidated[from] = true
+	delete(c.invalidated, to)
 	return 0
 }
 

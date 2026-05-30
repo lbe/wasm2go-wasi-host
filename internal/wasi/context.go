@@ -7,6 +7,25 @@ import (
 	"math"
 )
 
+// Preopen describes one guest preopened directory (filesystem + guest path prefix).
+type Preopen struct {
+	FS        FS
+	GuestPath string
+}
+
+// fsPreopensConfig is optionally implemented by ModuleConfig to supply
+// mount guest paths for path resolution (may differ from normalized FSConfig keys).
+type fsPreopensConfig interface {
+	FSPreopens() (fsList []FS, guestPaths []string)
+}
+
+// moduleClockConfig is optionally implemented by ModuleConfig to supply clock and sleep hooks.
+type moduleClockConfig interface {
+	ClockWalltime() (Walltime, ClockResolution, bool)
+	ClockNanotime() (Nanotime, ClockResolution, bool)
+	ClockNanosleep() (Nanosleep, bool)
+}
+
 // ModuleConfig is the interface wasi.NewContext accepts to initialize
 // a Context. The concrete type lives in the wasihost package, avoiding
 // a circular import in the production code.
@@ -35,7 +54,8 @@ type Context struct {
 	nanosleep   Nanosleep
 	osyield     Osyield
 	// FS context
-	fsc *FSContext
+	fsc      *FSContext
+	preopens []Preopen
 	// Random source
 	randSource io.Reader
 }
@@ -104,6 +124,18 @@ func NewContext(config ModuleConfig) (*Context, error) {
 	ns := func(ns int64) {}
 	osy := func() {}
 
+	if cc, ok := config.(moduleClockConfig); ok {
+		if w, res, ok := cc.ClockWalltime(); ok {
+			wt, wtRes = w, res
+		}
+		if n, res, ok := cc.ClockNanotime(); ok {
+			nt, ntRes = n, res
+		}
+		if sleep, ok := cc.ClockNanosleep(); ok {
+			ns = sleep
+		}
+	}
+
 	// Get randSource from config, create deterministic reader if nil
 	randSource := config.RandSource()
 	if randSource == nil {
@@ -113,6 +145,23 @@ func NewContext(config ModuleConfig) (*Context, error) {
 
 	// Get FS config and initialize FS context
 	fsList, guestPaths := config.FSConfig()
+	var mountPreopens []Preopen
+	if fpc, ok := config.(fsPreopensConfig); ok {
+		mpFS, mpPaths := fpc.FSPreopens()
+		mountPreopens = make([]Preopen, len(mpFS))
+		for i := range mpFS {
+			mountPreopens[i] = Preopen{FS: mpFS[i], GuestPath: mpPaths[i]}
+		}
+	} else {
+		mountPreopens = make([]Preopen, len(fsList))
+		for i := range fsList {
+			gp := guestPaths[i]
+			if StripPrefixesAndTrailingSlash(gp) == "" {
+				gp = "/"
+			}
+			mountPreopens[i] = Preopen{FS: fsList[i], GuestPath: gp}
+		}
+	}
 	fsc, err := InitFSContext(
 		config.Stdin(),
 		config.Stdout(),
@@ -136,6 +185,7 @@ func NewContext(config ModuleConfig) (*Context, error) {
 		nanosleep:   ns,
 		osyield:     osy,
 		fsc:         fsc,
+		preopens:    mountPreopens,
 		randSource:  randSource,
 	}, nil
 }
@@ -176,4 +226,9 @@ func (c *Context) RandSource() io.Reader {
 // FSContext returns the filesystem context.
 func (c *Context) FSContext() *FSContext {
 	return c.fsc
+}
+
+// FS returns the preopened filesystem mounts configured for this instance.
+func (c *Context) FS() []Preopen {
+	return c.preopens
 }

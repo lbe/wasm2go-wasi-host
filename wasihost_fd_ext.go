@@ -2,244 +2,249 @@ package wasihost
 
 import (
 	"encoding/binary"
-	"io"
+	"os"
+
+	"github.com/lbe/wasm2go-wasi-host/internal/wasi"
+	"github.com/lbe/wasm2go-wasi-host/internal/wasi/sysfs"
 )
 
-// Xfd_pread implements fd_pread. Reads from fd at the given offset
-// without updating the fd's WASI-level offset (entry.offset). Requires
-// the underlying file to implement ReadAt; if it does not, no bytes are
-// read and ENOTSUP is returned. Returns EINVAL for fds 0-2 (positioned
-// reads on stdio are not defined by WASI). Returns EISDIR for directory
-// fds, ENOTCAPABLE when FD_READ is not set in the fd's rights_base.
+func (s *State) fdFileSyncOp(fd int32, op func(wasi.File) wasi.Errno) int32 {
+	fe, ok := s.lookupFD(fd)
+	if !ok || fe.File == nil {
+		return wasiEBadf
+	}
+	if errno := op(fe.File); errno != 0 {
+		return errnoFromWasi(errno)
+	}
+	return wasiESuccess
+}
+
+func (s *State) fdGrowToSize(fe *wasi.FileEntry, minSize int64) int32 {
+	if fe == nil || fe.File == nil {
+		return wasiENotSup
+	}
+	st, werrno := fe.File.Stat()
+	if werrno != 0 {
+		return errnoFromWasi(werrno)
+	}
+	newSize := minSize
+	if st.Size > newSize {
+		newSize = st.Size
+	}
+	if errno := fe.File.Truncate(newSize); errno != 0 {
+		return errnoFromWasi(errno)
+	}
+	return wasiESuccess
+}
+
+type fdPosIOStep func(buf []byte, off int64) (n int, newOff int64, stop bool, errno int32)
+
+func (s *State) fdPositionedIOVLoop(mem []byte, iovsPtr, iovsCount int32, startOff int64, nresultPtr int32, shortReadOK bool, step fdPosIOStep) int32 {
+	var total uint32
+	curOff := startOff
+	for i := int32(0); i < iovsCount; i++ {
+		buf := guestIOV(mem, iovsPtr, i)
+		if buf == nil {
+			continue
+		}
+		n, newOff, stop, errno := step(buf, curOff)
+		if stop {
+			binary.LittleEndian.PutUint32(mem[nresultPtr:], total)
+			return wasiENotSup
+		}
+		total += uint32(n)
+		if errno != 0 {
+			binary.LittleEndian.PutUint32(mem[nresultPtr:], total)
+			return errno
+		}
+		curOff = newOff
+		if shortReadOK && n < len(buf) {
+			break
+		}
+	}
+	binary.LittleEndian.PutUint32(mem[nresultPtr:], total)
+	return wasiESuccess
+}
+
 func (s *State) Xfd_pread(fd, iovsPtr, iovsCount int32, offset int64, nreadPtr int32) int32 {
 	if fd <= StderrFD {
 		return wasiEInval
 	}
-	if fd < 0 || int(fd) >= len(s.fds) {
+	fe, ok := s.lookupFD(fd)
+	if !ok || fe.File == nil {
 		return wasiEBadf
 	}
-	entry := s.fds[fd]
-	if entry.file == nil {
-		return wasiEBadf
-	}
-	if errno := errnoForDirectoryFDOp(entry); errno != 0 {
+	if errno := errnoForDirectoryFDOp(fe); errno != 0 {
 		return errno
 	}
-	if errno := errnoIfFDRightsMissing(entry.rightsBase, rightFDRead); errno != 0 {
+	if errno := errnoIfFDRightsMissing(fe.RightsBase, rightFDRead); errno != 0 {
 		return errno
 	}
 	mem := s.mem()
-	var total uint32
-	curOff := offset
-	for i := int32(0); i < iovsCount; i++ {
-		off := iovsPtr + i*8
-		bufPtr := int32(binary.LittleEndian.Uint32(mem[off:]))
-		bufLen := int32(binary.LittleEndian.Uint32(mem[off+4:]))
-		if bufLen == 0 {
-			continue
+	return s.fdPositionedIOVLoop(mem, iovsPtr, iovsCount, offset, nreadPtr, true, func(buf []byte, curOff int64) (int, int64, bool, int32) {
+		n, werrno := fe.File.Pread(buf, curOff)
+		errno := errnoFromWasi(werrno)
+		if errno == wasiESuccess {
+			return n, curOff + int64(n), false, 0
 		}
-		ra, ok := entry.file.(interface {
-			ReadAt([]byte, int64) (int, error)
-		})
-		if !ok {
-			binary.LittleEndian.PutUint32(mem[nreadPtr:], total)
-			return wasiENotSup
-		}
-		n, err := ra.ReadAt(mem[bufPtr:bufPtr+bufLen], curOff)
-		total += uint32(n)
-		curOff += int64(n)
-		if err != nil {
-			if err == io.EOF {
-				break
-			}
-			binary.LittleEndian.PutUint32(mem[nreadPtr:], total)
-			return wasiEIo
-		}
-	}
-	binary.LittleEndian.PutUint32(mem[nreadPtr:], total)
-	return wasiESuccess
+		return n, curOff, false, errno
+	})
 }
 
-// Xfd_pwrite implements fd_pwrite. Writes to fd at the given offset
-// without updating the fd's WASI-level offset (entry.offset). Requires
-// the underlying file to implement WriteAt; if it does not, no bytes are
-// written and ENOTSUP is returned. If WriteAt returns an error, fd_pwrite
-// returns EIO and preserves the partial byte count in guest memory.
-// Returns EINVAL for fds 0-2 (positioned writes on stdio are not
-// defined by WASI). Returns EISDIR for directory fds, ENOTCAPABLE when
-// FD_WRITE is not set in the fd's rights_base.
 func (s *State) Xfd_pwrite(fd, iovsPtr, iovsCount int32, offset int64, nwrittenPtr int32) int32 {
 	if fd <= StderrFD {
 		return wasiEInval
 	}
-	if fd < 0 || int(fd) >= len(s.fds) {
+	fe, ok := s.lookupFD(fd)
+	if !ok || fe.File == nil {
 		return wasiEBadf
 	}
-	entry := s.fds[fd]
-	if entry.file == nil {
-		return wasiEBadf
-	}
-	if errno := errnoForDirectoryFDOp(entry); errno != 0 {
+	if errno := errnoForDirectoryFDOp(fe); errno != 0 {
 		return errno
 	}
-	if errno := errnoIfFDRightsMissing(entry.rightsBase, rightFDWrite); errno != 0 {
+	if errno := errnoIfFDRightsMissing(fe.RightsBase, rightFDWrite); errno != 0 {
 		return errno
 	}
-
+	writeOff := offset
+	if fileAppendEnabled(fe) {
+		size, errno := s.fdFileSize(fe)
+		if errno != 0 {
+			return errno
+		}
+		writeOff = size
+	}
 	mem := s.mem()
-	var total uint32
-	curOff := offset
-	for i := int32(0); i < iovsCount; i++ {
-		off := iovsPtr + i*8
-		bufPtr := int32(binary.LittleEndian.Uint32(mem[off:]))
-		bufLen := int32(binary.LittleEndian.Uint32(mem[off+4:]))
-		if bufLen == 0 {
-			continue
+	return s.fdPositionedIOVLoop(mem, iovsPtr, iovsCount, writeOff, nwrittenPtr, false, func(data []byte, curOff int64) (int, int64, bool, int32) {
+		n, werrno := fe.File.Pwrite(data, curOff)
+		errno := errnoFromWasi(werrno)
+		if errno == wasiESuccess {
+			return n, curOff + int64(n), false, 0
 		}
-		wa, ok := entry.file.(interface {
-			WriteAt([]byte, int64) (int, error)
-		})
-		if !ok {
-			binary.LittleEndian.PutUint32(mem[nwrittenPtr:], total)
-			return wasiENotSup
-		}
-
-		n, err := wa.WriteAt(mem[bufPtr:bufPtr+bufLen], curOff)
-		total += uint32(n)
-		curOff += int64(n)
-		if err != nil {
-			binary.LittleEndian.PutUint32(mem[nwrittenPtr:], total)
-			return wasiEIo
-		}
-	}
-	binary.LittleEndian.PutUint32(mem[nwrittenPtr:], total)
-	return wasiESuccess
+		return n, curOff, false, errno
+	})
 }
 
-// Xfd_tell implements fd_tell. Returns entry.offset, the WASI-tracked file
-// position maintained by fd_read, fd_write, and fd_seek. Returns EISDIR for
-// directory fds.
 func (s *State) Xfd_tell(fd, offsetPtr int32) int32 {
-	if fd < 0 || int(fd) >= len(s.fds) {
+	fe, ok := s.lookupFD(fd)
+	if !ok || fe.File == nil {
 		return wasiEBadf
 	}
-	entry := s.fds[fd]
-	if entry.isUnused() {
-		return wasiEBadf
-	}
-	if errno := errnoForDirectoryFDOp(entry); errno != 0 {
+	if errno := errnoForDirectoryFDOp(fe); errno != 0 {
 		return errno
 	}
-	binary.LittleEndian.PutUint64(s.mem()[offsetPtr:], uint64(entry.offset))
+	binary.LittleEndian.PutUint64(s.mem()[offsetPtr:], uint64(fe.Offset))
 	return wasiESuccess
 }
 
-// Xsched_yield implements sched_yield. This host is synchronous;
-// yielding calls the [runtime.Gosched] seam and returns ESUCCESS.
-
-// Xfd_datasync implements fd_datasync. Validates that fd is a valid
-// open file descriptor index. For sync-capable fds (those whose underlying
-// file implements a Sync() error method, such as osFile), invokes host Sync
-// and maps any error. For other files, returns ESUCCESS without mutation.
 func (s *State) Xfd_datasync(fd int32) int32 {
-	if fd < 0 || int(fd) >= len(s.fds) {
-		return wasiEBadf
-	}
-	entry := s.fds[fd]
-	if entry.isUnused() {
-		return wasiEBadf
-	}
-	if syncer, ok := entry.file.(interface{ Sync() error }); ok {
-		if err := syncer.Sync(); err != nil {
-			return mapOSError(err)
-		}
-	}
-	return wasiESuccess
+	return s.fdFileSyncOp(fd, func(f wasi.File) wasi.Errno { return f.Datasync() })
 }
 
-// Xfd_sync implements fd_sync. Always returns ESUCCESS.
 func (s *State) Xfd_sync(fd int32) int32 {
-	return wasiESuccess
+	return s.fdFileSyncOp(fd, func(f wasi.File) wasi.Errno { return f.Sync() })
 }
 
-// Xfd_fdstat_set_flags implements fd_fdstat_set_flags.
-// Supported flags: APPEND, DSYNC, NONBLOCK, RSYNC, SYNC.
 func (s *State) Xfd_fdstat_set_flags(fd, flags int32) int32 {
 	s.assertSingleOwner()
-	if fd < 0 || int(fd) >= len(s.fds) {
+	fe, ok := s.lookupFD(fd)
+	if !ok || fe.File == nil {
 		return wasiEBadf
 	}
-	entry := &s.fds[fd]
-	if entry.isUnused() {
-		return wasiEBadf
+	if fd <= StderrFD {
+		return wasiESuccess
 	}
-	// WASI only allows setting these 5 flags.
 	if (flags & ^(fdFlagsAppend | fdFlagsDSync | fdFlagsNonBlock | fdFlagsRSync | fdFlagsSync)) != 0 {
 		return wasiEInval
 	}
-	entry.fdFlags = uint16(flags)
+	fe.FdFlags = uint16(flags)
+	if errno := fe.File.SetAppend(flags&fdFlagsAppend != 0); errno != 0 {
+		return errnoFromWasi(errno)
+	}
+	if pf, ok := fe.File.(wasi.PollableFile); ok {
+		if errno := pf.SetNonblock(flags&fdFlagsNonBlock != 0); errno != 0 {
+			return errnoFromWasi(errno)
+		}
+	}
 	return wasiESuccess
 }
 
-// Xfd_advise implements fd_advise (POSIX posix_fadvise). Always returns
-// ESUCCESS. There is no portable Go equivalent for this hint; it is
-// silently ignored.
 func (s *State) Xfd_advise(fd int32, offset, length int64, advice int32) int32 { return wasiESuccess }
 
-// Xfd_allocate implements fd_allocate (fallocate). Returns EINVAL when
-// offset or length is negative or offset+length overflows. Returns EISDIR for
-// directory fds. For osFile-backed fds, grows the file to at least
-// offset+length by calling Truncate with max(current_size, offset+length).
-// For FSFileWrap-backed fds (read-only fs.FS files), returns ENOTSUP.
 func (s *State) Xfd_allocate(fd int32, offset, length int64) int32 {
-	if fd < 0 || int(fd) >= len(s.fds) {
+	fe, ok := s.lookupFD(fd)
+	if !ok || fe.File == nil {
 		return wasiEBadf
 	}
-	entry := s.fds[fd]
-	if entry.isUnused() {
-		return wasiEBadf
-	}
-	if errno := errnoForDirectoryFDOp(entry); errno != 0 {
+	if errno := errnoForDirectoryFDOp(fe); errno != 0 {
 		return errno
 	}
-	if errno := errnoIfFDRightsMissing(entry.rightsBase, rightFDAllocate); errno != 0 {
+	if errno := errnoIfFDRightsMissing(fe.RightsBase, rightFDAllocate); errno != 0 {
 		return errno
 	}
 	newSize, ok := fileRangeEnd(offset, length)
 	if !ok {
 		return wasiEInval
 	}
-	if of, ok := entry.file.(*osFile); ok {
-		fi, err := of.Stat()
-		if err != nil {
-			return mapOSError(err)
-		}
-		if fi.Size() > newSize {
-			newSize = fi.Size()
-		}
-		if err := of.Truncate(newSize); err != nil {
-			return mapOSError(err)
-		}
-		return wasiESuccess
-	}
-	return wasiENotSup
+	return s.fdGrowToSize(fe, newSize)
 }
 
 func (s *State) Xfd_fdstat_set_rights(fd int32, base, inheriting int64) int32 {
 	s.assertSingleOwner()
-	if fd < 0 || int(fd) >= len(s.fds) {
-		return wasiEBadf
-	}
-	entry := &s.fds[fd]
-	if entry.isUnused() {
+	fe, ok := s.lookupFD(fd)
+	if !ok || fe.File == nil {
 		return wasiEBadf
 	}
 	uBase := uint64(base)
 	uInheriting := uint64(inheriting)
-	if (uBase & ^entry.rightsBase) != 0 || (uInheriting & ^entry.rightsInheriting) != 0 {
+	if (uBase & ^fe.RightsBase) != 0 || (uInheriting & ^fe.RightsInheriting) != 0 {
 		return wasiENotCap
 	}
-	entry.rightsBase = uBase
-	entry.rightsInheriting = uInheriting
+	fe.RightsBase = uBase
+	fe.RightsInheriting = uInheriting
+	return wasiESuccess
+}
+
+func (s *State) Xfd_filestat_set_size(fd int32, size int64) int32 {
+	fe, ok := s.lookupFD(fd)
+	if !ok || fe.File == nil {
+		return wasiEBadf
+	}
+	if errno := errnoForDirectoryFDOp(fe); errno != 0 {
+		return errno
+	}
+	if osf, ok := sysfs.UnderlyingOSFile(fe.File); ok {
+		if errno := errnoIfFDRightsMissing(fe.RightsBase, rightFDFilestatSetSize); errno != 0 {
+			return errno
+		}
+		if err := osf.Truncate(size); err != nil {
+			return mapOSError(err)
+		}
+	}
+	return wasiESuccess
+}
+
+func (s *State) Xfd_filestat_set_times(fd int32, atim, mtim int64, fstFlags int32) int32 {
+	if fstFlags&(fstAtim|fstMtim|fstAtimNow|fstMtimNow) == 0 {
+		return wasiESuccess
+	}
+	if errno := errnoIfContradictoryFstFlags(fstFlags); errno != 0 {
+		return errno
+	}
+	fe, ok := s.lookupFD(fd)
+	if !ok || fe.File == nil {
+		return wasiEBadf
+	}
+	osf, ok := sysfs.UnderlyingOSFile(fe.File)
+	if !ok {
+		return wasiESuccess
+	}
+	fi, err := osf.Stat()
+	if err != nil {
+		return mapOSError(err)
+	}
+	targetAtim, targetMtim := computeTargetTimes(fi, atim, mtim, fstFlags)
+	if err := os.Chtimes(osf.Name(), targetAtim, targetMtim); err != nil {
+		return mapOSError(err)
+	}
 	return wasiESuccess
 }

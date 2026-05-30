@@ -28,3 +28,11 @@ func writeFd(fd uintptr, buf []byte) (int, wasi.Errno) {
 	n, err := syscall.Write(int(fd), buf)
 	return n, wasi.UnwrapOSError(err)
 }
+
+func pwriteFd(fd uintptr, buf []byte, off int64) (int, wasi.Errno) {
+	if len(buf) == 0 {
+		return 0, 0
+	}
+	n, err := syscall.Pwrite(int(fd), buf, off)
+	return n, wasi.UnwrapOSError(err)
+}
