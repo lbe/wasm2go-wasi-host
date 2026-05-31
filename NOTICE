@@ -1,0 +1,26 @@
+wasm2go-wasi-host
+Copyright 2026 Learned By Error
+
+This product includes software developed by third parties under separate
+license terms.
+
+---
+
+wazero
+Copyright 2020-2023 The wazero Authors
+
+Portions of this repository are adapted from wazero:
+  https://github.com/tetratelabs/wazero
+
+Those portions are licensed under the Apache License, Version 2.0. A copy of
+the license is in licenses/APACHE-2.0.txt.
+
+Adapted code lives primarily under:
+  - internal/wasi/
+  - internal/wasi/sysfs/
+  - internal/wasi/testfixture/ (MapFS fixture, from wazero internal/fstest)
+
+See docs/design-improvements-2.md for the portable code inventory. Files
+adapted from wazero carry a source-file copyright notice. Modifications for
+wasm2go-wasi-host (import paths, errno mapping, platform splits, PathFor(),
+and wasihost integration) are Copyright 2026 Learned By Error.

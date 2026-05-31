@@ -58,7 +58,7 @@ Legacy fd-table adapters (`FSFileWrap`, `DirEntriesFile`, `wasiDirInfo`) were re
 | `path_rename` across devices | `path_rename_unix.go` | (same file, unix tag) |
 | `path_rename` on other GOOS | — | `path_rename_other.go` |
 
-`internal/wasi/` holds portable WASI types, `Context`, `FSContext`, `DirentCache`, and `sysfs/` adapters (`DirFS`, `ReadFS`, `AdaptFS`, `osFile`, `fsFile`) adapted from wazero. Stdio implements `Pollable` where applicable; `poll_oneoff` consults `PollableFile` / `Pollable` before emitting fd read/write events.
+`internal/wasi/` holds portable WASI types, `Context`, `FSContext`, `DirentCache`, and `sysfs/` adapters (`DirFS`, `ReadFS`, `AdaptFS`, `osFile`, `fsFile`) adapted from [wazero](https://github.com/tetratelabs/wazero) (Apache License 2.0; see [NOTICE](./NOTICE) and [licenses/APACHE-2.0.txt](./licenses/APACHE-2.0.txt)). Stdio implements `Pollable` where applicable; `poll_oneoff` consults `PollableFile` / `Pollable` before emitting fd read/write events. Path resolution and confinement remain in `wasihost_path_resolve.go` (project-specific, MIT).
 
 ### Syscall flow
 
@@ -147,6 +147,8 @@ One `State` per guest instance, single goroutine. `State` is not safe for concur
 ## Related docs
 
 - [README.md](./README.md) — install, usage, development
+- [NOTICE](./NOTICE) — third-party attribution (wazero, Apache 2.0)
+- [licenses/APACHE-2.0.txt](./licenses/APACHE-2.0.txt) — Apache License 2.0 text for adapted wazero code
 - [docs/path-confinement.md](./docs/path-confinement.md) — preopen matching, lexical and symlink confinement
 - [cmd/wasm2go-run/README.md](./cmd/wasm2go-run/README.md) — CLI flags and cache
 - [pkg.go.dev](https://pkg.go.dev/github.com/lbe/wasm2go-wasi-host) — generated API reference

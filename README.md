@@ -170,4 +170,6 @@ Format before commit: `gofmt -w .` or `make format`.
 
 ## License
 
-MIT
+This project is licensed under the [MIT License](./LICENSE).
+
+[`internal/wasi/`](./internal/wasi/) and [`internal/wasi/sysfs/`](./internal/wasi/sysfs/) include code adapted from [wazero](https://github.com/tetratelabs/wazero) (Copyright 2020–2023 The wazero Authors), licensed under the [Apache License 2.0](./licenses/APACHE-2.0.txt). See [NOTICE](./NOTICE) and [docs/design-improvements-2.md](./docs/design-improvements-2.md) for attribution and the portable code inventory.
