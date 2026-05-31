@@ -125,22 +125,6 @@ func (f *osFile) checkSameFile(osf *os.File) wasi.Errno {
 	return wasi.ENOENT
 }
 
-func (f *osFile) IsNonblock() bool {
-	return f.flag&wasi.O_NONBLOCK == wasi.O_NONBLOCK
-}
-
-func (f *osFile) SetNonblock(enable bool) (errno wasi.Errno) {
-	if enable {
-		f.flag |= wasi.O_NONBLOCK
-	} else {
-		f.flag &= ^wasi.O_NONBLOCK
-	}
-	if errno = setNonblock(f.fd, enable); errno != 0 {
-		return fileError(f, f.closed, errno)
-	}
-	return 0
-}
-
 func (f *osFile) Stat() (wasi.Stat_t, wasi.Errno) {
 	if f.closed {
 		return wasi.Stat_t{}, wasi.EBADF
@@ -171,7 +155,12 @@ func (f *osFile) Read(buf []byte) (n int, errno wasi.Errno) {
 }
 
 func (f *osFile) Pread(buf []byte, off int64) (n int, errno wasi.Errno) {
-	if n, errno = pread(f.file, buf, off); errno != 0 {
+	if nonBlockingFileReadSupported && f.IsNonblock() {
+		n, errno = f.preadNonblock(buf, off)
+	} else {
+		n, errno = pread(f.file, buf, off)
+	}
+	if errno != 0 {
 		errno = fileError(f, f.closed, errno)
 	}
 	return
@@ -241,6 +230,10 @@ func (f *osFile) Datasync() wasi.Errno {
 func (f *osFile) Utimens(atim, mtim int64) wasi.Errno {
 	if f.closed {
 		return wasi.EBADF
+	}
+	// Path-based utimens preserves nanosecond timestamp precision.
+	if f.path != "" {
+		return utimens(f.path, atim, mtim)
 	}
 	err := futimens(f.fd, atim, mtim)
 	return wasi.UnwrapOSError(err)

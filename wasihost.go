@@ -3,7 +3,8 @@
 // the env.call_host_function stub used by some wasm2go modules.
 //
 // Filesystem access is capability-oriented: guests see only preopened
-// directories, either read-only [fs.FS] mounts or writable host directories.
+// directories, either read-only [fs.FS] mounts or writable host directories
+// (one backend per preopen; use separate preopens for embedded plus host data).
 // See ARCHITECTURE.md for the source layout and syscall flow.
 //
 // # Usage

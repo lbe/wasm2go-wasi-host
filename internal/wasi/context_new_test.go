@@ -212,7 +212,7 @@ func TestContextImplementsRequiredFieldsValidationDefaultsAndFSInit(t *testing.T
 			t.Error("Context should have Nanosleep method that accepts 0 without error")
 		}
 
-		// Osyield is a no-op by default
+		// Osyield yields via runtime.Gosched by default
 		if !callOsyield(ctx) {
 			t.Error("Context should have Osyield method that is callable")
 		}

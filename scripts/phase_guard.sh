@@ -1,7 +1,7 @@
 #!/usr/bin/env bash
 # Phase Guard / Quality Gate script
-# Performs comprehensive quality checks before tests or commits.
-# This script mirrors the functionality of TestQualityGate in quality_gate_test.go.
+# Performs quality checks before tests or commits.
+# Mirrors TestQualityGate in e2e_quality_gate_test.go (lint/pytest run in CI separately).
 set -euo pipefail
 
 SCRIPT_DIR="$(cd "$(dirname "${BASH_SOURCE[0]}")" && pwd)"
@@ -35,37 +35,6 @@ check_gofmt() {
         echo "✗ Files not formatted correctly:"
         echo "$unformatted"
         return 1
-    fi
-}
-
-# Function to run golangci-lint
-check_golangci_lint() {
-    echo "Running golangci-lint..."
-    if golangci-lint run "./..." >/dev/null 2>&1; then
-        echo "✓ Linting passed"
-        return 0
-    else
-        echo "✗ Linting failed"
-        return 1
-    fi
-}
-
-# Function to run Python adapter tests
-check_python_adapter_tests() {
-    echo "Running Python adapter tests..."
-    local test_dir="$REPO_ROOT/wasi-testsuite"
-    if [ -d "$test_dir" ]; then
-        cd "$test_dir"
-        if python3 -m pytest adapters/wasm2go_test.py -q >/dev/null 2>&1; then
-            echo "✓ Python adapter tests passed"
-            return 0
-        else
-            echo "✗ Python adapter tests failed"
-            return 1
-        fi
-    else
-        echo "⚠ Skipping Python adapter tests (wasi-testsuite not found)"
-        return 0
     fi
 }
 
@@ -112,8 +81,6 @@ main() {
 
     # Run all checks
     check_gofmt || ((failures++))
-    check_golangci_lint || ((failures++))
-    check_python_adapter_tests || ((failures++))
     check_build || ((failures++))
 
     # Cleanup

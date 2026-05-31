@@ -1,6 +1,9 @@
+//go:build e2e
+
 package wasihost_test
 
 import (
+	"encoding/json"
 	"errors"
 	"os"
 	"os/exec"
@@ -11,11 +14,19 @@ import (
 	"testing"
 )
 
+var fsTestsCopyMu sync.Mutex
+
 // wasiTestsuiteCase is a single wasi-testsuite wasm binary to run end-to-end.
 type wasiTestsuiteCase struct {
 	name      string
 	wantPass  bool
-	stdioOnly bool
+	stdioOnly bool // force wasm-only invocation (ignore JSON dirs)
+}
+
+type wasiTestsuiteJSON struct {
+	Args []string          `json:"args"`
+	Env  map[string]string `json:"env"`
+	Dirs []string          `json:"dirs"`
 }
 
 var (
@@ -26,7 +37,7 @@ var (
 // runWasiTestsuiteCases builds wasm2go-run and executes each case as a
 // sub-test. Every case runs the wasm binary named <name>.wasm from the
 // wasi-testsuite testsuite identified by suiteDir (e.g. "rust" or "c")
-// against fs-tests.dir.
+// against fs-tests.dir when required by the test JSON config.
 func runWasiTestsuiteCases(t *testing.T, suiteDir string, cases []wasiTestsuiteCase) {
 	t.Helper()
 
@@ -39,7 +50,6 @@ func runWasiTestsuiteCases(t *testing.T, suiteDir string, cases []wasiTestsuiteC
 		t.Fatalf("failed to get working directory: %v", err)
 	}
 
-	// Ensure the wasm2go-run binary is built only once.
 	var binPath string
 	wasiTestsuiteOnce.Do(func() {
 		wasm2goRunPath = filepath.Join(repoRoot, "bin", "wasm2go-run")
@@ -52,7 +62,6 @@ func runWasiTestsuiteCases(t *testing.T, suiteDir string, cases []wasiTestsuiteC
 	binPath = wasm2goRunPath
 
 	testsDir := filepath.Join(repoRoot, "wasi-testsuite", "tests", suiteDir, "testsuite", "wasm32-wasip1")
-	fsTestsDir := filepath.Join(testsDir, "fs-tests.dir")
 
 	for _, tc := range cases {
 		tc := tc
@@ -60,17 +69,9 @@ func runWasiTestsuiteCases(t *testing.T, suiteDir string, cases []wasiTestsuiteC
 			t.Parallel()
 
 			wasmPath := filepath.Join(testsDir, tc.name+".wasm")
-			var argv []string
-			if tc.stdioOnly {
-				argv = []string{
-					wasmPath,
-				}
-			} else {
-				argv = []string{
-					"--dir", fsTestsDir + "::fs-tests.dir",
-					wasmPath,
-					"fs-tests.dir",
-				}
+			argv, err := wasiTestsuiteArgv(t, testsDir, wasmPath, tc.name, tc.stdioOnly)
+			if err != nil {
+				t.Fatalf("build argv: %v", err)
 			}
 
 			cmd := exec.Command(binPath, argv...)
@@ -96,4 +97,86 @@ func runWasiTestsuiteCases(t *testing.T, suiteDir string, cases []wasiTestsuiteC
 			}
 		})
 	}
+}
+
+func wasiTestsuiteArgv(t *testing.T, testsDir, wasmPath, name string, stdioOnly bool) ([]string, error) {
+	t.Helper()
+	cfg, hasJSON := loadWasiTestsuiteJSON(testsDir, name)
+	argv := make([]string, 0, 8)
+	for key, value := range cfg.Env {
+		argv = append(argv, "--env", key+"="+value)
+	}
+
+	dirs := cfg.Dirs
+	args := cfg.Args
+	switch {
+	case stdioOnly:
+		// No directory preopens; args/env still come from JSON when present.
+	case !hasJSON:
+		dirs = []string{"fs-tests.dir"}
+		args = []string{"fs-tests.dir"}
+	}
+
+	for _, guestDir := range dirs {
+		dst, err := cloneTestsuiteGuestDir(t, testsDir, guestDir)
+		if err != nil {
+			return nil, err
+		}
+		argv = append(argv, "--dir", dst+"::"+guestDir)
+	}
+	argv = append(argv, wasmPath)
+	argv = append(argv, args...)
+	return argv, nil
+}
+
+func copyDirTree(src, dst string) error {
+	return os.CopyFS(dst, os.DirFS(src))
+}
+
+func cloneTestsuiteGuestDir(t *testing.T, testsDir, guestDir string) (string, error) {
+	t.Helper()
+	src := filepath.Join(testsDir, guestDir)
+	dst := filepath.Join(t.TempDir(), guestDir)
+
+	fsTestsCopyMu.Lock()
+	defer fsTestsCopyMu.Unlock()
+	if err := cleanupTestsuiteOutput(src); err != nil {
+		return "", err
+	}
+	if err := copyDirTree(src, dst); err != nil {
+		return "", err
+	}
+	return dst, cleanupTestsuiteOutput(dst)
+}
+
+// cleanupTestsuiteOutput mirrors wasi-testsuite's pre-run cleanup of *.cleanup
+// artifacts under a mounted directory.
+func cleanupTestsuiteOutput(hostDir string) error {
+	return filepath.WalkDir(hostDir, func(path string, d os.DirEntry, err error) error {
+		if err != nil {
+			return err
+		}
+		if !strings.HasSuffix(d.Name(), ".cleanup") {
+			return nil
+		}
+		if d.IsDir() {
+			return os.RemoveAll(path)
+		}
+		return os.Remove(path)
+	})
+}
+
+func loadWasiTestsuiteJSON(testsDir, name string) (wasiTestsuiteJSON, bool) {
+	data, err := os.ReadFile(filepath.Join(testsDir, name+".json"))
+	if err != nil {
+		return wasiTestsuiteJSON{}, false
+	}
+	var cfg wasiTestsuiteJSON
+	if err := json.Unmarshal(data, &cfg); err != nil {
+		return wasiTestsuiteJSON{}, false
+	}
+	if cfg.Env == nil {
+		cfg.Env = map[string]string{}
+	}
+	return cfg, true
 }

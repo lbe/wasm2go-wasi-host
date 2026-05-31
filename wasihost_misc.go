@@ -3,6 +3,8 @@ package wasihost
 import (
 	"encoding/binary"
 	"io"
+
+	"github.com/lbe/wasm2go-wasi-host/internal/wasi"
 )
 
 const (
@@ -200,32 +202,16 @@ func (s *State) Xargs_get(argvPtr, argvBufPtr int32) int32 {
 // Note: The event_type is stored as a uint8 at offset +10, not as a uint32
 // at offset +12. This is a common pitfall and was a source of bugs.
 //
-// Clock subscriptions (event type 0) are handled by sleeping for the shortest
-// requested timeout nanoseconds. fd_read and fd_write subscriptions (event
-// types 1 and 2) validate fd existence but do not model actual I/O readiness.
-// A real readiness model would require async I/O infrastructure beyond this
-// synchronous host's scope.
-// TODO(post-merge): extract helpers for clock-subscription collection and
-// fd-event emission; this function is ~120 lines with two passes and nested
-// special-casing (fd_write suppresses positive clock timeouts).
+// Clock subscriptions sleep for the shortest requested timeout. fd_read and
+// fd_write subscriptions call Poll on PollableFile or Pollable fds (zero
+// timeout); when Poll reports not ready, no event is emitted. Other fds emit
+// immediately if open. fd_write suppresses positive clock timeouts when emitted.
 func (s *State) Xpoll_oneoff(inPtr int32, outPtr int32, nsubscriptions int32, neventsPtr int32) int32 {
-	// Define offsets for subscription structure
-	// The WASI spec layout (used by the Rust wasi 0.11.0 crate and the wasm binary):
-	//   Offset  Size  Field
-	//   0       8     userdata (u64)
-	//   8       1     tag (u8) - event type: 0=clock, 1=fd_read, 2=fd_write
-	//   9       7     padding
-	//   16      4     clock.id / fd_read.file_descriptor (u32)
-	//   20      4     padding
-	//   24      8     clock.timeout (u64)
-	//   32      8     clock.precision (u64)
-	//   40      2     clock.flags (u16)
-	//   42      6     padding
 	const (
 		subOffsetUserdata = 0
-		subOffsetTag      = 8  // tag (u8) - event type: 0=clock, 1=fd_read, 2=fd_write
-		subOffsetFD       = 16 // file_descriptor (u32) for fd_read/fd_write, or clock.id
-		subOffsetTimeout  = 24 // timeout (u64) for clock subscriptions
+		subOffsetTag      = 8 // 0=clock, 1=fd_read, 2=fd_write
+		subOffsetFD       = 16
+		subOffsetTimeout  = 24
 	)
 
 	// Event type constants (used with u8 tag at subOffsetTag)
@@ -262,16 +248,22 @@ func (s *State) Xpoll_oneoff(inPtr int32, outPtr int32, nsubscriptions int32, ne
 		switch eventType {
 		case evtTypeFdRead, evtTypeFdWrite:
 			fd := int32(binary.LittleEndian.Uint32(mem[subOffset+subOffsetFD:]))
-			var errno uint32 = 0
-			if _, ok := s.lookupFD(fd); !ok {
-				errno = uint32(wasiEBadf)
-			}
-			// Write event immediately
-			writePollOneoffEvent(mem, currentOutPtr, userdata, uint16(errno), uint8(eventType), fd)
-			currentOutPtr += eventSize
-			eventCount++
+			pflag := wasi.POLLIN
 			if eventType == evtTypeFdWrite {
-				fdWriteEmitted = true
+				pflag = wasi.POLLOUT
+			}
+			fe, ok := s.lookupFD(fd)
+			var fePtr *wasi.FileEntry
+			if ok {
+				fePtr = fe
+			}
+			nextOut, wrote := pollOneoffProcessFdSubscription(mem, currentOutPtr, uint8(eventType), userdata, fd, fePtr, pflag)
+			currentOutPtr = nextOut
+			if wrote {
+				eventCount++
+				if eventType == evtTypeFdWrite {
+					fdWriteEmitted = true
+				}
 			}
 
 		case evtTypeClock:
@@ -321,6 +313,36 @@ func (s *State) Xpoll_oneoff(inPtr int32, outPtr int32, nsubscriptions int32, ne
 	return wasiESuccess
 }
 
+// pollOneoffProcessFdSubscription handles one fd_read or fd_write subscription.
+// It consults Poll when the file is Pollable; otherwise it emits if the fd is open.
+func pollOneoffProcessFdSubscription(mem []byte, outPtr int32, eventType uint8, userdata uint64, fd int32, fe *wasi.FileEntry, pflag wasi.Pflag) (nextOutPtr int32, wrote bool) {
+	if fe == nil {
+		writePollOneoffEvent(mem, outPtr, userdata, uint16(wasiEBadf), eventType, fd)
+		return outPtr + eventSize, true
+	}
+	if pf, ok := fe.File.(wasi.PollableFile); ok {
+		return pollOneoffEmitAfterPoll(mem, outPtr, eventType, userdata, fd, pf, pflag)
+	}
+	if pollable, ok := fe.File.(wasi.Pollable); ok {
+		return pollOneoffEmitAfterPoll(mem, outPtr, eventType, userdata, fd, pollable, pflag)
+	}
+	writePollOneoffEvent(mem, outPtr, userdata, 0, eventType, fd)
+	return outPtr + eventSize, true
+}
+
+func pollOneoffEmitAfterPoll(mem []byte, outPtr int32, eventType uint8, userdata uint64, fd int32, p wasi.Pollable, pflag wasi.Pflag) (nextOutPtr int32, wrote bool) {
+	ready, werrno := p.Poll(pflag, 0)
+	if werrno != 0 {
+		writePollOneoffEvent(mem, outPtr, userdata, uint16(errnoFromWasi(werrno)), eventType, fd)
+		return outPtr + eventSize, true
+	}
+	if ready {
+		writePollOneoffEvent(mem, outPtr, userdata, 0, eventType, fd)
+		return outPtr + eventSize, true
+	}
+	return outPtr, false
+}
+
 // writePollOneoffEvent writes a single poll_oneoff output event to mem at evtOffset.
 // For clock events, fdOrTimeout is the timeout value (written at evtOffset+12 as uint64).
 // For fd_read/fd_write events, fdOrTimeout is the file descriptor (written as uint16).
@@ -358,9 +380,12 @@ func writePollOneoffEvent(mem []byte, evtOffset int32, userdata uint64, errno ui
 func (s *State) Xcall_host_function(v0, v1, v2 int32) int32 { return 0 }
 
 // Xsched_yield implements sched_yield. This host is synchronous;
-// yielding calls the [runtime.Gosched] seam and returns ESUCCESS.
+// yielding calls ctx.Osyield (default runtime.Gosched) and returns ESUCCESS.
 func (s *State) Xsched_yield() int32 {
-	schedYield()
+	if s.ctx == nil {
+		return wasiESuccess
+	}
+	_ = s.ctx.Osyield()
 	return wasiESuccess
 }
 
@@ -387,9 +412,3 @@ func (s *State) Xsock_shutdown(fd, how int32) int32 {
 	}
 	return wasiENotSock
 }
-
-// Xfd_filestat_set_size implements fd_filestat_set_size. Returns EISDIR
-// for directory fds. For osFile-backed fds, truncates the file to size bytes
-// via (*os.File).Truncate when FD_FILESTAT_SET_SIZE is set in rights_base;
-// otherwise returns ENOTCAPABLE. For fs.FS-backed fds, returns ESUCCESS
-// without mutation (embedded files are read-only by construction).

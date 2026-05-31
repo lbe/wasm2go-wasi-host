@@ -1,5 +1,9 @@
 # Analysis of `wasm2go-wasi-host` Compared to wazero WASI Design Rationale
 
+> **Document status:** Living comparison — not a snapshot of pre-refactor code.
+> **Last reviewed:** 2026-05-30 (post `internal/wasi` VFS migration on `wazero-alignment-cleanup`).
+> **When comparing again:** Read `ARCHITECTURE.md`, `docs/design-improvements-2.md`, and `docs/path-confinement.md` first; update the [Implementation status](#implementation-status) section before citing "Current Design" bullets below.
+
 ## Overview
 
 This document analyzes the architecture of `wasm2go-wasi-host` against the design principles and implementation rationale described in the wazero `RATIONALE.md` document.
@@ -8,14 +12,28 @@ Project under analysis:
 
 - `wasm2go-wasi-host`
 - Goal: bolt-on WASI Preview1 host for Go code transpiled via `wasm2go`
-- Status: passes all wasi-testsuite Preview1 tests
+- Status: passes all wasi-testsuite Preview1 tests (`go test -tags=e2e ./...`)
 
 The analysis focuses on:
 - architectural alignment
 - abstraction boundaries
 - long-term maintainability
 - WASI semantic correctness
-- lessons learned from wazeroΓÇÖs implementation experience
+- lessons learned from wazero's implementation experience
+
+## Implementation status
+
+| Topic | Pre-refactor (historical) | Current (2026-05) | Remaining work |
+|-------|---------------------------|-------------------|----------------|
+| VFS abstraction | Ad-hoc `FSFileWrap`, `osFile`, overlay fallback | `internal/wasi` + `internal/wasi/sysfs` (`DirFS`, `ReadFS`, `AdaptFS`); legacy adapters removed | Path resolution still in `wasihost_path_resolve.go` (~630 lines); split deferred |
+| Config vs runtime | `Option func(*State)` mixed into syscall bodies | `ModuleConfig` → `wasi.Context` → `State.ctx` | — |
+| Silent ESUCCESS on metadata mutation | `fd_filestat_set_size/times` no-op on read-only | Routed through `fe.File.Truncate` / `Utimens`; `ReadFS` returns `EROFS` | — |
+| Overlay on writable mounts | Three-tier open with `fs.FS` fallback | Single VFS backend per preopen (intentional break) | Document for embedders migrating from overlay behavior |
+| poll_oneoff readiness | Immediate emit for all open fds | Stdin consults `Pollable`; other fds still stub-ready | TDD plan `wazero-alignment-cleanup-2` cycles 7–8: `PollableFile` on `osFile` |
+| Linux portability of ported wazero code | N/A | Darwin-only gaps in `stat.go` timespec fields and `withSyscallOflag` | TDD plan `wazero-alignment-cleanup-2` cycles 1–2, 9 |
+| Confinement / symlinks | Strong lexical rules, some host bypasses | VFS-first path stat; known gaps in root-mount follow and read-only readlink | TDD plan `wazero-alignment-cleanup-2` cycles 3–6 |
+
+Sections marked **(historical)** describe the pre-migration codebase for context. Sections marked **(current)** reflect the tree after design-improvements-2 Phases 1–6.
 
 ---
 
@@ -65,7 +83,7 @@ Documented behaviors include:
 
 ## Comparison to wazero
 
-This aligns directly with wazeroΓÇÖs core WASI philosophy:
+This aligns directly with wazero's core WASI philosophy:
 - WASI is capability-oriented
 - no ambient filesystem authority
 - explicit resource provisioning
@@ -104,7 +122,7 @@ The `State` object owns:
 
 ## Comparison to wazero
 
-This mirrors one of wazeroΓÇÖs strongest architectural lessons:
+This mirrors one of wazero's strongest architectural lessons:
 
 Avoid scattering WASI process state across unrelated syscall handlers.
 
@@ -178,7 +196,7 @@ The callback is re-invoked every syscall to safely handle memory growth.
 
 wazero internally solves the same issue through runtime-managed memory views.
 
-Your implementation benefits from wasm2goΓÇÖs direct memory exposure.
+Your implementation benefits from wasm2go's direct memory exposure.
 
 ## Assessment
 
@@ -255,24 +273,30 @@ Continue failing explicitly rather than partially emulating unsupported socket s
 
 ---
 
-# 1. Over-Reliance on Go `fs.FS`
+# 1. Over-Reliance on Go `fs.FS` — **(historical → largely resolved)**
 
-## Current Design
+## Historical design (pre-`internal/wasi`)
 
-The implementation relies heavily on:
-- `fs.FS`
-- `fs.File`
-- `fs.ReadDirFS`
+The implementation once relied heavily on:
+- `fs.FS` / `fs.File` / `fs.ReadDirFS` directly in syscall bodies
+- `FSFileWrap`, `DirEntriesFile`, overlay fallback on writable mounts
+- ad-hoc host-path bypasses and custom readdir snapshots
 
-Examples:
-- `FSFileWrap`
-- `DirEntriesFile`
-- overlay fallback behavior
-- embedded read-only mounts
+## Current design
 
-## wazero Lesson
+Filesystem semantics now go through **`internal/wasi`** (`FS`, `File`) and **`internal/wasi/sysfs`** adapters:
+- **`DirFS`** — writable host directory
+- **`ReadFS`** — write-denying wrapper (`EROFS` at VFS boundary)
+- **`AdaptFS`** — read-only `fs.FS` → `sys.FS`
+- **`wasi.FSContext`** — fd table, `DirentCache`, stdio as regular entries
 
-wazeroΓÇÖs rationale explains that GoΓÇÖs `fs.FS` abstraction eventually became insufficient for full WASI semantics.
+Legacy adapters (`FSFileWrap`, overlay fallback) are **removed**. Embedders still pass `fs.FS` for read-only preopens, but WASI methods consume `wasi.File`, not `fs.File` type switches.
+
+Path confinement and guest-path resolution remain in **`wasihost_path_resolve.go`** (~630 lines) — the main boundary not yet folded into `internal/wasi`.
+
+## wazero lesson
+
+wazero's rationale explains that Go's `fs.FS` abstraction eventually became insufficient for full WASI semantics.
 
 The abstraction loses critical information:
 - inode identity
@@ -283,68 +307,37 @@ The abstraction loses critical information:
 - OS-specific errno fidelity
 - open-file lifecycle semantics
 
-## Evidence Already Visible
+## Evidence that motivated the migration (historical)
 
-The implementation is already compensating manually:
+Before `internal/wasi`, the codebase compensated manually:
 - overlay fallback logic
 - direct host-path mutation bypasses
-- custom offset tracking
-- WriteAt fallbacks
-- symlink special-casing
+- custom offset tracking and readdir snapshots
+- symlink special-casing in syscall bodies
 
-These are signs that abstraction impedance mismatch already exists.
+Those pressures led to **design-improvements-2** and the wazero VFS port (see `ARCHITECTURE.md`).
 
-## Recommendation
+## Recommendation — status
 
-Introduce an internal WASI-native VFS abstraction layer.
+~~Introduce an internal WASI-native VFS abstraction layer.~~ **Done** (`internal/wasi`, `internal/wasi/sysfs`).
 
-Suggested direction:
-
-```go
-type WASIFile interface {
-    ReadAt(...)
-    WriteAt(...)
-    Readdir(...)
-    Stat(...)
-    Rights()
-    FileType()
-    Inode()
-}
-```
-
-Then adapt:
-- `fs.FS`
-- `os.File`
-- embedded FS
-- future memory FS
-
-into that internal model.
-
-This is likely the single most important long-term architectural improvement.
+**Still open:**
+- Extract or slim `wasihost_path_resolve.go` (maintainability; tracked outside wasi-alignment-cleanup-2).
+- Keep `docs/path-confinement.md` aligned when confinement behavior changes.
 
 ---
 
-# 2. ΓÇ£ESUCCESS Without MutationΓÇ¥ Semantics
+# 2. "ESUCCESS Without Mutation" Semantics — **(historical → resolved for filestat)**
 
-## Current Design
+## Historical design
 
-Several operations return success while performing no mutation for read-only `fs.FS` mounts.
+Several operations once returned success while performing no mutation for read-only `fs.FS` mounts, notably `fd_filestat_set_size` and `fd_filestat_set_times`.
 
-Examples:
-- `fd_filestat_set_size`
-- `fd_filestat_set_times`
+## Current design
 
-## Risk
+Metadata mutations route through **`fe.File.Truncate`** and **`fe.File.Utimens`**. **`ReadFS`** returns **`EROFS`** for writes at the VFS layer. WASI methods propagate errno via `errnoFromWasi` — no silent success for those paths.
 
-This creates semantic ambiguity.
-
-Guests may:
-- assume persistence occurred
-- cache incorrect metadata
-- suppress retries
-- mis-handle future behavior
-
-## wazero Lesson
+## wazero lesson
 
 wazero strongly favors:
 - explicit unsupported errors
@@ -352,18 +345,11 @@ wazero strongly favors:
 
 over silent no-op success.
 
-## Recommendation
+## Recommendation — status
 
-Strongly consider returning:
-- `EROFS`
-- `ENOTSUP`
-- `ENOTCAPABLE`
+~~Strongly consider returning EROFS / ENOTSUP / ENOTCAPABLE instead of silent success.~~ **Done for filestat size/times** via VFS routing.
 
-instead of silent success.
-
-Especially for metadata mutation APIs.
-
-This is likely the most questionable current semantic choice in the implementation.
+When auditing new syscalls, keep the rule: **propagate VFS errno; do not invent ESUCCESS no-ops.**
 
 ---
 
@@ -404,42 +390,29 @@ Document it explicitly now before the implementation grows further.
 
 ---
 
-# 4. poll_oneoff Evolution Risk
+# 4. poll_oneoff Evolution Risk — **(current — partial)**
 
-## Current Design
+## Current design
 
 The implementation:
 - correctly handles event memory layout
 - supports clock subscriptions
 - validates fd existence
-- does not implement true readiness tracking
+- consults **`Pollable`** for stdin (`StdinFile` / injected readers)
+- **still emits immediately** for host-backed fds that do not implement **`PollableFile`** (e.g. `sysfs.osFile` today)
 
 ## Assessment
 
-This is acceptable for the current synchronous design.
+Acceptable for synchronous single-goroutine execution **only if** `fd_fdstat_set_flags` NONBLOCK and `poll_oneoff` stay consistent. Today they can diverge: guest sees NONBLOCK in fdstat while `poll_oneoff` reports ready and `fd_read` returns `EAGAIN`.
 
-However, synchronous stubs can become permanent architectural constraints.
+## Recommendation — status
 
-## Recommendation
+Introduce readiness at the **`PollableFile`** boundary (wazero pattern), not a separate global `Poller` yet:
 
-Introduce an internal readiness abstraction now, even if stubbed.
+- **`sysfs.osFile`**: implement `Poll` + `SetNonblock` (plan: `wazero-alignment-cleanup-2` cycles 7–8).
+- **`poll_oneoff`**: consult `PollableFile` before emitting fd_read/fd_write events (stdin path already does via `Pollable`).
 
-Example:
-
-```go
-type Poller interface {
-    SubscribeFD(...)
-    Wait(...)
-}
-```
-
-This preserves future evolution room:
-- async runtimes
-- socket support
-- real readiness
-- Preview2 evolution
-
-without forcing large-scale refactors later.
+A full async `Poller` subscription API remains optional future work for Preview2 / sockets.
 
 ---
 
@@ -447,7 +420,7 @@ without forcing large-scale refactors later.
 
 ## Observation
 
-One of wazeroΓÇÖs strongest lessons is:
+One of wazero's strongest lessons is:
 
 WASI Preview1 contains underspecified behaviors.
 
@@ -482,46 +455,40 @@ This will become increasingly valuable as:
 
 ---
 
-# Strategic Recommendation
+# Strategic Recommendation — **(updated)**
 
-The implementation is currently positioned between:
-- a thin Go stdlib adapter
-and
-- a true WASI-native runtime abstraction
+The project has moved from "thin stdlib adapter" toward **wazero-aligned VFS + Context consumption**. The largest remaining risk is **not** missing a VFS layer — it is **finishing portability and edge-case correctness** on top of that layer while **`wasihost_path_resolve.go` stays monolithic**.
 
-The largest long-term risk is remaining indefinitely in the middle.
+Priority order (2026-05):
 
-The strongest lesson from wazero is:
+1. **Linux build parity** for ported wazero code (`stat.go`, `open_file_*` oflags).
+2. **Confinement and symlink correctness** (root-mount follow, read-only filestat follow, readlink, readdir `..` inode via VFS only) — see `wazero-alignment-cleanup-2` TDD plan.
+3. **`PollableFile` on host fds** so poll and NONBLOCK agree.
+4. **Maintainability** — split path resolution and oversized `syscall_*_test.go` files (separate plan).
 
-## Build explicit runtime abstractions early.
-
-Particularly around:
-- filesystem semantics
-- descriptor lifecycle
-- polling/readiness
-- rights propagation
-- inode identity
-
-The current implementation already shows signs of pressure from abstraction mismatch.
-
-Addressing this now will likely prevent significant technical debt later.
+Build explicit runtime abstractions **early** — **done for FS/File**. Continue applying the same discipline to polling and path policy documentation.
 
 ---
 
-# Final Assessment
+# Final Assessment — **(updated 2026-05)**
 
-`wasm2go-wasi-host` is already architecturally impressive for an early-stage WASI host.
+`wasm2go-wasi-host` is a capable embedded WASI host with wazero-derived VFS internals and strong confinement documentation.
 
-Particularly strong areas:
-- capability confinement
-- syscall semantic clarity
-- ownership enforcement
-- memory handling
-- errno mapping
-- explicit behavioral documentation
-- wasi-testsuite compliance
+**Strengths (unchanged):**
+- capability confinement and explicit path policy
+- syscall semantic clarity and ownership enforcement
+- memory callback on every syscall
+- wasi-testsuite compliance (72 cases, `-tags=e2e`)
 
-The largest improvement opportunity is introducing a WASI-native internal VFS abstraction before the implementation grows substantially larger.
+**Resolved since original write-up:**
+- internal WASI-native VFS (`internal/wasi`, `sysfs`)
+- `ModuleConfig` / `Context` decoupling
+- explicit `EROFS` for read-only metadata mutation via VFS
 
-That is the single biggest architectural lesson to learn from wazeroΓÇÖs experience.
+**Active gaps (see Implementation status table and `.pi/tdd-plans/wazero-alignment-cleanup-2.yaml`):**
+- Linux portability bugs in ported stat/open helpers
+- confinement/symlink edge cases on root and read-only mounts
+- `PollableFile` for host-backed fds
+
+When re-running this comparison, update the **Implementation status** table first — do not treat historical bullets as current behavior.
 

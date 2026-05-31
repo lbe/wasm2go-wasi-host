@@ -2,10 +2,8 @@ package wasihost
 
 import (
 	"encoding/binary"
-	"os"
 
 	"github.com/lbe/wasm2go-wasi-host/internal/wasi"
-	"github.com/lbe/wasm2go-wasi-host/internal/wasi/sysfs"
 )
 
 func (s *State) fdFileSyncOp(fd int32, op func(wasi.File) wasi.Errno) int32 {
@@ -14,6 +12,24 @@ func (s *State) fdFileSyncOp(fd int32, op func(wasi.File) wasi.Errno) int32 {
 		return wasiEBadf
 	}
 	if errno := op(fe.File); errno != 0 {
+		return errnoFromWasi(errno)
+	}
+	return wasiESuccess
+}
+
+// fdFilestatOp runs op on an open fd after directory and rights checks.
+func (s *State) fdFilestatOp(fd int32, requiredRight uint64, op func(fe *wasi.FileEntry) wasi.Errno) int32 {
+	fe, ok := s.lookupFD(fd)
+	if !ok || fe.File == nil {
+		return wasiEBadf
+	}
+	if errno := errnoForDirectoryFDOp(fe); errno != 0 {
+		return errno
+	}
+	if errno := errnoIfFDRightsMissing(fe.RightsBase, requiredRight); errno != 0 {
+		return errno
+	}
+	if errno := op(fe); errno != 0 {
 		return errnoFromWasi(errno)
 	}
 	return wasiESuccess
@@ -144,6 +160,13 @@ func (s *State) Xfd_sync(fd int32) int32 {
 	return s.fdFileSyncOp(fd, func(f wasi.File) wasi.Errno { return f.Sync() })
 }
 
+func setPollableNonblockIfChanged(pf wasi.PollableFile, wantNonblock bool) wasi.Errno {
+	if pf.IsNonblock() == wantNonblock {
+		return 0
+	}
+	return pf.SetNonblock(wantNonblock)
+}
+
 func (s *State) Xfd_fdstat_set_flags(fd, flags int32) int32 {
 	s.assertSingleOwner()
 	fe, ok := s.lookupFD(fd)
@@ -157,11 +180,14 @@ func (s *State) Xfd_fdstat_set_flags(fd, flags int32) int32 {
 		return wasiEInval
 	}
 	fe.FdFlags = uint16(flags)
-	if errno := fe.File.SetAppend(flags&fdFlagsAppend != 0); errno != 0 {
-		return errnoFromWasi(errno)
+	wantAppend := flags&fdFlagsAppend != 0
+	if fe.File.IsAppend() != wantAppend {
+		if errno := fe.File.SetAppend(wantAppend); errno != 0 {
+			return errnoFromWasi(errno)
+		}
 	}
 	if pf, ok := fe.File.(wasi.PollableFile); ok {
-		if errno := pf.SetNonblock(flags&fdFlagsNonBlock != 0); errno != 0 {
+		if errno := setPollableNonblockIfChanged(pf, flags&fdFlagsNonBlock != 0); errno != 0 {
 			return errnoFromWasi(errno)
 		}
 	}
@@ -204,25 +230,19 @@ func (s *State) Xfd_fdstat_set_rights(fd int32, base, inheriting int64) int32 {
 	return wasiESuccess
 }
 
+// Xfd_filestat_set_size implements fd_filestat_set_size via fe.File.Truncate.
+// Returns EISDIR for directories, ENOTCAPABLE without FD_FILESTAT_SET_SIZE,
+// and file-type errno values (for example ENOSYS on AdaptFS, EBADF on ReadFS).
 func (s *State) Xfd_filestat_set_size(fd int32, size int64) int32 {
-	fe, ok := s.lookupFD(fd)
-	if !ok || fe.File == nil {
-		return wasiEBadf
-	}
-	if errno := errnoForDirectoryFDOp(fe); errno != 0 {
-		return errno
-	}
-	if osf, ok := sysfs.UnderlyingOSFile(fe.File); ok {
-		if errno := errnoIfFDRightsMissing(fe.RightsBase, rightFDFilestatSetSize); errno != 0 {
-			return errno
-		}
-		if err := osf.Truncate(size); err != nil {
-			return mapOSError(err)
-		}
-	}
-	return wasiESuccess
+	return s.fdFilestatOp(fd, rightFDFilestatSetSize, func(fe *wasi.FileEntry) wasi.Errno {
+		return fe.File.Truncate(size)
+	})
 }
 
+// Xfd_filestat_set_times implements fd_filestat_set_times via fe.File.Utimens.
+// Returns EINVAL for contradictory fstFlags, EISDIR for directories,
+// ENOTCAPABLE without FD_FILESTAT_SET_TIMES, and ESUCCESS without calling
+// Utimens when fstFlags==0.
 func (s *State) Xfd_filestat_set_times(fd int32, atim, mtim int64, fstFlags int32) int32 {
 	if fstFlags&(fstAtim|fstMtim|fstAtimNow|fstMtimNow) == 0 {
 		return wasiESuccess
@@ -230,21 +250,12 @@ func (s *State) Xfd_filestat_set_times(fd int32, atim, mtim int64, fstFlags int3
 	if errno := errnoIfContradictoryFstFlags(fstFlags); errno != 0 {
 		return errno
 	}
-	fe, ok := s.lookupFD(fd)
-	if !ok || fe.File == nil {
-		return wasiEBadf
-	}
-	osf, ok := sysfs.UnderlyingOSFile(fe.File)
-	if !ok {
-		return wasiESuccess
-	}
-	fi, err := osf.Stat()
-	if err != nil {
-		return mapOSError(err)
-	}
-	targetAtim, targetMtim := computeTargetTimes(fi, atim, mtim, fstFlags)
-	if err := os.Chtimes(osf.Name(), targetAtim, targetMtim); err != nil {
-		return mapOSError(err)
-	}
-	return wasiESuccess
+	return s.fdFilestatOp(fd, rightFDFilestatSetTimes, func(fe *wasi.FileEntry) wasi.Errno {
+		st, werrno := fe.File.Stat()
+		if werrno != 0 {
+			return werrno
+		}
+		targetAtim, targetMtim := computeTargetTimesFromStat(st, atim, mtim, fstFlags)
+		return fe.File.Utimens(targetAtim, targetMtim)
+	})
 }

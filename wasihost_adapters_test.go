@@ -4,20 +4,22 @@ import (
 	"go/ast"
 	"go/parser"
 	"go/token"
+	"os"
 	"path/filepath"
+	"strings"
 	"testing"
 )
 
-// TestDeadAdapterTypesRemovedFromWasihostAdapters verifies legacy fd-table
-// adapters were deleted from wasihost_adapters.go after sysfs migration.
+// TestDeadAdapterTypesRemovedFromWasihostAdapters verifies production wasihost
+// sources no longer declare legacy fd-table adapter types after sysfs migration.
 func TestDeadAdapterTypesRemovedFromWasihostAdapters(t *testing.T) {
 	projectRoot := mustProjectRoot(t)
-	path := filepath.Join(projectRoot, "wasihost_adapters.go")
 
-	fset := token.NewFileSet()
-	f, err := parser.ParseFile(fset, path, nil, 0)
-	if err != nil {
-		t.Fatalf("parse %s: %v", path, err)
+	stubsPath := filepath.Join(projectRoot, "wasihost_adapters_stubs.go")
+	if _, err := os.Stat(stubsPath); err == nil {
+		t.Errorf("legacy adapter stubs file still exists: wasihost_adapters_stubs.go")
+	} else if !os.IsNotExist(err) {
+		t.Fatalf("stat wasihost_adapters_stubs.go: %v", err)
 	}
 
 	deadTypes := []string{
@@ -28,10 +30,27 @@ func TestDeadAdapterTypesRemovedFromWasihostAdapters(t *testing.T) {
 		"wasiDirInfo",
 	}
 
-	declared := typeNamesInFile(f)
-	for _, name := range deadTypes {
-		if declared[name] {
-			t.Errorf("dead adapter type %q still declared in wasihost_adapters.go", name)
+	paths, err := filepath.Glob(filepath.Join(projectRoot, "wasihost*.go"))
+	if err != nil {
+		t.Fatalf("glob wasihost*.go: %v", err)
+	}
+
+	fset := token.NewFileSet()
+	for _, path := range paths {
+		if strings.HasSuffix(path, "_test.go") {
+			continue
+		}
+		f, parseErr := parser.ParseFile(fset, path, nil, 0)
+		if parseErr != nil {
+			t.Fatalf("parse %s: %v", path, parseErr)
+		}
+
+		declared := typeNamesInFile(f)
+		for _, name := range deadTypes {
+			if declared[name] {
+				rel, _ := filepath.Rel(projectRoot, path)
+				t.Errorf("dead adapter type %q still declared in %s", name, rel)
+			}
 		}
 	}
 }

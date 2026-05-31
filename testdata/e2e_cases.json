@@ -1,0 +1,737 @@
+[
+  {
+    "suite": "rust",
+    "name": "big_random_buf",
+    "wantPass": true,
+    "stdioOnly": true,
+    "smoke": false,
+    "unitMirror": []
+  },
+  {
+    "suite": "rust",
+    "name": "clock_time_get",
+    "wantPass": true,
+    "stdioOnly": true,
+    "smoke": false,
+    "unitMirror": [
+      "TestClockAndArgQueries"
+    ]
+  },
+  {
+    "suite": "rust",
+    "name": "close_preopen",
+    "wantPass": true,
+    "stdioOnly": false,
+    "smoke": false,
+    "unitMirror": [
+      "TestFdClose",
+      "TestHostDirectoryPreopen"
+    ]
+  },
+  {
+    "suite": "rust",
+    "name": "dangling_fd",
+    "wantPass": true,
+    "stdioOnly": false,
+    "smoke": false,
+    "unitMirror": []
+  },
+  {
+    "suite": "rust",
+    "name": "dangling_symlink",
+    "wantPass": true,
+    "stdioOnly": false,
+    "smoke": false,
+    "unitMirror": [
+      "TestDanglingSymlinkPathOpenNoFollow"
+    ]
+  },
+  {
+    "suite": "rust",
+    "name": "dir_fd_op_failures",
+    "wantPass": true,
+    "stdioOnly": false,
+    "smoke": false,
+    "unitMirror": [
+      "TestByteIOOnDirectoryFDsRejected",
+      "TestPositionAndSizeOpsOnDirectoryFDsRejected"
+    ]
+  },
+  {
+    "suite": "rust",
+    "name": "directory_seek",
+    "wantPass": true,
+    "stdioOnly": false,
+    "smoke": false,
+    "unitMirror": [
+      "TestByteIOOnDirectoryFDsRejected",
+      "TestDirectoryFdOpenedViaPathOpenOmitsFDSeekInFdstat"
+    ]
+  },
+  {
+    "suite": "rust",
+    "name": "fd_advise",
+    "wantPass": true,
+    "stdioOnly": false,
+    "smoke": false,
+    "unitMirror": [
+      "TestPositionedIOSyscalls"
+    ]
+  },
+  {
+    "suite": "rust",
+    "name": "fd_fdstat_set_rights",
+    "wantPass": true,
+    "stdioOnly": false,
+    "smoke": false,
+    "unitMirror": [
+      "TestFdRights",
+      "TestFdFdstatGetReportsWASIPreview1RightsBits"
+    ]
+  },
+  {
+    "suite": "rust",
+    "name": "fd_filestat_set",
+    "wantPass": true,
+    "stdioOnly": false,
+    "smoke": false,
+    "unitMirror": [
+      "TestFdFilestatSetSizeAndTimes",
+      "TestFilestatMutations"
+    ]
+  },
+  {
+    "suite": "rust",
+    "name": "fd_flags_set",
+    "wantPass": true,
+    "stdioOnly": false,
+    "smoke": false,
+    "unitMirror": [
+      "TestFdFlags"
+    ]
+  },
+  {
+    "suite": "rust",
+    "name": "fd_readdir",
+    "wantPass": true,
+    "stdioOnly": false,
+    "smoke": false,
+    "unitMirror": [
+      "TestFdReaddir",
+      "TestFdReaddirCachingAndPagination"
+    ]
+  },
+  {
+    "suite": "rust",
+    "name": "file_allocate",
+    "wantPass": true,
+    "stdioOnly": false,
+    "smoke": false,
+    "unitMirror": [
+      "TestFdAllocate"
+    ]
+  },
+  {
+    "suite": "rust",
+    "name": "file_pread_pwrite",
+    "wantPass": true,
+    "stdioOnly": false,
+    "smoke": false,
+    "unitMirror": [
+      "TestPositionedIOSyscalls"
+    ]
+  },
+  {
+    "suite": "rust",
+    "name": "file_seek_tell",
+    "wantPass": true,
+    "stdioOnly": false,
+    "smoke": false,
+    "unitMirror": [
+      "TestFdSeek"
+    ]
+  },
+  {
+    "suite": "rust",
+    "name": "file_truncation",
+    "wantPass": true,
+    "stdioOnly": false,
+    "smoke": true,
+    "unitMirror": [
+      "TestPathOpenTruncationUsesPathFilestatSetSizeRight",
+      "TestFilestatMutations"
+    ]
+  },
+  {
+    "suite": "rust",
+    "name": "file_unbuffered_write",
+    "wantPass": true,
+    "stdioOnly": false,
+    "smoke": false,
+    "unitMirror": []
+  },
+  {
+    "suite": "rust",
+    "name": "fstflags_validate",
+    "wantPass": true,
+    "stdioOnly": false,
+    "smoke": false,
+    "unitMirror": [
+      "TestFdFilestatSetTimesRejectsContradictoryFlags",
+      "TestPathFilestatSetTimesRejectsContradictoryFlags"
+    ]
+  },
+  {
+    "suite": "rust",
+    "name": "interesting_paths",
+    "wantPass": true,
+    "stdioOnly": false,
+    "smoke": false,
+    "unitMirror": [
+      "TestPathMutationsRejectEscapeOutsideNestedDirfdSubtree",
+      "TestPathOpenRejectsEscapeOutsideNestedDirfdSubtree",
+      "TestPathOpenTrailingSlashSemantics"
+    ]
+  },
+  {
+    "suite": "rust",
+    "name": "isatty",
+    "wantPass": true,
+    "stdioOnly": false,
+    "smoke": false,
+    "unitMirror": []
+  },
+  {
+    "suite": "rust",
+    "name": "nofollow_errors",
+    "wantPass": true,
+    "stdioOnly": false,
+    "smoke": true,
+    "unitMirror": [
+      "TestDanglingSymlinkPathOpenNoFollow",
+      "TestPathOpenWithoutSymlinkFollowReturnsLoopForEscapeSymlinkWithoutTouchingOutsideFile"
+    ]
+  },
+  {
+    "suite": "rust",
+    "name": "overwrite_preopen",
+    "wantPass": true,
+    "stdioOnly": false,
+    "smoke": true,
+    "unitMirror": [
+      "TestXpathOpen",
+      "TestHostDirectoryPreopen"
+    ]
+  },
+  {
+    "suite": "rust",
+    "name": "path_exists",
+    "wantPass": true,
+    "stdioOnly": false,
+    "smoke": false,
+    "unitMirror": []
+  },
+  {
+    "suite": "rust",
+    "name": "path_filestat",
+    "wantPass": true,
+    "stdioOnly": false,
+    "smoke": false,
+    "unitMirror": [
+      "TestPathFilestatOpenFdFlagsAndSetTimes",
+      "TestXpathFilestatGet"
+    ]
+  },
+  {
+    "suite": "rust",
+    "name": "path_link",
+    "wantPass": true,
+    "stdioOnly": false,
+    "smoke": false,
+    "unitMirror": [
+      "TestPathLinkSyscall"
+    ]
+  },
+  {
+    "suite": "rust",
+    "name": "path_open_create_existing",
+    "wantPass": true,
+    "stdioOnly": false,
+    "smoke": false,
+    "unitMirror": [
+      "TestXpathOpen"
+    ]
+  },
+  {
+    "suite": "rust",
+    "name": "path_open_dirfd_not_dir",
+    "wantPass": true,
+    "stdioOnly": false,
+    "smoke": false,
+    "unitMirror": [
+      "TestPathOpenRejectsNonDirectoryBaseFd"
+    ]
+  },
+  {
+    "suite": "rust",
+    "name": "path_open_missing",
+    "wantPass": true,
+    "stdioOnly": false,
+    "smoke": true,
+    "unitMirror": [
+      "TestPathOpenDistinguishesPermissionDeniedFromMissingOnReadOnlyFS",
+      "TestXpathOpen"
+    ]
+  },
+  {
+    "suite": "rust",
+    "name": "path_open_nonblock",
+    "wantPass": true,
+    "stdioOnly": false,
+    "smoke": false,
+    "unitMirror": []
+  },
+  {
+    "suite": "rust",
+    "name": "path_open_preopen",
+    "wantPass": true,
+    "stdioOnly": false,
+    "smoke": false,
+    "unitMirror": [
+      "TestWritablePreopenRightsMatchWasiTestsuite",
+      "TestPathOpenClampsRightsAbsentFromPreopenInheriting"
+    ]
+  },
+  {
+    "suite": "rust",
+    "name": "path_open_read_write",
+    "wantPass": true,
+    "stdioOnly": false,
+    "smoke": true,
+    "unitMirror": [
+      "TestXpathOpen",
+      "TestPathOpenOnWritablePreopenMapsHostOpenErrorsToDistinctErrnos"
+    ]
+  },
+  {
+    "suite": "rust",
+    "name": "path_rename",
+    "wantPass": true,
+    "stdioOnly": false,
+    "smoke": false,
+    "unitMirror": [
+      "TestPathRenameSyscall",
+      "TestXpathRename"
+    ]
+  },
+  {
+    "suite": "rust",
+    "name": "path_rename_dir_trailing_slashes",
+    "wantPass": true,
+    "stdioOnly": false,
+    "smoke": false,
+    "unitMirror": [
+      "TestPathRenameSyscall"
+    ]
+  },
+  {
+    "suite": "rust",
+    "name": "path_symlink_trailing_slashes",
+    "wantPass": true,
+    "stdioOnly": false,
+    "smoke": false,
+    "unitMirror": [
+      "TestPathSymlinkTrailingSlashSemantics"
+    ]
+  },
+  {
+    "suite": "rust",
+    "name": "poll_oneoff_stdio",
+    "wantPass": true,
+    "stdioOnly": true,
+    "smoke": false,
+    "unitMirror": [
+      "TestPollOneoffFdWriteStdio",
+      "TestPollOneoffClock",
+      "TestPollOneoffFdReadStdin"
+    ]
+  },
+  {
+    "suite": "rust",
+    "name": "readlink",
+    "wantPass": true,
+    "stdioOnly": false,
+    "smoke": false,
+    "unitMirror": [
+      "TestFilesystemMutationSyscalls"
+    ]
+  },
+  {
+    "suite": "rust",
+    "name": "remove_directory_trailing_slashes",
+    "wantPass": true,
+    "stdioOnly": false,
+    "smoke": false,
+    "unitMirror": [
+      "TestFilesystemMutationSyscalls"
+    ]
+  },
+  {
+    "suite": "rust",
+    "name": "remove_nonempty_directory",
+    "wantPass": true,
+    "stdioOnly": false,
+    "smoke": false,
+    "unitMirror": [
+      "TestFilesystemMutationSyscalls"
+    ]
+  },
+  {
+    "suite": "rust",
+    "name": "renumber",
+    "wantPass": true,
+    "stdioOnly": false,
+    "smoke": false,
+    "unitMirror": [
+      "TestFdRenumberClosesDestination",
+      "TestFdRenumberOverPreopen",
+      "TestFdRenumberToHighEmptySlot"
+    ]
+  },
+  {
+    "suite": "rust",
+    "name": "sched_yield",
+    "wantPass": true,
+    "stdioOnly": false,
+    "smoke": true,
+    "unitMirror": [
+      "TestModuleConfig_ClockAndRandom"
+    ]
+  },
+  {
+    "suite": "rust",
+    "name": "stdio",
+    "wantPass": true,
+    "stdioOnly": false,
+    "smoke": true,
+    "unitMirror": [
+      "TestFdRead",
+      "TestFdWrite",
+      "TestFoundationSyscalls"
+    ]
+  },
+  {
+    "suite": "rust",
+    "name": "symlink_create",
+    "wantPass": true,
+    "stdioOnly": false,
+    "smoke": false,
+    "unitMirror": [
+      "TestPathSymlinkCreateAndFollowOpen"
+    ]
+  },
+  {
+    "suite": "rust",
+    "name": "symlink_filestat",
+    "wantPass": true,
+    "stdioOnly": false,
+    "smoke": false,
+    "unitMirror": [
+      "TestPathFilestatSymlinkFollowSemantics"
+    ]
+  },
+  {
+    "suite": "rust",
+    "name": "symlink_loop",
+    "wantPass": true,
+    "stdioOnly": false,
+    "smoke": false,
+    "unitMirror": [
+      "TestPathOpenWithoutSymlinkFollowReturnsLoopForEscapeSymlinkWithoutTouchingOutsideFile"
+    ]
+  },
+  {
+    "suite": "rust",
+    "name": "truncation_rights",
+    "wantPass": true,
+    "stdioOnly": false,
+    "smoke": false,
+    "unitMirror": [
+      "TestPathOpenTruncationUsesPathFilestatSetSizeRight"
+    ]
+  },
+  {
+    "suite": "rust",
+    "name": "unlink_file_trailing_slashes",
+    "wantPass": true,
+    "stdioOnly": false,
+    "smoke": false,
+    "unitMirror": [
+      "TestPathUnlinkFileTrailingSlashSemantics"
+    ]
+  },
+  {
+    "suite": "c",
+    "name": "clock_getres-monotonic",
+    "wantPass": true,
+    "stdioOnly": true,
+    "smoke": false,
+    "unitMirror": [
+      "TestClockAndArgQueries"
+    ]
+  },
+  {
+    "suite": "c",
+    "name": "clock_getres-realtime",
+    "wantPass": true,
+    "stdioOnly": true,
+    "smoke": false,
+    "unitMirror": [
+      "TestClockAndArgQueries"
+    ]
+  },
+  {
+    "suite": "c",
+    "name": "clock_gettime-monotonic",
+    "wantPass": true,
+    "stdioOnly": true,
+    "smoke": false,
+    "unitMirror": [
+      "TestClockAndArgQueries"
+    ]
+  },
+  {
+    "suite": "c",
+    "name": "clock_gettime-realtime",
+    "wantPass": true,
+    "stdioOnly": true,
+    "smoke": false,
+    "unitMirror": [
+      "TestClockAndArgQueries"
+    ]
+  },
+  {
+    "suite": "c",
+    "name": "fdopendir-with-access",
+    "wantPass": true,
+    "stdioOnly": false,
+    "smoke": false,
+    "unitMirror": [
+      "TestFdReaddir"
+    ]
+  },
+  {
+    "suite": "c",
+    "name": "fopen-with-access",
+    "wantPass": true,
+    "stdioOnly": false,
+    "smoke": false,
+    "unitMirror": [
+      "TestXpathOpen",
+      "TestPathOpenOnWritablePreopenMapsHostOpenErrorsToDistinctErrnos"
+    ]
+  },
+  {
+    "suite": "c",
+    "name": "fopen-with-no-access",
+    "wantPass": true,
+    "stdioOnly": true,
+    "smoke": false,
+    "unitMirror": [
+      "TestPathOpenDistinguishesPermissionDeniedFromMissingOnReadOnlyFS"
+    ]
+  },
+  {
+    "suite": "c",
+    "name": "lseek",
+    "wantPass": true,
+    "stdioOnly": false,
+    "smoke": false,
+    "unitMirror": [
+      "TestFdSeek",
+      "TestPositionedIOSyscalls"
+    ]
+  },
+  {
+    "suite": "c",
+    "name": "pread-with-access",
+    "wantPass": true,
+    "stdioOnly": false,
+    "smoke": false,
+    "unitMirror": [
+      "TestPositionedIOSyscalls"
+    ]
+  },
+  {
+    "suite": "c",
+    "name": "pwrite-with-access",
+    "wantPass": true,
+    "stdioOnly": false,
+    "smoke": false,
+    "unitMirror": [
+      "TestPositionedIOSyscalls"
+    ]
+  },
+  {
+    "suite": "c",
+    "name": "pwrite-with-append",
+    "wantPass": true,
+    "stdioOnly": false,
+    "smoke": false,
+    "unitMirror": [
+      "TestPositionedIOSyscalls"
+    ]
+  },
+  {
+    "suite": "c",
+    "name": "sock_shutdown-invalid_fd",
+    "wantPass": true,
+    "stdioOnly": true,
+    "smoke": false,
+    "unitMirror": [
+      "TestXsockShutdownInvalidFd"
+    ]
+  },
+  {
+    "suite": "c",
+    "name": "sock_shutdown-not_sock",
+    "wantPass": true,
+    "stdioOnly": true,
+    "smoke": false,
+    "unitMirror": [
+      "TestXsockShutdownNotSocket"
+    ]
+  },
+  {
+    "suite": "c",
+    "name": "stat-dev-ino",
+    "wantPass": true,
+    "stdioOnly": false,
+    "smoke": false,
+    "unitMirror": [
+      "TestPathAndFdFilestatDevIno",
+      "TestFd_filestat_get_host_ino"
+    ]
+  },
+  {
+    "suite": "assemblyscript",
+    "name": "args_get-multiple-arguments",
+    "wantPass": true,
+    "stdioOnly": false,
+    "smoke": false,
+    "unitMirror": [
+      "TestClockAndArgQueries"
+    ]
+  },
+  {
+    "suite": "assemblyscript",
+    "name": "args_sizes_get-multiple-arguments",
+    "wantPass": true,
+    "stdioOnly": false,
+    "smoke": false,
+    "unitMirror": [
+      "TestClockAndArgQueries"
+    ]
+  },
+  {
+    "suite": "assemblyscript",
+    "name": "args_sizes_get-no-arguments",
+    "wantPass": true,
+    "stdioOnly": true,
+    "smoke": false,
+    "unitMirror": [
+      "TestClockAndArgQueries"
+    ]
+  },
+  {
+    "suite": "assemblyscript",
+    "name": "environ_get-multiple-variables",
+    "wantPass": true,
+    "stdioOnly": false,
+    "smoke": false,
+    "unitMirror": [
+      "TestFoundationSyscalls"
+    ]
+  },
+  {
+    "suite": "assemblyscript",
+    "name": "environ_sizes_get-multiple-variables",
+    "wantPass": true,
+    "stdioOnly": false,
+    "smoke": false,
+    "unitMirror": [
+      "TestFoundationSyscalls"
+    ]
+  },
+  {
+    "suite": "assemblyscript",
+    "name": "environ_sizes_get-no-variables",
+    "wantPass": true,
+    "stdioOnly": true,
+    "smoke": false,
+    "unitMirror": [
+      "TestFoundationSyscalls"
+    ]
+  },
+  {
+    "suite": "assemblyscript",
+    "name": "fd_write-to-invalid-fd",
+    "wantPass": true,
+    "stdioOnly": true,
+    "smoke": false,
+    "unitMirror": [
+      "TestFdWrite"
+    ]
+  },
+  {
+    "suite": "assemblyscript",
+    "name": "fd_write-to-stdout",
+    "wantPass": true,
+    "stdioOnly": true,
+    "smoke": false,
+    "unitMirror": [
+      "TestStdoutAndEnv"
+    ]
+  },
+  {
+    "suite": "assemblyscript",
+    "name": "proc_exit-failure",
+    "wantPass": false,
+    "stdioOnly": true,
+    "smoke": false,
+    "unitMirror": [
+      "TestProcExit"
+    ]
+  },
+  {
+    "suite": "assemblyscript",
+    "name": "proc_exit-success",
+    "wantPass": true,
+    "stdioOnly": true,
+    "smoke": false,
+    "unitMirror": [
+      "TestFoundationSyscalls",
+      "TestProcExit"
+    ]
+  },
+  {
+    "suite": "assemblyscript",
+    "name": "random_get-non-zero-length",
+    "wantPass": true,
+    "stdioOnly": true,
+    "smoke": false,
+    "unitMirror": [
+      "TestFoundationSyscalls"
+    ]
+  },
+  {
+    "suite": "assemblyscript",
+    "name": "random_get-zero-length",
+    "wantPass": true,
+    "stdioOnly": true,
+    "smoke": false,
+    "unitMirror": [
+      "TestFoundationSyscalls"
+    ]
+  }
+]

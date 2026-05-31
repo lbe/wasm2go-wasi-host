@@ -10,7 +10,7 @@ import (
 
 // ModuleConfig holds configuration for a WASI module execution.
 //
-// The builder methods (WithArgs, WithEnv, WithName, etc.) follow an immutable
+// The builder methods (WithArgs, WithEnv, WithWalltime, WithOsyield, etc.) follow an immutable
 // pattern: each returns a new deep copy with the change applied, leaving the
 // original unchanged.
 type ModuleConfig struct {
@@ -26,6 +26,7 @@ type ModuleConfig struct {
 	nanotime    wasi.Nanotime
 	nanotimeRes wasi.ClockResolution
 	nanosleep   wasi.Nanosleep
+	osyield     wasi.Osyield
 	fsConfig    *FSConfig
 }
 
@@ -116,6 +117,14 @@ func (c *ModuleConfig) ClockNanosleep() (wasi.Nanosleep, bool) {
 		return nil, false
 	}
 	return c.nanosleep, true
+}
+
+// ClockOsyield returns configured osyield when set.
+func (c *ModuleConfig) ClockOsyield() (wasi.Osyield, bool) {
+	if c.osyield == nil {
+		return nil, false
+	}
+	return c.osyield, true
 }
 
 // applyModuleConfig applies a ModuleConfig to the State. It sets the
@@ -290,6 +299,13 @@ func (c *ModuleConfig) WithNanosleep(ns wasi.Nanosleep) *ModuleConfig {
 // WithSysNanosleep returns a new ModuleConfig with nanosleep sourced from time.Sleep.
 func (c *ModuleConfig) WithSysNanosleep() *ModuleConfig {
 	return c.WithNanosleep(func(ns int64) { time.Sleep(time.Duration(ns)) })
+}
+
+// WithOsyield returns a copy with sched_yield hooked to fn (default runtime.Gosched).
+func (c *ModuleConfig) WithOsyield(fn wasi.Osyield) *ModuleConfig {
+	clone := c.clone()
+	clone.osyield = fn
+	return clone
 }
 
 // WithRandSource returns a new ModuleConfig with the given random source.

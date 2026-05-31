@@ -2,7 +2,6 @@ package wasihost
 
 import (
 	"encoding/binary"
-	"io/fs"
 	"os"
 	"runtime"
 	"strings"
@@ -67,16 +66,20 @@ func (s *State) Xpath_unlink_file(dirfd, pathPtr, pathLen int32) int32 {
 
 // Xpath_readlink implements path_readlink. Reads the target of a symbolic
 // link at the resolved path into guest memory at bufPtr, capped at
-// bufLen bytes, and writes the actual byte count to nreadPtr. Returns
-// EROFS if the mount is read-only (embedded fs.FS mounts have no symlinks).
+// bufLen bytes, and writes the actual byte count to nreadPtr. Uses VFS
+// Readlink via resolveReadlinkLookup (same resolution shape as path_filestat_get);
+// read-only AdaptFS ENOSYS is mapped to EROFS.
 func (s *State) Xpath_readlink(dirfd, pathPtr, pathLen, bufPtr, bufLen, nreadPtr int32) int32 {
-	m, errno := s.resolveWritableMutation(dirfd, pathPtr, pathLen)
+	if len(s.ctxPreopens()) == 0 {
+		return wasiEROFS
+	}
+	lookup, errno := s.resolveReadlinkLookup(dirfd, pathPtr, pathLen)
 	if errno != wasiESuccess {
 		return errno
 	}
-	target, werrno := m.preopen.fsys.Readlink(m.vpath)
+	target, werrno := lookup.preopen.fsys.Readlink(lookup.vpath)
 	if werrno != 0 {
-		return errnoFromWasi(werrno)
+		return errnoReadlinkFromWasi(werrno, preopenReadonly(lookup.preopen))
 	}
 	mem := s.mem()
 	n := copy(mem[bufPtr:bufPtr+bufLen], target)
@@ -280,14 +283,6 @@ func (s *State) dirNotEmptyErr() int32 {
 func (s *State) hasDirectoryContents(p *PreopenEntry, rel, vpath, guestPath string) bool {
 	hostPath := vfsHostPath(p, guestPath, vpath)
 	entries, err := os.ReadDir(hostPath)
-	if err == nil {
-		return len(entries) > 0
-	}
-	overlay := s.overlayRootForPreopen(p)
-	if overlay == nil {
-		return false
-	}
-	entries, err = fs.ReadDir(overlay, rel)
 	if err != nil {
 		return false
 	}

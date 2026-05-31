@@ -14,7 +14,7 @@ A specialized **WASI snapshot-preview1** host for Go, designed to run code trans
 
 The primary goal is a WASI implementation for wasm2go-generated packages that complies with the [WASI preview 1](https://github.com/WebAssembly/WASI/blob/wasi-0.1/preview1/docs.md) specification. The host implements all 40 WASI Preview1 functions plus the `env.call_host_function` stub required by some modules.
 
-Filesystem access is capability-oriented: the guest sees only **preopened directories**—**read-only fs.FS preopens** (embedded assets) or writable host directory mounts.
+Filesystem access is capability-oriented: the guest sees only **preopened directories**—**read-only fs.FS preopens** (embedded assets) or writable host directory mounts. Each preopen uses a single backend; combine embedded and host data with **separate preopens**, not a hybrid overlay on one mount.
 
 This repository also ships [`wasm2go-run`](./cmd/wasm2go-run/README.md), the runner used by the [WebAssembly/wasi-testsuite](https://github.com/WebAssembly/wasi-testsuite) wasm2go adapter (via the `wasi-testsuite` git submodule). All 72 `wasm32-wasip1` tests in that inventory pass with this host.
 
@@ -24,7 +24,7 @@ For production-grade performance, advanced sandboxing, or broader runtime featur
 
 - **Full WASI Preview1**: All 40 snapshot-preview1 imports, validated against wasi-testsuite.
 - **wasm2go-native**: Direct guest linear memory via a callback—no external runtime API between guest and host.
-- **Capability-oriented VFS**: Multiple preopens; read-only `fs.FS` and writable host directories.
+- **Capability-oriented VFS**: Multiple preopens; read-only `fs.FS` and writable host directories (`internal/wasi/sysfs`), one backend per mount.
 - **Stdlib-first**: Go standard library plus `golang.org/x/sys` for a few OS-specific helpers (Linux and Darwin).
 - **CLI runner**: [`wasm2go-run`](./cmd/wasm2go-run/README.md) transpiles, compiles, and runs `.wasm` in one step (tier-1 transpile cache included).
 
@@ -82,9 +82,15 @@ See [`cmd/wasm2go-run/README.md`](./cmd/wasm2go-run/README.md).
 
 Configure mounts on [`NewModuleConfig`](https://pkg.go.dev/github.com/lbe/wasm2go-wasi-host#NewModuleConfig):
 
-- **`WithReadOnlyFS(guestPath, root)`**: Read-only `fs.FS` preopen; WASI rights exclude writes and path mutations.
-- **`WithHostDirectoryPreopen(guestPath, hostPath)`**: Writable host directory preopen (`os.DirFS` for reads, host paths for mutations).
+- **`WithReadOnlyFS(guestPath, root)`**: Read-only `fs.FS` preopen (`internal/wasi/sysfs.AdaptFS`); WASI rights exclude writes and path mutations.
+- **`WithHostDirectoryPreopen(guestPath, hostPath)`**: Writable host directory preopen (`sysfs.DirFS`); reads and mutations go through the WASI VFS with path confinement on the host root.
 - **`WithFS(fsConfig)`**: Advanced layout via [`FSConfig`](https://pkg.go.dev/github.com/lbe/wasm2go-wasi-host#FSConfig) (`WithDirMount`, `WithReadOnlyDirMount`, `WithFSMount`).
+
+Use **separate preopens** when the guest needs both writable host storage and embedded read-only files (for example `/tmp` on disk and `/assets` from `embed.FS`). Writable mounts do not fall back to embedded `fs.FS` content.
+
+Optional **`WithOsyield`** configures the yield function used by `sched_yield` (default `runtime.Gosched`).
+
+Path matching, lexical bounds, and symlink rules: [docs/path-confinement.md](./docs/path-confinement.md).
 
 ## Concurrency and safety
 
@@ -109,36 +115,58 @@ Configure mounts on [`NewModuleConfig`](https://pkg.go.dev/github.com/lbe/wasm2g
     git submodule update --init --recursive
     ```
 
-2. **Makefile** targets: `build`, `test`, `test-race`, `lint`, `format`, `cover`.
+### Testing
 
-3. **Quality gate** (clean git tree required):
+See **[TESTING.md](./TESTING.md)** for tier layout, unit-vs-e2e policy, and the `e2e_cases.json` manifest.
 
-    ```bash
-    go test -v -run TestQualityGate
-    ```
+Tests split into two tiers via the **`e2e` build tag**:
 
-    For faster local iteration, use `go test -short ./...` to skip the correction-2 safety-net test that runs the full wasi-testsuite (~50s).
+| Command | What runs | Typical time |
+|---------|-----------|--------------|
+| `go test ./...` or `make test` | Unit / in-process tests (`*_test.go` without tag) | ~5s |
+| `go test -tags=e2e ./...` or `make test-e2e` | Everything above **plus** all 72 `e2e_*_test.go` wasi-testsuite cases (parallel subprocesses) | ~15–25s |
 
-4. **Full Preview1 compliance** via the submodule inventory:
+Integration tests load `testdata/e2e_cases.json` via `e2e_inventory_test.go` (tagged `//go:build e2e`). CI runs `go test -tags=e2e ./...`. Editor support: `.vscode/settings.json` sets gopls `buildFlags: ["-tags=e2e"]`; `.golangci.yml` includes the same tag so linters analyze e2e files.
 
-    ```bash
-    go build -o ./bin/wasm2go-run ./cmd/wasm2go-run
-    ./scripts/e2e-wasip1.sh
-    ```
+```bash
+make test       # daily dev loop
+make test-e2e   # before push / matches CI
+make test-race  # unit tests with -race
+make test-race-e2e  # full suite with -race
+```
 
-    The wrapper defaults `WASM2GO_RUN` to `./bin/wasm2go-run` and `WASM2GO_WASIHOST_PATH` to the repo root. Override either variable to use different paths.
+Other **Makefile** targets: `build`, `lint`, `format`, `cover` (unit coverage), `cover-e2e` (full coverage).
 
-    Direct invocation:
+### Quality gate
 
-    ```bash
-    go build -o ./bin/wasm2go-run ./cmd/wasm2go-run
-    cd wasi-testsuite
-    WASM2GO_RUN="$PWD/../bin/wasm2go-run" WASM2GO_WASIHOST_PATH="$PWD/.." python3 ./run-tests -r adapters/wasm2go.py
-    ```
+Requires a **clean git tree** (skipped automatically when the tree is dirty, so `go test -tags=e2e ./...` works mid-branch):
 
-    If `WASM2GO_RUN` is unset, the adapter uses `wasm2go-run` from `PATH`.
+```bash
+go test -tags=e2e -v -run TestQualityGate
+```
 
-5. Format before commit: `gofmt -w .` or `make format`.
+Runs `gofmt`, a `wasm2go-run` build, and artifact cleanup. Lint and wasi-testsuite adapter pytest run in CI (`make lint`, workflow). Equivalent shell workflow: `./scripts/phase_guard.sh`.
+
+### Full Preview1 compliance
+
+```bash
+go build -o ./bin/wasm2go-run ./cmd/wasm2go-run
+./scripts/e2e-wasip1.sh
+```
+
+The wrapper defaults `WASM2GO_RUN` to `./bin/wasm2go-run` and `WASM2GO_WASIHOST_PATH` to the repo root. Override either variable to use different paths.
+
+Direct invocation:
+
+```bash
+go build -o ./bin/wasm2go-run ./cmd/wasm2go-run
+cd wasi-testsuite
+WASM2GO_RUN="$PWD/../bin/wasm2go-run" WASM2GO_WASIHOST_PATH="$PWD/.." python3 ./run-tests -r adapters/wasm2go.py
+```
+
+If `WASM2GO_RUN` is unset, the adapter uses `wasm2go-run` from `PATH`.
+
+Format before commit: `gofmt -w .` or `make format`.
 
 ## License
 

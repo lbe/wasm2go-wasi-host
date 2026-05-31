@@ -4,6 +4,7 @@ import (
 	"bytes"
 	"encoding/json"
 	"os"
+	"os/exec"
 	"path/filepath"
 	"strings"
 	"sync"
@@ -622,5 +623,341 @@ func TestCacheBuildStoreAndRetrieve(t *testing.T) {
 
 	if _, ok := cacheGetBuild("nonexistent"); ok {
 		t.Error("cacheGetBuild returned hit for nonexistent key")
+	}
+}
+
+func TestCacheGetBuildMissOnStaleMetadata(t *testing.T) {
+	cacheDir := t.TempDir()
+	t.Setenv("WASM2GO_RUN_CACHE_DIR", cacheDir)
+
+	tmpDir := t.TempDir()
+	wasmPath := filepath.Join(tmpDir, "test.wasm")
+	wasmBytes := []byte{0x00, 0x61, 0x73, 0x6d, 0x01, 0x00, 0x00, 0x00}
+	if err := os.WriteFile(wasmPath, wasmBytes, 0644); err != nil {
+		t.Fatal(err)
+	}
+
+	cfg := Config{WasmPath: wasmPath}
+
+	bkey := buildCacheKey(wasmPath, cfg)
+	if bkey == "" {
+		t.Fatal("buildCacheKey returned empty string")
+	}
+
+	// Capture current helper values so we can restore them after the test.
+	origGoVersion := goVersion
+	origGoos := goos
+	origGoarch := goarch
+	origWasm2goRunVersion := wasm2goRunVersion
+	origBuildKeyVersion := buildKeyVersion
+	origWasiHostFingerprint := wasiHostFingerprint
+	defer func() {
+		goVersion = origGoVersion
+		goos = origGoos
+		goarch = origGoarch
+		wasm2goRunVersion = origWasm2goRunVersion
+		buildKeyVersion = origBuildKeyVersion
+		wasiHostFingerprint = origWasiHostFingerprint
+	}()
+
+	// Prepopulate the tier-2 build cache with a runner and matching metadata.
+	fakeRunner := []byte{0x7f, 0x45, 0x4c, 0x46, 0x00, 0x00, 0x00, 0x00}
+	meta := currentBuildCacheMeta(wasmPath)
+	if err := cachePutBuild(bkey, fakeRunner, meta); err != nil {
+		t.Fatalf("cachePutBuild failed: %v", err)
+	}
+
+	// Verify the cache entry is readable with matching metadata.
+	gotBytes, hit := cacheGetBuild(bkey)
+	if !hit {
+		t.Fatal("expected cacheGetBuild hit with matching metadata before tampering")
+	}
+	if len(gotBytes) == 0 {
+		t.Fatal("cacheGetBuild returned empty runner with matching metadata")
+	}
+
+	// --- Helper metadata fields ---
+
+	t.Run("stale_buildKeyVersion", func(t *testing.T) {
+		// Restore helpers to original values first.
+		buildKeyVersion = origBuildKeyVersion
+
+		staleMeta := currentBuildCacheMeta(wasmPath)
+		staleMeta.BuildKeyVersion = origBuildKeyVersion + 999
+		buildDir := filepath.Join(cacheDir, cacheSubdirBuild, bkey)
+		if err := writeCacheMeta(buildDir, staleMeta); err != nil {
+			t.Fatalf("writeCacheMeta failed: %v", err)
+		}
+
+		_, hit := cacheGetBuild(bkey)
+		if hit {
+			t.Error("cacheGetBuild returned hit for stale buildKeyVersion; expected miss")
+		}
+	})
+
+	t.Run("stale_goVersion", func(t *testing.T) {
+		staleMeta := currentBuildCacheMeta(wasmPath)
+		staleMeta.GoVersion = "go0.0.0-stale"
+		buildDir := filepath.Join(cacheDir, cacheSubdirBuild, bkey)
+		if err := writeCacheMeta(buildDir, staleMeta); err != nil {
+			t.Fatalf("writeCacheMeta failed: %v", err)
+		}
+
+		_, hit := cacheGetBuild(bkey)
+		if hit {
+			t.Error("cacheGetBuild returned hit for stale goVersion; expected miss")
+		}
+	})
+
+	t.Run("stale_goos", func(t *testing.T) {
+		staleMeta := currentBuildCacheMeta(wasmPath)
+		staleMeta.Goos = "fakeos"
+		buildDir := filepath.Join(cacheDir, cacheSubdirBuild, bkey)
+		if err := writeCacheMeta(buildDir, staleMeta); err != nil {
+			t.Fatalf("writeCacheMeta failed: %v", err)
+		}
+
+		_, hit := cacheGetBuild(bkey)
+		if hit {
+			t.Error("cacheGetBuild returned hit for stale goos; expected miss")
+		}
+	})
+
+	t.Run("stale_goarch", func(t *testing.T) {
+		staleMeta := currentBuildCacheMeta(wasmPath)
+		staleMeta.Goarch = "fakearch"
+		buildDir := filepath.Join(cacheDir, cacheSubdirBuild, bkey)
+		if err := writeCacheMeta(buildDir, staleMeta); err != nil {
+			t.Fatalf("writeCacheMeta failed: %v", err)
+		}
+
+		_, hit := cacheGetBuild(bkey)
+		if hit {
+			t.Error("cacheGetBuild returned hit for stale goarch; expected miss")
+		}
+	})
+
+	t.Run("stale_wasm2goRunVersion", func(t *testing.T) {
+		staleMeta := currentBuildCacheMeta(wasmPath)
+		staleMeta.Wasm2goRunVersion = "v0.0.0-stale"
+		buildDir := filepath.Join(cacheDir, cacheSubdirBuild, bkey)
+		if err := writeCacheMeta(buildDir, staleMeta); err != nil {
+			t.Fatalf("writeCacheMeta failed: %v", err)
+		}
+
+		_, hit := cacheGetBuild(bkey)
+		if hit {
+			t.Error("cacheGetBuild returned hit for stale wasm2goRunVersion; expected miss")
+		}
+	})
+
+	t.Run("stale_wasiHostFingerprint", func(t *testing.T) {
+		staleMeta := currentBuildCacheMeta(wasmPath)
+		staleMeta.WasiHostFingerprint = "stale-fingerprint-xyz"
+		buildDir := filepath.Join(cacheDir, cacheSubdirBuild, bkey)
+		if err := writeCacheMeta(buildDir, staleMeta); err != nil {
+			t.Fatalf("writeCacheMeta failed: %v", err)
+		}
+
+		_, hit := cacheGetBuild(bkey)
+		if hit {
+			t.Error("cacheGetBuild returned hit for stale wasiHostFingerprint; expected miss")
+		}
+	})
+
+	t.Run("stale_transpileKey", func(t *testing.T) {
+		staleMeta := currentBuildCacheMeta(wasmPath)
+		staleMeta.TranspileKey = "stale-transpile-key"
+		buildDir := filepath.Join(cacheDir, cacheSubdirBuild, bkey)
+		if err := writeCacheMeta(buildDir, staleMeta); err != nil {
+			t.Fatalf("writeCacheMeta failed: %v", err)
+		}
+
+		_, hit := cacheGetBuild(bkey)
+		if hit {
+			t.Error("cacheGetBuild returned hit for stale transpileKey; expected miss")
+		}
+	})
+
+	// --- Helper stub approach: change state between put and get ---
+
+	t.Run("changed_wasiHostFingerprint_between_put_and_get", func(t *testing.T) {
+		// Rewrite meta with current values, then change the helper.
+		freshMeta := currentBuildCacheMeta(wasmPath)
+		buildDir := filepath.Join(cacheDir, cacheSubdirBuild, bkey)
+		if err := writeCacheMeta(buildDir, freshMeta); err != nil {
+			t.Fatalf("writeCacheMeta failed: %v", err)
+		}
+
+		// Simulate the host source being updated after cache population.
+		wasiHostFingerprint = func() string { return "changed-fingerprint-after-cache" }
+
+		_, hit := cacheGetBuild(bkey)
+		if hit {
+			t.Error("cacheGetBuild returned hit after wasiHostFingerprint helper changed; expected miss")
+		}
+	})
+
+	t.Run("changed_goVersion_between_put_and_get", func(t *testing.T) {
+		freshMeta := currentBuildCacheMeta(wasmPath)
+		buildDir := filepath.Join(cacheDir, cacheSubdirBuild, bkey)
+		if err := writeCacheMeta(buildDir, freshMeta); err != nil {
+			t.Fatalf("writeCacheMeta failed: %v", err)
+		}
+
+		goVersion = "go99.99"
+
+		_, hit := cacheGetBuild(bkey)
+		if hit {
+			t.Error("cacheGetBuild returned hit after goVersion helper changed; expected miss")
+		}
+	})
+}
+
+func TestConcurrentCachePutBuildSingleWriterSafeReaders(t *testing.T) {
+	cacheDir := t.TempDir()
+	t.Setenv("WASM2GO_RUN_CACHE_DIR", cacheDir)
+
+	tmpDir := t.TempDir()
+	wasmPath := filepath.Join(tmpDir, "test.wasm")
+	wasmBytes := []byte{0x00, 0x61, 0x73, 0x6d, 0x01, 0x00, 0x00, 0x00}
+	if err := os.WriteFile(wasmPath, wasmBytes, 0644); err != nil {
+		t.Fatal(err)
+	}
+
+	cfg := Config{WasmPath: wasmPath}
+	key := buildCacheKey(wasmPath, cfg)
+	if key == "" {
+		t.Fatal("buildCacheKey returned empty string")
+	}
+
+	meta := currentBuildCacheMeta(wasmPath)
+
+	// Use a barrier to ensure both goroutines enter cachePutBuild simultaneously.
+	start := make(chan struct{})
+	const workers = 2
+	var wg sync.WaitGroup
+	wg.Add(workers)
+
+	errs := make([]error, workers)
+	runnerBytes := bytes.Repeat([]byte{0xCC}, 4096)
+
+	for i := range workers {
+		go func(i int) {
+			defer wg.Done()
+			<-start // barrier: both workers start together
+			errs[i] = cachePutBuild(key, runnerBytes, meta)
+		}(i)
+	}
+	close(start) // release both workers simultaneously
+	wg.Wait()
+
+	for i, err := range errs {
+		if err != nil {
+			t.Errorf("worker %d: cachePutBuild failed: %v", i, err)
+		}
+	}
+
+	// The cache entry must be readable and consistent.
+	gotFromCache, hit := cacheGetBuild(key)
+	if !hit {
+		t.Fatal("cacheGetBuild returned miss after concurrent writes")
+	}
+	if !bytes.Equal(gotFromCache, runnerBytes) {
+		t.Errorf("cacheGetBuild returned unexpected bytes")
+	}
+
+	// Verify the runner file is clean (not corrupted by concurrent writes).
+	runnerPath := filepath.Join(cacheDir, cacheSubdirBuild, key, compileBinaryName)
+	gotBytes, err := os.ReadFile(runnerPath)
+	if err != nil {
+		t.Fatalf("failed to read cached runner: %v", err)
+	}
+	if !bytes.Equal(gotBytes, runnerBytes) {
+		t.Errorf("runner file content mismatch")
+	}
+}
+
+func TestFailedBuildDoesNotPolluteTier2Cache(t *testing.T) {
+	requireWasm2go(t)
+	if _, err := exec.LookPath("go"); err != nil {
+		t.Skip("go not on PATH")
+	}
+
+	cacheDir := t.TempDir()
+	t.Setenv("WASM2GO_RUN_CACHE_DIR", cacheDir)
+
+	wasmPath := testdataWasm("proc_exit-success.wasm")
+	cfg := Config{WasmPath: wasmPath}
+
+	bkey := buildCacheKey(wasmPath, cfg)
+	if bkey == "" {
+		t.Fatal("buildCacheKey returned empty string")
+	}
+
+	// Install a fake go that fails only on "build" subcommand but delegates
+	// "mod tidy" to the real go. This ensures buildCompileBinary gets past
+	// tidy but fails at the actual build step.
+	fakeGoDir := t.TempDir()
+	realGo, err := exec.LookPath("go")
+	if err != nil {
+		t.Skip("go not on PATH")
+	}
+	fakeGoScript := "#!/bin/sh\n" +
+		"if [ \"$1\" = \"build\" ]; then\n" +
+		"  echo 'fake go build failure' >&2\n" +
+		"  exit 1\n" +
+		"fi\n" +
+		"exec " + realGo + " \"$@\"\n"
+	if writeErr := os.WriteFile(filepath.Join(fakeGoDir, "go"), []byte(fakeGoScript), 0o755); writeErr != nil {
+		t.Fatal(writeErr)
+	}
+	t.Setenv("PATH", fakeGoDir+string(os.PathListSeparator)+os.Getenv("PATH"))
+
+	// Compile should fail because go build exits 1.
+	buildDir, binaryPath, err := compile(wasmPath, cfg)
+	if err == nil {
+		if buildDir != "" {
+			defer os.RemoveAll(buildDir)
+		}
+		t.Fatalf("expected compile error when go build fails, got binaryPath=%q", binaryPath)
+	}
+	if buildDir != "" {
+		t.Errorf("expected empty buildDir on failure, got %q", buildDir)
+	}
+	if binaryPath != "" {
+		t.Errorf("expected empty binaryPath on failure, got %q", binaryPath)
+	}
+
+	// Verify no tier-2 cache entry was created by the failed build.
+	if _, hit := cacheGetBuild(bkey); hit {
+		t.Error("cacheGetBuild returned hit after failed build; no tier-2 cache entry should exist")
+	}
+
+	// Verify no build/<key>/runner or meta.json exist.
+	buildEntryDir := filepath.Join(cacheDir, cacheSubdirBuild, bkey)
+	for _, name := range []string{compileBinaryName, cacheFileMeta} {
+		path := filepath.Join(buildEntryDir, name)
+		if _, statErr := os.Stat(path); statErr == nil {
+			t.Errorf("%s should not exist after failed build", name)
+		} else if !os.IsNotExist(statErr) {
+			t.Fatalf("stat %s: %v", name, statErr)
+		}
+	}
+
+	// Verify no .tmp files or entry directories left under build/.
+	buildCacheDir := filepath.Join(cacheDir, cacheSubdirBuild)
+	entries, readErr := os.ReadDir(buildCacheDir)
+	if readErr != nil && !os.IsNotExist(readErr) {
+		t.Fatalf("failed to read build cache dir: %v", readErr)
+	}
+	for _, entry := range entries {
+		if filepath.Ext(entry.Name()) == ".tmp" {
+			t.Errorf(".tmp file left behind in build cache after failed build: %s", entry.Name())
+		}
+		// No entry directory should exist at all for this key.
+		if entry.Name() == bkey {
+			t.Errorf("build cache entry directory %q should not exist after failed build", bkey)
+		}
 	}
 }

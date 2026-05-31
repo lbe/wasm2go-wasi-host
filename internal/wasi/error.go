@@ -22,6 +22,20 @@ func UnwrapOSError(err error) Errno {
 	return mapOSError(err)
 }
 
+var mapSyscallErrno = []struct {
+	err   error
+	errno Errno
+}{
+	{syscall.EAGAIN, EAGAIN},
+	{syscall.EACCES, EACCES},
+	{syscall.EPERM, EPERM},
+	{syscall.ENOTDIR, ENOTDIR},
+	{syscall.EISDIR, EISDIR},
+	{syscall.EROFS, EROFS},
+	{syscall.EINVAL, EINVAL},
+	{syscall.ELOOP, ELOOP},
+}
+
 func mapOSError(err error) Errno {
 	if errors.Is(err, os.ErrNotExist) {
 		return ENOENT
@@ -32,23 +46,10 @@ func mapOSError(err error) Errno {
 	if errors.Is(err, os.ErrPermission) {
 		return EACCES
 	}
-	if errors.Is(err, syscall.EACCES) {
-		return EACCES
-	}
-	if errors.Is(err, syscall.EPERM) {
-		return EPERM
-	}
-	if errors.Is(err, syscall.ENOTDIR) {
-		return ENOTDIR
-	}
-	if errors.Is(err, syscall.EISDIR) {
-		return EISDIR
-	}
-	if errors.Is(err, syscall.EROFS) {
-		return EROFS
-	}
-	if errors.Is(err, syscall.EINVAL) {
-		return EINVAL
+	for _, m := range mapSyscallErrno {
+		if errors.Is(err, m.err) {
+			return m.errno
+		}
 	}
 	return EIO
 }

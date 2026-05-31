@@ -91,3 +91,6 @@ func (noopStdioFile) Stat() (Stat_t, Errno) {
 func (noopStdioFile) IsDir() (bool, Errno) {
 	return false, 0
 }
+
+// Truncate is a no-op for stdio streams; returns success silently.
+func (noopStdioFile) Truncate(int64) Errno { return 0 }

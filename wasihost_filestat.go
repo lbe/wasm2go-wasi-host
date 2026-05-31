@@ -4,7 +4,6 @@ import (
 	"encoding/binary"
 	"io/fs"
 	"os"
-	"syscall"
 	"time"
 
 	"github.com/lbe/wasm2go-wasi-host/internal/wasi"
@@ -21,15 +20,6 @@ func writeFdstat(mem []byte, statPtr int32, fdType byte, fdFlags uint16, rightsB
 	binary.LittleEndian.PutUint64(buf[8:], rightsBase)
 	binary.LittleEndian.PutUint64(buf[16:], rightsInheriting)
 	copy(mem[statPtr:], buf[:])
-}
-
-// statDevIno extracts dev and ino from an fs.FileInfo's underlying syscall.Stat_t.
-// Returns zero values if the underlying type is not *syscall.Stat_t.
-func statDevIno(fi fs.FileInfo) (dev uint64, ino uint64) {
-	if st, ok := fi.Sys().(*syscall.Stat_t); ok {
-		return uint64(st.Dev), st.Ino
-	}
-	return 0, 0
 }
 
 // writeFilestat writes a 64-byte WASI filestat struct at bufPtr in mem.
@@ -84,12 +74,9 @@ func (s *State) Xfd_filestat_get(fd, bufPtr int32) int32 {
 }
 
 // Xpath_filestat_get implements path_filestat_get. Resolves the path and
-// writes a 64-byte filestat struct via preopen.fsys.Stat or Lstat. When
-// SYMLINK_FOLLOW is absent the final component uses Lstat-like semantics;
-// when set, symlinks in the final component are followed. Writable mounts
-// fall back to fs.Stat on the overlay for embedded-only files. Read-only
-// mounts use fs.Stat on the mount root only. Writable host directory preopens
-// return ENOTCAPABLE for mount-relative paths that lexically escape the preopen.
+// writes a 64-byte filestat struct via vfsStat (Lstat when SYMLINK_FOLLOW is
+// absent, Stat when set). Writable preopens return ENOTCAPABLE for mount-relative
+// paths that lexically escape the preopen; read-only preopens without fsys return ENOENT.
 func (s *State) Xpath_filestat_get(dirfd, flags, pathPtr, pathLen, bufPtr int32) int32 {
 	guestPath := string(s.readBytes(pathPtr, pathLen))
 	preopen, rel := s.resolveDirfdPath(dirfd, pathPtr, pathLen)
@@ -109,24 +96,16 @@ func (s *State) Xpath_filestat_get(dirfd, flags, pathPtr, pathLen, bufPtr int32)
 				return errno
 			}
 		}
-		vpath := vfsPathForMutation(preopen, rel, guestPath)
-		st, errno := s.statFSWithOverlay(preopen, vpath, rel, follow)
-		if errno != wasiESuccess {
-			return errno
-		}
-		writeFilestatFromStat(s.mem(), bufPtr, st)
-		return wasiESuccess
+	} else if preopen.fsys == nil {
+		return wasiENoEnt
 	}
 
-	overlay := s.overlayRootForPreopen(preopen)
-	if overlay == nil {
-		return wasiENoEnt
+	vpath := vfsPathForMutation(preopen, rel, guestPath)
+	st, errno := vfsStat(preopen, vpath, follow)
+	if errno != wasiESuccess {
+		return errno
 	}
-	fi, err := fs.Stat(overlay, rel)
-	if err != nil {
-		return wasiENoEnt
-	}
-	writeFilestatFromStat(s.mem(), bufPtr, wasi.NewStat_t(fi))
+	writeFilestatFromStat(s.mem(), bufPtr, st)
 	return wasiESuccess
 }
 

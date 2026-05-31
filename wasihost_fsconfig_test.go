@@ -1,17 +1,8 @@
 package wasihost
 
-import (
-	"reflect"
-	"testing"
-)
+import "testing"
 
 func TestFSConfig(t *testing.T) {
-	// Check if NewFSConfig function exists
-	newFSConfigFunc := reflect.ValueOf(NewFSConfig)
-	if !newFSConfigFunc.IsValid() {
-		t.Skip("NewFSConfig not yet implemented - expected failure in red phase")
-	}
-
 	cfg := NewFSConfig()
 	if cfg == nil {
 		t.Fatal("NewFSConfig() returned nil, expected non-nil *FSConfig")

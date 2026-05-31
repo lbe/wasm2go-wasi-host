@@ -42,9 +42,6 @@ type FileEntry struct {
 	// FdFlags holds WASI fd_flags set at path_open (append, sync, etc.).
 	FdFlags uint16
 
-	// Overlay is an optional embedded fs.FS fallback for writable host preopens.
-	Overlay fs.FS
-
 	direntCache *DirentCache
 }
 
@@ -70,7 +67,7 @@ func (f *FileEntry) DirentCache() (*DirentCache, Errno) {
 	dotEntries := [2]Dirent{}
 	dotEntries[0] = Dirent{Name: ".", Ino: dotIno, Type: fs.ModeDir}
 	dotEntries[1] = Dirent{Name: "..", Ino: 0, Type: fs.ModeDir}
-	// Normalize readPath: preopens and "" or "/" read from "." via fs.ReadDir fallback.
+	// Normalize readPath: preopens and "" or "/" readdir from "." at the mount root.
 	readPath := f.Name
 	if f.IsPreopen || readPath == "" || readPath == "/" {
 		readPath = "."

@@ -58,8 +58,22 @@ wasm2go-run -dir ./data:/data -env KEY=VALUE my-app.wasm -- --app-arg1
 
 ```bash
 git submodule update --init --recursive
-go test ./cmd/wasm2go-run/...
 ```
+
+### Running tests
+
+```bash
+# wasm2go-run package only (~5s)
+go test ./cmd/wasm2go-run/...
+
+# Root wasihost unit tests (~5s total repo with ./...)
+go test ./...
+
+# Full wasihost + wasi-testsuite integration (from repo root)
+go test -tags=e2e ./...
+```
+
+`runner_test.go` compiles selected wasi-testsuite WASM fixtures in-process. Submodule inventory e2e tests live in the root package as `e2e_*_test.go` and require `-tags=e2e`.
 
 ### Full Preview1 run
 

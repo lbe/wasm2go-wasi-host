@@ -1,7 +1,5 @@
 package wasihost
 
-import "runtime"
-
 // WASI snapshot-preview1 errno values. Names and numeric values follow
 // the specification exactly.
 const (
@@ -118,9 +116,6 @@ var (
 	oflagDir   uint32 = 1 << 1 // __WASI_OFLAGS_DIRECTORY: path must be a directory (ENOTDIR if it is a non-directory file)
 	oflagExcl  uint32 = 1 << 2 // O_EXCL: fail if file already exists
 	oflagTrunc uint32 = 1 << 3 // O_TRUNC: truncate file to zero length on open
-
-	// schedYield is a seam for testing sched_yield.
-	schedYield func() = runtime.Gosched
 )
 
 // WASI snapshot-preview1 filestat layout (64 bytes).

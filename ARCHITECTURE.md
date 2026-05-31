@@ -4,7 +4,11 @@
 
 ## Compliance
 
-The authoritative check is the `wasi-testsuite` submodule running its full `wasm32-wasip1` inventory through `adapters/wasm2go.py` and this repository's `wasm2go-run`. All 72 Preview1 tests pass. Unit and integration tests in this repo cover path confinement, rights, symlinks, poll, and filesystem mutations; see `*_test.go` and `scripts/e2e-wasip1.sh`.
+The authoritative check is the `wasi-testsuite` submodule running its full `wasm32-wasip1` inventory through `adapters/wasm2go.py` and this repository's `wasm2go-run`. All 72 Preview1 tests pass.
+
+**Unit tests** (`go test ./...`) cover path confinement, rights, symlinks, poll, and filesystem mutations in-process — see `syscall_*_test.go`, `wasihost_*_test.go`, and `internal/wasi/*_test.go`. Policy: [TESTING.md](./TESTING.md).
+
+**Integration tests** (`go test -tags=e2e ./...`) read `testdata/e2e_cases.json` via `e2e_inventory_test.go`: all 72 wasi-testsuite `wasm32-wasip1` binaries via `wasm2go-run` (parallel), plus `TestQualityGate`. Template/config guards run in unit tests (`guardrails_test.go`). The standalone script `scripts/e2e-wasip1.sh` runs the same inventory through the Python runner when needed.
 
 ## 1. `wasihost` package
 
@@ -16,13 +20,13 @@ The authoritative check is the `wasi-testsuite` submodule running its full `wasm
 
 ### Core structures
 
-- **`State`**: FD table, legacy mounts/args/env/stdio fields, optional internal tracing and goroutine-owner assertion, and a built **`wasi.Context`** (`ctx`).
-- **`ModuleConfig` / `FSConfig`**: Immutable configuration builders in `wasihost_config.go` and `wasihost_fsconfig.go`. [`New`](wasihost.go) accepts `*ModuleConfig` only (no functional options).
-- **`internal/wasi.Context`**: Runtime view built from `ModuleConfig` — args, environ, stdio, FS context, clocks (defaults today), random source. Syscall bodies still read legacy `State` fields; method migration will route through `ctx`.
-- **`mountEntry`**: Guest path prefix → `fs.FS` (read path) and optional `hostRoot` (writable mutations).
-- **`fdEntry`**: Open file or directory, rights, offset, preopen flag, optional `ReadDirFile` / readdir cache.
+- **`State`**: Thin syscall facade — guest memory callback (`mem`), runtime [`wasi.Context`](internal/wasi/context.go) (`ctx`), optional trace logging, and optional single-goroutine owner assertion (`assertOwner` / `ownerGID`; not exposed on `ModuleConfig` today).
+- **`ModuleConfig` / `FSConfig`**: Immutable configuration builders in `wasihost_config.go` and `wasihost_fsconfig.go`. [`New`](wasihost.go) accepts `*ModuleConfig` only (no functional options). Clock hooks (`WithWalltime`, `WithNanotime`, `WithNanosleep`, `WithOsyield`) and `WithRandSource` feed [`wasi.NewContext`](internal/wasi/context.go).
+- **`internal/wasi.Context`**: Built once by `wasi.NewContext` from `ModuleConfig` — args, environ, stdio, clocks, random source, preopen list, and **`FSContext`** (fd table).
+- **`internal/wasi.FSContext`**: Sparse fd table (`LookupFile`, `OpenFile`, `CloseFile`, `Renumber`, …). Stdio fds 0–2 and preopen dirs 3+ are ordinary `FileEntry` values.
+- **`internal/wasi.FileEntry`**: Open file description — `File` handle, `Offset` (read/write position), `RightsBase` / `RightsInheriting`, `GuestPath` for nested `path_open`, and backing `FS`. WASI Preview1 fd numbers index entries; `fd_renumber` moves entries and invalidates the source slot (POSIX open-file-description semantics for offset sharing). `fd_filestat_set_size` / `fd_filestat_set_times` call `fe.File.Truncate` / `Utimens` and map errno via `errnoFromWasi` for all file types.
 
-During config-layer construction, `applyModuleConfig` **dual-writes**: it builds `ctx` via `wasi.NewContext` and populates legacy `State` fields (`args`, `env`, `mounts`, stdio) so existing syscall code and tests keep working until method migration lands.
+`applyModuleConfig` only constructs `ctx` via `wasi.NewContext` and seeds preopen rights on `FileEntry` values; it does not maintain a parallel legacy fd table.
 
 ### Source file map
 
@@ -30,13 +34,12 @@ Portable `package wasihost` on **Linux** and **Darwin** (small build-tagged file
 
 | Area | File |
 |------|------|
-| `State`, `New`, FD table | `wasihost.go` |
+| `State`, `New`, `lookupFD` | `wasihost.go` |
 | `ModuleConfig`, `applyModuleConfig` | `wasihost_config.go` |
 | `FSConfig`, mount builders | `wasihost_fsconfig.go` |
+| FileEntry helpers (guest path, preopen index) | `wasihost_fe.go` |
 | WASI errno / rights constants | `wasihost_const.go` |
-| `mapOSError`, errno helpers | `wasihost_errno.go` |
-| `fsFile` (fd-table file interface) | `wasihost_adapters.go` |
-| Legacy fd adapters (`osFile`, `FSFileWrap`, `DirEntriesFile`, …) | `wasihost_adapters_stubs.go` |
+| `mapOSError`, `errnoFromWasi` | `wasihost_errno.go` |
 | Guest memory / string tables | `wasihost_mem.go` |
 | Path resolution and confinement | `wasihost_path_resolve.go` |
 | `path_open` | `wasihost_open.go` |
@@ -46,6 +49,8 @@ Portable `package wasihost` on **Linux** and **Darwin** (small build-tagged file
 | filestat / fdstat | `wasihost_filestat.go` |
 | args / env / clock / poll / proc_exit | `wasihost_misc.go` |
 
+Legacy fd-table adapters (`FSFileWrap`, `DirEntriesFile`, `wasiDirInfo`) were removed; open files use `internal/wasi/sysfs` (`osFile`, `fsFile`) via `wasi.File`.
+
 | Concern | Linux | Darwin |
 |---------|-------|--------|
 | Access time from `Stat_t` | `atime_linux.go` | `atime_darwin.go` |
@@ -53,44 +58,55 @@ Portable `package wasihost` on **Linux** and **Darwin** (small build-tagged file
 | `path_rename` across devices | `path_rename_unix.go` | (same file, unix tag) |
 | `path_rename` on other GOOS | — | `path_rename_other.go` |
 
+`internal/wasi/` holds portable WASI types, `Context`, `FSContext`, `DirentCache`, and `sysfs/` adapters (`DirFS`, `ReadFS`, `AdaptFS`, `osFile`, `fsFile`) adapted from wazero. Stdio implements `Pollable` where applicable; `poll_oneoff` consults `PollableFile` / `Pollable` before emitting fd read/write events.
+
 ### Syscall flow
 
 ```mermaid
 sequenceDiagram
     participant Guest as Transpiled Go
     participant Host as wasihost.State
-    participant VFS as Mounts and FD table
-    participant OS as Host OS or fs.FS
+    participant Ctx as wasi.Context
+    participant FSC as FSContext
+    participant VFS as wasi.FS / File
 
     Guest->>Host: WASI import (e.g. fd_read)
     Host->>Host: mem := callback()
-    Host->>VFS: Resolve FD / path
-    VFS->>OS: Read, write, or stat
-    OS-->>VFS: Data or error
-    Host->>Host: Map to WASI errno, write guest buffers
+    Host->>Ctx: Args / clocks / environ
+    Host->>FSC: LookupFile(fd)
+    FSC-->>Host: FileEntry
+    Host->>VFS: Pread / Write / Stat
+    VFS-->>Host: data or wasi.Errno
+    Host->>Host: errnoFromWasi, write guest buffers
     Host-->>Guest: errno
 ```
 
 ### Filesystem layer
 
-Access is **capability-oriented**: guests use **preopened directories** only (plus FDs opened beneath them). Configure mounts via `ModuleConfig.WithReadOnlyFS`, `WithHostDirectoryPreopen`, or `WithFS(NewFSConfig()…)`. Read-only `fs.FS` preopens report no write or path-mutation rights. Embedded bundles use read-only fs.FS preopens. Writable mounts use host directory preopens: reads go through `os.DirFS`, writes and path operations use `hostRoot` with confinement checks (lexical preopen bounds, symlink follow rules, `filepath.EvalSymlinks` where required).
+Access is **capability-oriented**: guests use **preopened directories** only—**read-only fs.FS preopens** or writable host mounts (plus fds opened beneath them). Each preopen has **one VFS backend**; writable host mounts do not embed a read-only `fs.FS` overlay. To expose both host files and embedded assets, configure separate preopens (for example `WithHostDirectoryPreopen` and `WithReadOnlyFS`). Configure mounts via `ModuleConfig.WithReadOnlyFS`, `WithHostDirectoryPreopen`, or `WithFS(NewFSConfig()…)`:
+
+| Mount API | Backing | Mutations |
+|-----------|---------|-----------|
+| `WithReadOnlyFS` / `WithFSMount` | `sysfs.AdaptFS` (`fs.FS`) | Denied (`ENOSYS` / `EROFS` via `ReadFS`) |
+| `WithHostDirectoryPreopen` / `WithDirMount` | `sysfs.DirFS` (host path) | Allowed under confinement |
+| `WithReadOnlyDirMount` | `sysfs.ReadFS(DirFS)` | Read-only host dir |
+
+Path opens and mutations go through `wasi.FS` / `wasi.File` where possible; writable host mounts still use host-path helpers for symlink follow / `EvalSymlinks` confinement (see [docs/path-confinement.md](./docs/path-confinement.md)). Directory `fd_readdir` parent (`..`) inode comes from VFS `Stat`/`Lstat` on the mount-relative parent path when available.
 
 ```mermaid
 graph TD
     subgraph State
-        FDs[FD table 0=stdin 1=stdout 2=stderr 3+=preopens]
+        Mem[mem callback]
+        Ctx[wasi.Context]
     end
-    subgraph VFS
-        Mounts[mountEntry list]
-        Open[fdEntry open files]
+    subgraph Ctx
+        FSC[FSContext fd table]
+        Pre[preopens list]
     end
-    FDs --> Open
-    Open --> Mounts
-    Mounts --> RO[Read-only fs.FS]
-    Mounts --> RW[Writable host dir + DirFS]
+    FSC --> FE[FileEntry 0-2 stdio 3+ preopens N+ opened]
+    FE --> VF[wasi.File]
+    FE --> FS[wasi.FS DirFS / AdaptFS / ReadFS]
 ```
-
-Path resolution (`resolvePath`, `resolveDirfdPath`, `resolveWritable`) enforces preopen and nested-directory confinement before host I/O.
 
 ## 2. `wasm2go-run` CLI
 
@@ -122,16 +138,15 @@ Environment variables: `WASM2GO_RUN_CACHE`, `WASM2GO_RUN_CACHE_DIR`, `WASM2GO_WA
 
 `scripts/e2e-wasip1.sh` runs `wasi-testsuite/run-tests` with `adapters/wasm2go.py`. The adapter expects `wasm2go-run` on `PATH` or via `WASM2GO_RUN`.
 
+Go-level integration tests load case lists from `testdata/e2e_cases.json` via `e2e_inventory_test.go` (helpers and `TestQualityGate` also use the `e2e` tag). They exercise individual wasi-testsuite binaries through `wasm2go-run` for granular failure reporting; `scripts/e2e-wasip1.sh` remains a backup full-inventory run.
+
 ## Concurrency
 
-One `State` per guest instance, single goroutine. There is no public API to enable goroutine-owner assertion; `State` is not safe for concurrent use.
-
-## Next: method migration
-
-The config layer is in place. **`pi-method-migration`** will move WASI syscall bodies from legacy `State` fields to `internal/wasi.Context` (and wire clock/random config through `ctx`). Until that lands, both paths are populated at construction time.
+One `State` per guest instance, single goroutine. `State` is not safe for concurrent use. Optional `assertOwner` exists on `State` for internal debugging but has no public `ModuleConfig` hook.
 
 ## Related docs
 
 - [README.md](./README.md) — install, usage, development
+- [docs/path-confinement.md](./docs/path-confinement.md) — preopen matching, lexical and symlink confinement
 - [cmd/wasm2go-run/README.md](./cmd/wasm2go-run/README.md) — CLI flags and cache
 - [pkg.go.dev](https://pkg.go.dev/github.com/lbe/wasm2go-wasi-host) — generated API reference

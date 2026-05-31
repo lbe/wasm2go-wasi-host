@@ -239,6 +239,28 @@ func TestModuleConfig_ClockAndRandom(t *testing.T) {
 		_ = panicked
 	})
 
+	t.Run("WithOsyield sets osyield and Xsched_yield invokes it", func(t *testing.T) {
+		var yieldCount int
+		cfg := NewModuleConfig().WithOsyield(func() { yieldCount++ })
+
+		if cfg.osyield == nil {
+			t.Fatal("expected osyield to be non-nil")
+		}
+
+		cfg.osyield()
+		if yieldCount != 1 {
+			t.Errorf("yieldCount = %d, want 1", yieldCount)
+		}
+
+		s, _ := newTestState(cfg)
+		if errno := s.Xsched_yield(); errno != wasiESuccess {
+			t.Errorf("Xsched_yield returned %d, want ESUCCESS", errno)
+		}
+		if yieldCount != 2 {
+			t.Errorf("yieldCount = %d, want 2", yieldCount)
+		}
+	})
+
 	t.Run("WithRandSource sets rand source", func(t *testing.T) {
 		src := rand.Reader
 		cfg := NewModuleConfig().WithRandSource(src)
@@ -252,8 +274,10 @@ func TestModuleConfig_ClockAndRandom(t *testing.T) {
 	})
 
 	t.Run("clock methods return independent copies", func(t *testing.T) {
-		cfg1 := NewModuleConfig().WithSysWalltime().WithSysNanosleep()
-		cfg2 := cfg1.WithSysNanotime()
+		var countA int
+		cfg1 := NewModuleConfig().WithSysWalltime().WithSysNanosleep().WithOsyield(func() { countA++ })
+		var countB int
+		cfg2 := cfg1.WithSysNanotime().WithOsyield(func() { countB++ })
 
 		// cfg1 should not have nanotime set
 		if cfg1.nanotime != nil {
@@ -269,6 +293,17 @@ func TestModuleConfig_ClockAndRandom(t *testing.T) {
 		}
 		if cfg2.nanosleep == nil {
 			t.Error("expected cfg2.nanosleep to be non-nil")
+		}
+
+		s, _ := newTestState(cfg1)
+		if errno := s.Xsched_yield(); errno != wasiESuccess {
+			t.Errorf("Xsched_yield returned %d, want ESUCCESS", errno)
+		}
+		if countA != 1 {
+			t.Errorf("countA = %d, want 1 (original config unchanged by chained WithOsyield)", countA)
+		}
+		if countB != 0 {
+			t.Errorf("countB = %d, want 0", countB)
 		}
 	})
 }

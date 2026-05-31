@@ -33,7 +33,7 @@ func errnoIfFDRightsMissing(rightsBase, required uint64) int32 {
 // errnoIfHostPathNotADirectory is the path_open O_DIRECTORY pre-check for a
 // resolved writable host path. When the path exists and is not a directory,
 // it returns wasiENotDir. Stat errors (including ENOENT) return 0 so the
-// subsequent OpenFile (or overlay fallback) can map errors as usual.
+// subsequent OpenFile can map errors as usual.
 func errnoIfHostPathNotADirectory(hostPath string) int32 {
 	fi, err := os.Stat(hostPath)
 	if err == nil && !fi.IsDir() {
@@ -56,9 +56,9 @@ func errnoIfContradictoryFstFlags(fstFlags int32) int32 {
 }
 
 // errnoForDirectoryFDOp returns EISDIR when fe refers to a directory, because
-// byte-oriented I/O (fd_read, fd_pread, fd_write, fd_pwrite) and position/size
-// operations (fd_seek, fd_tell, fd_allocate, fd_filestat_set_size) are not
-// defined on directories. Returns 0 for non-directory entries.
+// byte-oriented I/O (fd_read, fd_pread, fd_write, fd_pwrite), position/size
+// operations (fd_seek, fd_tell, fd_allocate, fd_filestat_set_size,
+// fd_filestat_set_times), and similar ops are not defined on directories.
 func errnoForDirectoryFDOp(fe *wasi.FileEntry) int32 {
 	if fe == nil || fe.File == nil {
 		return 0
@@ -139,6 +139,8 @@ func errnoFromWasi(errno wasi.Errno) int32 {
 	switch errno {
 	case wasi.EACCES:
 		return wasiEAcces
+	case wasi.EAGAIN:
+		return 6 // __WASI_ERRNO_AGAIN (snapshot preview1)
 	case wasi.EBADF:
 		return wasiEBadf
 	case wasi.EEXIST:

@@ -132,44 +132,56 @@ func preopenHostRootFromFS(fsys wasi.FS) string {
 	return ""
 }
 
-func preopenLegacyRoot(p *PreopenEntry) fs.FS {
-	if p == nil {
-		return nil
-	}
-	switch f := p.fsys.(type) {
-	case sysfs.AdaptFS:
-		return f.FS
-	case *sysfs.AdaptFS:
-		return f.FS
-	case sysfs.DirFS:
-		return os.DirFS(f.Path)
-	case *sysfs.DirFS:
-		return os.DirFS(f.Path)
-	case sysfs.ReadFS:
-		return preopenLegacyRoot(&PreopenEntry{fsys: f.FS})
-	case *sysfs.ReadFS:
-		return preopenLegacyRoot(&PreopenEntry{fsys: f.FS})
-	default:
-		return nil
-	}
+// readlinkLookup is a resolved preopen and VFS path for path_readlink.
+type readlinkLookup struct {
+	preopen *PreopenEntry
+	vpath   string
 }
 
-// overlayRootForPreopen returns an embedded fs.FS overlay for read-only preopens
-// or optional Overlay on writable host preopens.
-func (s *State) overlayRootForPreopen(p *PreopenEntry) fs.FS {
-	if p == nil {
-		return nil
-	}
-	for fd := int32(3); ; fd++ {
-		fe, ok := s.lookupFD(fd)
-		if !ok {
-			break
+// resolveReadlinkLookup resolves (dirfd, path) and applies writable confinement
+// before path_readlink calls wasi.FS.Readlink. Read-only mounts with nil fsys
+// return ENOENT; AdaptFS Readlink ENOSYS is mapped to EROFS in Xpath_readlink.
+func (s *State) resolveReadlinkLookup(dirfd, pathPtr, pathLen int32) (readlinkLookup, int32) {
+	guestPath := string(s.readBytes(pathPtr, pathLen))
+	preopen, rel := s.resolveDirfdPath(dirfd, pathPtr, pathLen)
+	if preopen == nil {
+		if _, ok := s.lookupFD(dirfd); !ok {
+			return readlinkLookup{}, wasiEBadf
 		}
-		if fe.FS == p.fsys && fe.Overlay != nil {
-			return fe.Overlay
-		}
+		return readlinkLookup{}, wasiEROFS
 	}
-	return preopenLegacyRoot(p)
+
+	if preopenWritable(preopen) {
+		if s.preopenDirfdLexicallyEscapes(dirfd, rel) {
+			return readlinkLookup{}, wasiENotCap
+		}
+		if errno := s.errnoIfNonPreopenDirfdEscapes(dirfd, preopen, rel); errno != 0 {
+			return readlinkLookup{}, errno
+		}
+		if !isRootPreopen(preopen) && guestPathNeedsSymlinkTraversal(guestPath, rel) {
+			hostRoot := preopenHostRoot(preopen)
+			hostPath := filepath.Join(hostRoot, filepath.FromSlash(rel))
+			if errno := writableHostSymlinkFollowConfinementErrno(hostRoot, hostPath); errno != 0 {
+				return readlinkLookup{}, errno
+			}
+		}
+	} else if preopen.fsys == nil {
+		return readlinkLookup{}, wasiENoEnt
+	}
+
+	return readlinkLookup{
+		preopen: preopen,
+		vpath:   vfsPathForMutation(preopen, rel, guestPath),
+	}, wasiESuccess
+}
+
+// errnoReadlinkFromWasi maps wasi.FS Readlink errors; read-only AdaptFS ENOSYS
+// becomes EROFS so path_readlink matches other read-only path ops on embedded mounts.
+func errnoReadlinkFromWasi(errno wasi.Errno, readonly bool) int32 {
+	if errno == wasi.ENOSYS && readonly {
+		return wasiEROFS
+	}
+	return errnoFromWasi(errno)
 }
 
 // resolveForOpen resolves (dirfd, path) for path_open, returning the preopen,
@@ -243,10 +255,8 @@ func (s *State) resolvePath(guestPath string) (*PreopenEntry, string) {
 // recovering the original absolute host path. The joined path
 // (filepath.Join(hostRoot, rel)) is returned as fallback for cwd-relative
 // paths. For non-root mounts, only the joined path is returned.
-// For root mounts with symlink-following lookups, the primary path is
-// confined via filepath.EvalSymlinks to detect escapes; ENOTCAPABLE is
-// returned as the errno when confinement fails.
-// Returns ("", "", _) if p is nil or has no host root.
+// Returns ("", "", _) if p is nil or has no host root. Root mounts with
+// SYMLINK_FOLLOW run rootMountSymlinkFollowConfinementErrno before returning paths.
 func writableMountHostPaths(p *PreopenEntry, rel string, followSymlinks bool) (primary, fallback string, errno int32) {
 	hostRoot := preopenHostRoot(p)
 	if p == nil || hostRoot == "" {
@@ -257,19 +267,29 @@ func writableMountHostPaths(p *PreopenEntry, rel string, followSymlinks bool) (p
 		abs := "/" + filepath.FromSlash(rel)
 		if abs != joined {
 			if followSymlinks {
-				resolved, err := filepath.EvalSymlinks(abs)
-				if err != nil {
-					if errors.Is(err, fs.ErrNotExist) {
-						return abs, joined, wasiESuccess
-					}
-					return "", "", wasiENoEnt
+				if errno := rootMountSymlinkFollowConfinementErrno(hostRoot, abs, joined); errno != 0 {
+					return "", "", errno
 				}
-				_ = resolved
 			}
 			return abs, joined, wasiESuccess
 		}
 	}
 	return joined, "", 0
+}
+
+// rootMountSymlinkFollowConfinementErrno checks that SYMLINK_FOLLOW resolution for a
+// writable root preopen stays inside hostRoot. The re-absolutized primary ("/"+rel)
+// is evaluated first so guest-absolute paths map to host absolutes; when that path
+// is missing, confinement runs on the joined path under hostRoot (relative opens).
+func rootMountSymlinkFollowConfinementErrno(hostRoot, abs, joined string) int32 {
+	resolved, err := filepath.EvalSymlinks(abs)
+	if err != nil {
+		if errors.Is(err, fs.ErrNotExist) {
+			return writableHostSymlinkFollowConfinementErrno(hostRoot, joined)
+		}
+		return wasiENoEnt
+	}
+	return resolvedPathConfinementErrno(resolved, hostRoot)
 }
 
 // preopenMountRelEscapes reports whether a mount-relative guest path
@@ -637,28 +657,14 @@ func vfsHostPath(p *PreopenEntry, guestPath, vpath string) string {
 	return filepath.Join(preopenHostRoot(p), filepath.FromSlash(vpath))
 }
 
-// statFSWithOverlay stats via preopen.fsys, falling back to overlay fs.FS.
-func (s *State) statFSWithOverlay(p *PreopenEntry, vpath, rel string, follow bool) (wasi.Stat_t, int32) {
-	var st wasi.Stat_t
-	var werrno wasi.Errno
+// vfsStat returns Stat or Lstat metadata from preopen.fsys.
+func vfsStat(p *PreopenEntry, vpath string, follow bool) (wasi.Stat_t, int32) {
 	if follow {
-		st, werrno = p.fsys.Stat(vpath)
-	} else {
-		st, werrno = p.fsys.Lstat(vpath)
-	}
-	if werrno == 0 {
+		st, werrno := p.fsys.Stat(vpath)
+		if werrno != 0 {
+			return st, errnoFromWasi(werrno)
+		}
 		return st, wasiESuccess
 	}
-	if werrno != wasi.ENOENT {
-		return st, errnoFromWasi(werrno)
-	}
-	overlay := s.overlayRootForPreopen(p)
-	if overlay == nil {
-		return st, wasiENoEnt
-	}
-	fi, err := fs.Stat(overlay, rel)
-	if err != nil {
-		return st, wasiENoEnt
-	}
-	return wasi.NewStat_t(fi), wasiESuccess
+	return vfsLstat(p, vpath)
 }

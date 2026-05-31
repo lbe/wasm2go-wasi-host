@@ -33,36 +33,41 @@ func NewStat_t(info fs.FileInfo) Stat_t {
 	return statFromFileInfo(info)
 }
 
+// timespecToEpochNanos converts a syscall.Timespec to epoch nanoseconds.
 func timespecToEpochNanos(ts syscall.Timespec) EpochNanos {
 	return EpochNanos(ts.Sec)*1e9 + EpochNanos(ts.Nsec)
 }
 
+// statFromSyscallStatTimestamps maps syscall.Stat_t fields and platform-specific
+// access/modify/change times into Stat_t.
+func statFromSyscallStatTimestamps(d *syscall.Stat_t, info fs.FileInfo, atim, mtim, ctim syscall.Timespec) Stat_t {
+	return Stat_t{
+		Dev:   uint64(d.Dev),
+		Ino:   Inode(d.Ino),
+		Mode:  info.Mode(),
+		Nlink: uint64(d.Nlink),
+		Size:  d.Size,
+		Atim:  timespecToEpochNanos(atim),
+		Mtim:  timespecToEpochNanos(mtim),
+		Ctim:  timespecToEpochNanos(ctim),
+	}
+}
+
 func statFromFileInfo(info fs.FileInfo) Stat_t {
 	if d, ok := info.Sys().(*syscall.Stat_t); ok {
-		return Stat_t{
-			Dev:   uint64(d.Dev),
-			Ino:   Inode(d.Ino),
-			Mode:  info.Mode(),
-			Nlink: uint64(d.Nlink),
-			Size:  d.Size,
-			Atim:  timespecToEpochNanos(d.Atimespec),
-			Mtim:  timespecToEpochNanos(d.Mtimespec),
-			Ctim:  timespecToEpochNanos(d.Ctimespec),
-		}
+		return statFromSyscallStat(d, info)
 	}
 	return defaultStatFromFileInfo(info)
 }
 
 func defaultStatFromFileInfo(info fs.FileInfo) Stat_t {
-	st := Stat_t{}
-	st.Ino = 0
-	st.Dev = 0
-	st.Mode = info.Mode()
-	st.Nlink = 1
-	st.Size = info.Size()
-	mtim := info.ModTime().UnixNano()
-	st.Atim = mtim
-	st.Mtim = mtim
-	st.Ctim = mtim
-	return st
+	mtim := EpochNanos(info.ModTime().UnixNano())
+	return Stat_t{
+		Mode:  info.Mode(),
+		Nlink: 1,
+		Size:  info.Size(),
+		Atim:  mtim,
+		Mtim:  mtim,
+		Ctim:  mtim,
+	}
 }

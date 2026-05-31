@@ -5,6 +5,7 @@ import (
 	"fmt"
 	"io"
 	"math"
+	"runtime"
 )
 
 // Preopen describes one guest preopened directory (filesystem + guest path prefix).
@@ -19,11 +20,12 @@ type fsPreopensConfig interface {
 	FSPreopens() (fsList []FS, guestPaths []string)
 }
 
-// moduleClockConfig is optionally implemented by ModuleConfig to supply clock and sleep hooks.
+// moduleClockConfig is optionally implemented by ModuleConfig to supply clock, sleep, and yield hooks.
 type moduleClockConfig interface {
 	ClockWalltime() (Walltime, ClockResolution, bool)
 	ClockNanotime() (Nanotime, ClockResolution, bool)
 	ClockNanosleep() (Nanosleep, bool)
+	ClockOsyield() (Osyield, bool)
 }
 
 // ModuleConfig is the interface wasi.NewContext accepts to initialize
@@ -61,7 +63,8 @@ type Context struct {
 }
 
 // NewContext builds a Context from the fields exposed by a ModuleConfig.
-// It validates args and environ and applies nil-safe defaults.
+// It validates args and environ, applies nil-safe defaults, and uses
+// runtime.Gosched for Osyield when WithOsyield is not set.
 func NewContext(config ModuleConfig) (*Context, error) {
 	args := config.Args()
 	environ := config.Environ()
@@ -116,13 +119,13 @@ func NewContext(config ModuleConfig) (*Context, error) {
 		environSize += uint32(len(e))
 	}
 
-	// Defaults: walltime returns (0, 0), nanotime returns 0, nanosleep/osyield are no-ops
+	// Defaults: walltime returns (0, 0), nanotime returns 0, nanosleep is a no-op, osyield yields via Gosched
 	wt := func() (sec int64, nsec int32) { return 0, 0 }
 	var wtRes ClockResolution
 	nt := func() int64 { return 0 }
 	var ntRes ClockResolution
 	ns := func(ns int64) {}
-	osy := func() {}
+	osy := runtime.Gosched
 
 	if cc, ok := config.(moduleClockConfig); ok {
 		if w, res, ok := cc.ClockWalltime(); ok {
@@ -133,6 +136,9 @@ func NewContext(config ModuleConfig) (*Context, error) {
 		}
 		if sleep, ok := cc.ClockNanosleep(); ok {
 			ns = sleep
+		}
+		if yield, ok := cc.ClockOsyield(); ok {
+			osy = yield
 		}
 	}
 

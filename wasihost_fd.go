@@ -3,9 +3,7 @@ package wasihost
 import (
 	"encoding/binary"
 	"io"
-	"os"
-	"path/filepath"
-	"strings"
+	"path"
 
 	"github.com/lbe/wasm2go-wasi-host/internal/wasi"
 )
@@ -238,31 +236,48 @@ func readdirResumeBufUsed(bufUsed, bufLen uint32, wrotePartial bool) uint32 {
 	return bufUsed
 }
 
-// TODO(post-merge): readdirDotDotIno uses os.Stat on host paths directly, bypassing
-// wasi.FS. Prefer a VFS method (e.g. parent Stat/Lstat on guest-relative path) so
-// inode lookup stays inside the FS abstraction and works for non-host backends.
+// mountRelParentVpath is the mount-relative VFS path for the parent of rel
+// (e.g. ".." at a preopen root, or path.Dir(rel) for nested directories).
+func mountRelParentVpath(rel string) string {
+	if rel == "" || rel == "." {
+		return ".."
+	}
+	return path.Dir(rel)
+}
+
+// vfsInode returns st.Ino from Stat, or Lstat when Stat fails.
+func vfsInode(fsys wasi.FS, vpath string) wasi.Inode {
+	if fsys == nil || vpath == "" {
+		return 0
+	}
+	if st, errno := fsys.Stat(vpath); errno == 0 {
+		return st.Ino
+	}
+	if st, errno := fsys.Lstat(vpath); errno == 0 {
+		return st.Ino
+	}
+	return 0
+}
+
+// readdirDotDotParentVPath returns the mount-relative parent path for fe.
+func (s *State) readdirDotDotParentVPath(fe *wasi.FileEntry) string {
+	gp := fileEntryGuestPath(fe)
+	if gp == "" {
+		return ""
+	}
+	preopen, rel := s.resolvePath(gp)
+	if preopen == nil {
+		return ""
+	}
+	return mountRelParentVpath(rel)
+}
+
+// readdirDotDotIno returns the parent directory inode for synthetic ".." entries.
 func (s *State) readdirDotDotIno(fe *wasi.FileEntry) uint64 {
 	if fe == nil || fe.FS == nil || fsysReadOnly(fe.FS) {
 		return 0
 	}
-	hostRoot := preopenHostRootFromFS(fe.FS)
-	if hostRoot == "" {
-		return 0
-	}
-	if fe.IsPreopen {
-		if fi, err := os.Stat(filepath.Dir(hostRoot)); err == nil {
-			_, ino := statDevIno(fi)
-			return ino
-		}
-		return 0
-	}
-	rel := strings.TrimPrefix(fe.Name, "/")
-	parentPath := filepath.Dir(filepath.Join(hostRoot, filepath.FromSlash(rel)))
-	if fi, err := os.Stat(parentPath); err == nil {
-		_, ino := statDevIno(fi)
-		return ino
-	}
-	return 0
+	return uint64(vfsInode(fe.FS, s.readdirDotDotParentVPath(fe)))
 }
 
 func (s *State) Xfd_readdir(fd int32, bufPtr int32, bufLen int32, cookie int64, bufUsedPtr int32) int32 {
