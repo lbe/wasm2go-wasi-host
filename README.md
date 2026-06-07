@@ -8,7 +8,14 @@
 [![Release](https://img.shields.io/github/v/release/lbe/wasm2go-wasi-host)](https://github.com/lbe/wasm2go-wasi-host/releases)
 
 > [!WARNING]
-> **Status: Alpha.** This project is in early development. While the WASI Preview1 specification is stable, the internal host API and the `wasm2go-run` tool are subject to change. Use with caution in production environments.
+> **Status: Beta.** This project is in mid-development. The WASI Preview1 API is stable. At this time, I do not anticipate and breaking changes.  Use with caution in production environments.
+> 
+> The current work on this project is porting existing Go packages that use the wazero wasip1 to this package.  The following have been successfully ported:
+> - [go-wasi](https://github.com/lbe/go-wasi)
+> - go-wasm
+> - [resvg-go](https://github.com/lbe/resvg-go)
+> - [qjs](https://github.com/lbe/qjs)
+> - [go-graphviz](https://github.com/lbe/go-graphviz)
 
 A specialized **WASI snapshot-preview1** host for Go, designed to run code transpiled by [wasm2go](https://github.com/ncruces/wasm2go).
 
