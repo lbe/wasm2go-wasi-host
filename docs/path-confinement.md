@@ -27,7 +27,7 @@ Before writable host operations, mount-relative paths are checked for **lexical 
 
 - `preopenMountRelEscapes`: rejects `..` and `../segment` after `path.Clean`.
 - Applied to **preopen dirfds** via `preopenDirfdLexicallyEscapes` → `ENOTCAPABLE`.
-- **Non-preopen dirfds**: resolved guest path must stay under the dirfd’s `GuestPath` prefix (`nonPreopenDirfdResolvedPathEscapes`) → `ENOTCAPABLE`.
+- **Non-preopen dirfds**: the resolved path relative to the owning preopen root must stay under the dirfd’s subtree within that preopen (`nonPreopenDirfdResolvedPathEscapes`) → `ENOTCAPABLE`. A directory fd opened from a root preopen (`guestPath == "/"`) therefore has `fdRel == ""` and is not treated as an escape.
 
 These checks do not follow symlinks; they only block obvious `..` traversal in the guest path algebra.
 

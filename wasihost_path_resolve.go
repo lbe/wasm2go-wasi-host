@@ -320,24 +320,32 @@ func (s *State) isNonPreopenDirfd(dirfd int32) bool {
 }
 
 // nonPreopenDirfdResolvedPathEscapes reports whether resolving relPath
-// through the given mount produces a guest-absolute path that falls
-// outside the subtree of a non-preopen directory fd. This prevents
-// path_open and resolveWritable from accessing paths above the dirfd's
-// resolved directory using ".." segments.
+// through the given mount produces a path that falls outside the subtree
+// of a non-preopen directory fd. The check is performed relative to the
+// preopen root so that a directory fd opened from a root preopen (fdRel
+// == "") does not incorrectly report an escape.
 func (s *State) nonPreopenDirfdResolvedPathEscapes(dirfd int32, preopen *PreopenEntry, relPath string) bool {
 	if !s.isNonPreopenDirfd(dirfd) {
 		return false
 	}
-	resolvedGuest := preopenGuestPathForRel(preopen, relPath)
 	fe, ok := s.lookupFD(dirfd)
 	if !ok {
 		return false
 	}
-	prefix := fileEntryGuestPath(fe)
-	if prefix == "" {
+	fdGuestPath := fileEntryGuestPath(fe)
+	if fdGuestPath == "" {
 		return false
 	}
-	return resolvedGuest != prefix && !strings.HasPrefix(resolvedGuest, prefix+"/")
+	preopenPath := preopenGuestPathClean(preopen)
+	if preopenPath != "/" && !strings.HasPrefix(fdGuestPath, preopenPath+"/") && fdGuestPath != preopenPath {
+		return true
+	}
+	fdRel := strings.TrimPrefix(fdGuestPath, preopenPath)
+	fdRel = strings.TrimPrefix(fdRel, "/")
+	if fdRel == "" {
+		return false
+	}
+	return relPath != fdRel && !strings.HasPrefix(relPath, fdRel+"/")
 }
 
 func (s *State) errnoIfNonPreopenDirfdEscapes(dirfd int32, preopen *PreopenEntry, rel string) int32 {
@@ -532,7 +540,8 @@ type writableMutationPair struct {
 // resolveWritable resolves a (dirfd, path) pair to a writable preopen and a
 // mount-relative path for VFS mutation. Rejects paths with ENOTCAPABLE when:
 //   - a directory preopen would lexically escape its root (preopenDirfdLexicallyEscapes), or
-//   - a nested non-preopen dirfd would resolve outside its subtree (errnoIfNonPreopenDirfdEscapes).
+//   - a nested non-preopen dirfd would resolve outside its subtree
+//     (nonPreopenDirfdResolvedPathEscapes), checked relative to the preopen root.
 //
 // Multi-segment guest paths on non-root preopens run symlink confinement before
 // returning; pass guestPath to vfsPathForMutation when calling wasi.FS methods.

@@ -220,36 +220,16 @@ func TestDocsCompliance(t *testing.T) {
 		}
 	})
 
-	// 3. Check runner test for a mutation test
-	t.Run("E2E script or runner test includes mutation wasi-testsuite binary", func(t *testing.T) {
-		// We want to ensure at least one test from wasi-testsuite that performs
-		// create/write/remove is part of our verified compliance.
-
-		// Check runner_test.go for path_open_read_write.wasm (Rust) or similar
-		runnerTest, err := os.ReadFile("cmd/wasm2go-run/runner_test.go")
+	// 3. Check e2e script for wasi-testsuite mutation coverage
+	t.Run("E2E script includes wasi-testsuite runner", func(t *testing.T) {
+		// Mutation tests (create/write/remove) are covered by the e2e suite
+		// via scripts/e2e-wasip1.sh, not by unit tests in runner_test.go.
+		e2eScript, err := os.ReadFile("scripts/e2e-wasip1.sh")
 		if err != nil {
 			t.Fatal(err)
 		}
-
-		mutationTests := []string{
-			"file_pread_pwrite.wasm",
-			"path_rename.wasm",
-			"path_link.wasm",
-			"path_symlink.wasm",
-			"pwrite-with-access.wasm",
-			"path_open_read_write.wasm",
-		}
-
-		found := false
-		for _, test := range mutationTests {
-			if strings.Contains(string(runnerTest), test) {
-				found = true
-				break
-			}
-		}
-
-		if !found {
-			t.Error("No known mutation tests from wasi-testsuite found in cmd/wasm2go-run/runner_test.go")
+		if !strings.Contains(string(e2eScript), "run-tests") {
+			t.Error("scripts/e2e-wasip1.sh does not invoke wasi-testsuite run-tests")
 		}
 	})
 }
