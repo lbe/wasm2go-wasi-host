@@ -27,6 +27,7 @@ type wasiTestsuiteJSON struct {
 	Args []string          `json:"args"`
 	Env  map[string]string `json:"env"`
 	Dirs []string          `json:"dirs"`
+	Root string            `json:"root"`
 }
 
 var (
@@ -37,7 +38,8 @@ var (
 // runWasiTestsuiteCases builds wasm2go-run and executes each case as a
 // sub-test. Every case runs the wasm binary named <name>.wasm from the
 // wasi-testsuite testsuite identified by suiteDir (e.g. "rust" or "c")
-// against fs-tests.dir when required by the test JSON config.
+// against the JSON root directory preopened at guest "/" when the suite
+// config names one.
 func runWasiTestsuiteCases(t *testing.T, suiteDir string, cases []wasiTestsuiteCase) {
 	t.Helper()
 
@@ -109,14 +111,25 @@ func wasiTestsuiteArgv(t *testing.T, testsDir, wasmPath, name string, stdioOnly 
 
 	dirs := cfg.Dirs
 	args := cfg.Args
+	var root string
 	switch {
 	case stdioOnly:
 		// No directory preopens; args/env still come from JSON when present.
+	case cfg.Root != "":
+		// Suite contract: one host directory preopened at guest "/".
+		root = cfg.Root
 	case !hasJSON:
 		dirs = []string{"fs-tests.dir"}
 		args = []string{"fs-tests.dir"}
 	}
 
+	if root != "" {
+		dst, err := cloneTestsuiteGuestDir(t, testsDir, root)
+		if err != nil {
+			return nil, err
+		}
+		argv = append(argv, "--dir", dst+"::/")
+	}
 	for _, guestDir := range dirs {
 		dst, err := cloneTestsuiteGuestDir(t, testsDir, guestDir)
 		if err != nil {

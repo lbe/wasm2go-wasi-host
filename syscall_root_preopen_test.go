@@ -35,11 +35,11 @@ func newRootMountState(t *testing.T) (*State, []byte, string) {
 
 func TestRootPreopenDirfdPathCreateDirectory(t *testing.T) {
 	s, buf, hostDir := newRootMountState(t)
-	dirfd := openRootDirFD(t, s, buf)
+	opened := openRootDirFD(t, s, buf)
 
 	const namePtr = 300
 	copy(buf[namePtr:], "newdir")
-	errno := s.Xpath_create_directory(dirfd, namePtr, 6)
+	errno := s.Xpath_create_directory(opened, namePtr, 6)
 	if errno != wasiESuccess {
 		t.Fatalf("path_create_directory through root-opened dirfd returned %d, want ESUCCESS", errno)
 	}
@@ -50,12 +50,12 @@ func TestRootPreopenDirfdPathCreateDirectory(t *testing.T) {
 
 func TestRootPreopenDirfdPathOpen(t *testing.T) {
 	s, buf, hostDir := newRootMountState(t)
-	dirfd := openRootDirFD(t, s, buf)
+	opened := openRootDirFD(t, s, buf)
 
 	const namePtr = 300
 	var fdPtr int32 = 400
 	copy(buf[namePtr:], "newfile")
-	errno := s.Xpath_open(dirfd, 0, namePtr, 7, int32(oflagCreat),
+	errno := s.Xpath_open(opened, 0, namePtr, 7, int32(oflagCreat),
 		int64(rightFDRead|rightFDWrite),
 		0, 0, fdPtr)
 	if errno != wasiESuccess {
@@ -78,10 +78,10 @@ func TestRootPreopenDirfdPathUnlinkFile(t *testing.T) {
 		t.Fatal(err)
 	}
 
-	dirfd := openRootDirFD(t, s, buf)
+	opened := openRootDirFD(t, s, buf)
 	const namePtr = 300
 	copy(buf[namePtr:], "delfile")
-	errno := s.Xpath_unlink_file(dirfd, namePtr, 7)
+	errno := s.Xpath_unlink_file(opened, namePtr, 7)
 	if errno != wasiESuccess {
 		t.Fatalf("path_unlink_file through root-opened dirfd returned %d, want ESUCCESS", errno)
 	}
@@ -96,12 +96,12 @@ func TestRootPreopenDirfdPathReadlink(t *testing.T) {
 		t.Fatal(err)
 	}
 
-	dirfd := openRootDirFD(t, s, buf)
+	opened := openRootDirFD(t, s, buf)
 	const namePtr = 300
 	const bufPtr = 400
 	const nreadPtr = 500
 	copy(buf[namePtr:], "link")
-	errno := s.Xpath_readlink(dirfd, namePtr, 4, bufPtr, 100, nreadPtr)
+	errno := s.Xpath_readlink(opened, namePtr, 4, bufPtr, 100, nreadPtr)
 	if errno != wasiESuccess {
 		t.Fatalf("path_readlink through root-opened dirfd returned %d, want ESUCCESS", errno)
 	}
