@@ -138,3 +138,30 @@ func TestDirFSCreatesAndWritesRealFile(t *testing.T) {
 		t.Errorf("file content: got %q, want %q", string(got), string(content))
 	}
 }
+
+// Rmdir on a non-empty directory must report ENOTEMPTY. syscall.ENOTEMPTY also
+// matches fs.ErrExist, so a mapper that checks sentinels first reports EEXIST.
+func TestDirFSRmdirNonEmptyReturnsENOTEMPTY(t *testing.T) {
+	dir := t.TempDir()
+	if err := os.MkdirAll(filepath.Join(dir, "a", "b"), 0o755); err != nil {
+		t.Fatalf("MkdirAll: %v", err)
+	}
+
+	if errno := (DirFS{Path: dir}).Rmdir("a"); errno != wasi.ENOTEMPTY {
+		t.Fatalf("Rmdir(non-empty) = %v (%d), want ENOTEMPTY", errno, errno)
+	}
+}
+
+// Unlink on a directory must report EISDIR on every Unix host. Darwin's
+// unlink(2) returns EPERM, which also matches fs.ErrPermission; the EPERM to
+// EISDIR rewrite only works if the mapper keeps EPERM distinct from EACCES.
+func TestDirFSUnlinkDirectoryReturnsEISDIR(t *testing.T) {
+	dir := t.TempDir()
+	if err := os.Mkdir(filepath.Join(dir, "d"), 0o755); err != nil {
+		t.Fatalf("Mkdir: %v", err)
+	}
+
+	if errno := (DirFS{Path: dir}).Unlink("d"); errno != wasi.EISDIR {
+		t.Fatalf("Unlink(directory) = %v (%d), want EISDIR", errno, errno)
+	}
+}

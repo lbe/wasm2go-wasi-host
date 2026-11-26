@@ -904,9 +904,6 @@ func TestPollOneoffFdReadStdin(t *testing.T) {
 	})
 }
 
-// __WASI_ERRNO_AGAIN (snapshot preview1)
-const wasiEAgain int32 = 6
-
 func pollOneoffFdRead(t *testing.T, s *State, buf []byte, fd uint32) uint32 {
 	t.Helper()
 	const (

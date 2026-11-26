@@ -10,8 +10,6 @@
 package sysfs
 
 import (
-	"os"
-	"strconv"
 	"syscall"
 
 	"github.com/lbe/wasm2go-wasi-host/internal/wasi"
@@ -30,12 +28,8 @@ func utimens(path string, atim, mtim int64) wasi.Errno {
 func futimens(fd uintptr, atim, mtim int64) error {
 	// On Darwin, fall back to Futimes which takes Timeval.
 	// This is a best-effort implementation (no UTIME_OMIT support).
-	osf := os.NewFile(fd, "")
-	if osf == nil {
-		return syscall.EBADF
-	}
-	path := "/proc/self/fd/" + strconv.FormatUint(uint64(fd), 10)
-	_ = path
+	// Do not wrap fd in an *os.File here: its GC cleanup would close the
+	// caller's fd.
 	times := timesToTimespecs(wasi.EpochNanos(atim), wasi.EpochNanos(mtim))
 	if times == nil {
 		return nil

@@ -3,8 +3,10 @@
 package wasihost_test
 
 import (
+	"bytes"
 	"encoding/json"
 	"errors"
+	"fmt"
 	"os"
 	"os/exec"
 	"path/filepath"
@@ -17,17 +19,35 @@ import (
 var fsTestsCopyMu sync.Mutex
 
 // wasiTestsuiteCase is a single wasi-testsuite wasm binary to run end-to-end.
+// Expected exit code and output come from the test's own <name>.json.
 type wasiTestsuiteCase struct {
 	name      string
-	wantPass  bool
 	stdioOnly bool // force wasm-only invocation (ignore JSON dirs)
 }
 
+// wasiTestsuiteJSON is the legacy wasi-testsuite per-test config. ExitCode,
+// Stdout and Stderr are expectations; nil means "not declared" (exit code
+// defaults to 0, undeclared streams are not checked), matching run-tests.
 type wasiTestsuiteJSON struct {
-	Args []string          `json:"args"`
-	Env  map[string]string `json:"env"`
-	Dirs []string          `json:"dirs"`
-	Root string            `json:"root"`
+	Args     []string          `json:"args"`
+	Env      map[string]string `json:"env"`
+	Dirs     []string          `json:"dirs"`
+	Root     string            `json:"root"`
+	ExitCode *int              `json:"exit_code"`
+	Stdout   *string           `json:"stdout"`
+	Stderr   *string           `json:"stderr"`
+}
+
+// suiteGuestEnv holds extra guest environment variables per suite.
+//
+// The Rust suite reads ERRNO_MODE_* to choose which platform's errno it
+// asserts; with none set it accepts any listed platform's errno, which hides
+// wrong translations. This host reports Linux errnos on every Unix host
+// (including macOS), so the suite runs in strict Unix mode. Only the Rust
+// suite reads these variables; the AssemblyScript environ tests count
+// variables, so the others get none.
+var suiteGuestEnv = map[string]map[string]string{
+	"rust": {"ERRNO_MODE_UNIX": "1"},
 }
 
 var (
@@ -71,7 +91,8 @@ func runWasiTestsuiteCases(t *testing.T, suiteDir string, cases []wasiTestsuiteC
 			t.Parallel()
 
 			wasmPath := filepath.Join(testsDir, tc.name+".wasm")
-			argv, err := wasiTestsuiteArgv(t, testsDir, wasmPath, tc.name, tc.stdioOnly)
+			cfg, _ := loadWasiTestsuiteJSON(testsDir, tc.name)
+			argv, err := wasiTestsuiteArgv(t, testsDir, wasmPath, tc.name, tc.stdioOnly, suiteGuestEnv[suiteDir])
 			if err != nil {
 				t.Fatalf("build argv: %v", err)
 			}
@@ -79,10 +100,12 @@ func runWasiTestsuiteCases(t *testing.T, suiteDir string, cases []wasiTestsuiteC
 			cmd := exec.Command(binPath, argv...)
 			cmd.Dir = repoRoot
 			cmd.Env = append(os.Environ(), "WASM2GO_WASIHOST_PATH="+repoRoot)
+			var stdout, stderr bytes.Buffer
+			cmd.Stdout = &stdout
+			cmd.Stderr = &stderr
 
-			out, err := cmd.CombinedOutput()
 			exitCode := 0
-			if err != nil {
+			if err := cmd.Run(); err != nil {
 				var exitErr *exec.ExitError
 				if errors.As(err, &exitErr) {
 					exitCode = exitErr.ExitCode()
@@ -91,21 +114,45 @@ func runWasiTestsuiteCases(t *testing.T, suiteDir string, cases []wasiTestsuiteC
 				}
 			}
 
-			if tc.wantPass && exitCode != 0 {
-				t.Errorf("exited %d, want 0\nstderr:\n%s", exitCode, strings.TrimSpace(string(out)))
-			}
-			if !tc.wantPass && exitCode == 0 {
-				t.Errorf("exited 0, want non-zero")
+			for _, problem := range checkWasiTestsuiteExpectations(cfg, exitCode, stdout.String(), stderr.String()) {
+				t.Errorf("%s\nstdout:\n%s\nstderr:\n%s", problem,
+					strings.TrimSpace(stdout.String()), strings.TrimSpace(stderr.String()))
 			}
 		})
 	}
 }
 
-func wasiTestsuiteArgv(t *testing.T, testsDir, wasmPath, name string, stdioOnly bool) ([]string, error) {
+// checkWasiTestsuiteExpectations compares a run against the test's JSON the
+// way wasi-testsuite run-tests does: the exit code must match exactly
+// (default 0), and a declared stdout/stderr must be what the stream starts with
+// (run-tests reads len(expected) bytes and compares). Undeclared output is
+// not checked.
+func checkWasiTestsuiteExpectations(cfg wasiTestsuiteJSON, exitCode int, stdout, stderr string) []string {
+	var problems []string
+	wantExit := 0
+	if cfg.ExitCode != nil {
+		wantExit = *cfg.ExitCode
+	}
+	if exitCode != wantExit {
+		problems = append(problems, fmt.Sprintf("exit code %d, want %d", exitCode, wantExit))
+	}
+	if cfg.Stdout != nil && !strings.HasPrefix(stdout, *cfg.Stdout) {
+		problems = append(problems, fmt.Sprintf("stdout does not start with %q", *cfg.Stdout))
+	}
+	if cfg.Stderr != nil && !strings.HasPrefix(stderr, *cfg.Stderr) {
+		problems = append(problems, fmt.Sprintf("stderr does not start with %q", *cfg.Stderr))
+	}
+	return problems
+}
+
+func wasiTestsuiteArgv(t *testing.T, testsDir, wasmPath, name string, stdioOnly bool, extraEnv map[string]string) ([]string, error) {
 	t.Helper()
 	cfg, hasJSON := loadWasiTestsuiteJSON(testsDir, name)
 	argv := make([]string, 0, 8)
 	for key, value := range cfg.Env {
+		argv = append(argv, "--env", key+"="+value)
+	}
+	for key, value := range extraEnv {
 		argv = append(argv, "--env", key+"="+value)
 	}
 

@@ -3,25 +3,30 @@ package wasihost
 // WASI snapshot-preview1 errno values. Names and numeric values follow
 // the specification exactly.
 const (
-	wasiESuccess  int32 = 0
-	wasiEAcces    int32 = 2
-	wasiEBadf     int32 = 8
-	wasiEExist    int32 = 20
-	wasiEInval    int32 = 28
-	wasiEIo       int32 = 29
-	wasiEIsdir    int32 = 31
-	wasiELoop     int32 = 32 // __WASI_ERRNO_LOOP (e.g. O_NOFOLLOW-style open on symlink)
-	wasiENoEnt    int32 = 44
-	wasiENoSys    int32 = 52
-	wasiENotDir   int32 = 54
-	wasiENotEmpty int32 = 55
-	wasiENotSup   int32 = 56
-	wasiENotSock  int32 = 57
-	wasiEPerm     int32 = 63
-	wasiEROFS     int32 = 66
-	wasiEXdev     int32 = 75
-	wasiENotCap   int32 = 76
-	wasiEIlseq    int32 = 84 // __WASI_ERRNO_ILSEQ: illegal byte sequence
+	wasiESuccess     int32 = 0
+	wasiEAcces       int32 = 2
+	wasiEAgain       int32 = 6
+	wasiEBadf        int32 = 8
+	wasiEExist       int32 = 20
+	wasiEFault       int32 = 21
+	wasiEIntr        int32 = 27
+	wasiEInval       int32 = 28
+	wasiEIo          int32 = 29
+	wasiEIsdir       int32 = 31
+	wasiELoop        int32 = 32 // __WASI_ERRNO_LOOP (e.g. O_NOFOLLOW-style open on symlink)
+	wasiENameTooLong int32 = 37
+	wasiENoEnt       int32 = 44
+	wasiENoSys       int32 = 52
+	wasiENotDir      int32 = 54
+	wasiENotEmpty    int32 = 55
+	wasiENotSup      int32 = 58
+	wasiENotSock     int32 = 57
+	wasiEPerm        int32 = 63
+	wasiERange       int32 = 68
+	wasiEROFS        int32 = 69
+	wasiEXdev        int32 = 75
+	wasiENotCap      int32 = 76
+	wasiEIlseq       int32 = 25 // __WASI_ERRNO_ILSEQ: illegal byte sequence
 
 	// WASI file descriptor type tags, written into fdstat and filestat structs.
 	fdCharDev byte = 2 // character device (stdin, stdout, stderr, /dev/null)

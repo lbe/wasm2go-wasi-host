@@ -48,7 +48,8 @@ Unit tests and e2e tests overlap in *behavior area* but not in *what they prove*
 
 - Exercise the full pipeline: `wasm2go-run` → transpile → `go build` → run.
 - Run real guest code (Rust, C, AssemblyScript), not in-process host stubs.
-- Honor wasi-testsuite JSON (`dirs`, `args`, `env`) and report only pass/fail via exit code.
+- Honor wasi-testsuite JSON (`root`, `dirs`, `args`, `env`) and check its expectations the way `run-tests` does: exact `exit_code` (default 0), and declared `stdout` / `stderr` must be what the stream starts with.
+- Run the Rust suite with `ERRNO_MODE_UNIX` so it asserts one errno per case instead of accepting any platform's errno. The host reports Linux errnos on macOS too, so Unix mode applies on both.
 - Are the compliance signal for Preview1 inventory coverage.
 
 **Do not** delete unit tests because an e2e case exists for the same syscall. **Do not** shrink CI e2e below 72 cases unless a separate nightly full run replaces it—the runtime cost (~25s) is small relative to the integration value.
@@ -95,7 +96,7 @@ make test-e2e                          # before push; matches CI (~25s)
 
 **New wasi-testsuite binary**
 
-1. Add an entry to `testdata/e2e_cases.json` (`suite`, `name`, `wantPass`, `stdioOnly`, `smoke`, `unitMirror`).
+1. Add an entry to `testdata/e2e_cases.json` (`suite`, `name`, `stdioOnly`, `smoke`, `unitMirror`). Expected exit code and output come from the test's own `<name>.json` in the submodule.
 2. Add or extend `syscall_*_test.go` if you want fast in-process coverage of the same spec.
 3. Run `make test-e2e`.
 

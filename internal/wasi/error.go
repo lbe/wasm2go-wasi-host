@@ -29,21 +29,48 @@ func UnwrapOSError(err error) Errno {
 	return mapOSError(err)
 }
 
+// mapSyscallErrno is consulted before the os.Err* sentinels. syscall.Errno.Is
+// reports ENOTEMPTY as fs.ErrExist and EPERM as fs.ErrPermission, so checking
+// the sentinels first would turn ENOTEMPTY into EEXIST and EPERM into EACCES.
+// A slice (not a switch) tolerates platforms where two names share a value,
+// such as ENOTSUP and EOPNOTSUPP on Linux.
 var mapSyscallErrno = []struct {
-	err   error
+	err   syscall.Errno
 	errno Errno
 }{
-	{syscall.EAGAIN, EAGAIN},
 	{syscall.EACCES, EACCES},
-	{syscall.EPERM, EPERM},
-	{syscall.ENOTDIR, ENOTDIR},
-	{syscall.EISDIR, EISDIR},
-	{syscall.EROFS, EROFS},
+	{syscall.EAGAIN, EAGAIN},
+	{syscall.EBADF, EBADF},
+	{syscall.EEXIST, EEXIST},
+	{syscall.EFAULT, EFAULT},
+	{syscall.EINTR, EINTR},
 	{syscall.EINVAL, EINVAL},
+	{syscall.EIO, EIO},
+	{syscall.EISDIR, EISDIR},
 	{syscall.ELOOP, ELOOP},
+	{syscall.ENAMETOOLONG, ENAMETOOLONG},
+	{syscall.ENOENT, ENOENT},
+	{syscall.ENOSYS, ENOSYS},
+	{syscall.ENOTDIR, ENOTDIR},
+	{syscall.ENOTEMPTY, ENOTEMPTY},
+	{syscall.ENOTSOCK, ENOTSOCK},
+	{syscall.ENOTSUP, ENOTSUP},
+	{syscall.EOPNOTSUPP, ENOTSUP},
+	{syscall.EPERM, EPERM},
+	{syscall.ERANGE, ERANGE},
+	{syscall.EROFS, EROFS},
+	{syscall.EXDEV, EXDEV},
 }
 
 func mapOSError(err error) Errno {
+	var sysErr syscall.Errno
+	if errors.As(err, &sysErr) {
+		for _, m := range mapSyscallErrno {
+			if sysErr == m.err {
+				return m.errno
+			}
+		}
+	}
 	if errors.Is(err, os.ErrNotExist) {
 		return ENOENT
 	}
@@ -52,11 +79,6 @@ func mapOSError(err error) Errno {
 	}
 	if errors.Is(err, os.ErrPermission) {
 		return EACCES
-	}
-	for _, m := range mapSyscallErrno {
-		if errors.Is(err, m.err) {
-			return m.errno
-		}
 	}
 	return EIO
 }

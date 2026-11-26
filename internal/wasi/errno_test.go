@@ -10,6 +10,7 @@ package wasi
 import (
 	"io"
 	"os"
+	"syscall"
 	"testing"
 )
 
@@ -38,6 +39,63 @@ func TestUnwrapOSError(t *testing.T) {
 			name:     "PathError unknown == EIO",
 			input:    &os.PathError{Err: os.ErrClosed},
 			expected: EIO,
+		},
+		// syscall.Errno.Is reports ENOTEMPTY as fs.ErrExist and EPERM as
+		// fs.ErrPermission; the specific errno must win over those sentinels.
+		{
+			name:     "PathError ENOTEMPTY is not EEXIST",
+			input:    &os.PathError{Op: "rmdir", Err: syscall.ENOTEMPTY},
+			expected: ENOTEMPTY,
+		},
+		{
+			name:     "PathError EPERM is not EACCES",
+			input:    &os.PathError{Op: "unlink", Err: syscall.EPERM},
+			expected: EPERM,
+		},
+		{
+			name:     "PathError EEXIST",
+			input:    &os.PathError{Op: "mkdir", Err: syscall.EEXIST},
+			expected: EEXIST,
+		},
+		{
+			name:     "PathError ENOENT",
+			input:    &os.PathError{Op: "open", Err: syscall.ENOENT},
+			expected: ENOENT,
+		},
+		{
+			name:     "LinkError EXDEV",
+			input:    &os.LinkError{Op: "rename", Err: syscall.EXDEV},
+			expected: EXDEV,
+		},
+		{
+			name:     "PathError EBADF",
+			input:    &os.PathError{Op: "read", Err: syscall.EBADF},
+			expected: EBADF,
+		},
+		{
+			name:     "PathError ENAMETOOLONG",
+			input:    &os.PathError{Op: "open", Err: syscall.ENAMETOOLONG},
+			expected: ENAMETOOLONG,
+		},
+		{
+			name:     "bare ENOSYS",
+			input:    syscall.ENOSYS,
+			expected: ENOSYS,
+		},
+		{
+			name:     "bare EINTR",
+			input:    syscall.EINTR,
+			expected: EINTR,
+		},
+		{
+			name:     "bare ENOTSUP",
+			input:    syscall.ENOTSUP,
+			expected: ENOTSUP,
+		},
+		{
+			name:     "bare ENOTSOCK",
+			input:    syscall.ENOTSOCK,
+			expected: ENOTSOCK,
 		},
 	}
 

@@ -11,7 +11,6 @@ import (
 type e2eCase struct {
 	Suite      string   `json:"suite"`
 	Name       string   `json:"name"`
-	WantPass   bool     `json:"wantPass"`
 	StdioOnly  bool     `json:"stdioOnly"`
 	Smoke      bool     `json:"smoke"`
 	UnitMirror []string `json:"unitMirror"`
@@ -44,7 +43,6 @@ func filterE2ECases(cases []e2eCase, suite string, smokeOnly bool) []wasiTestsui
 		}
 		out = append(out, wasiTestsuiteCase{
 			name:      c.Name,
-			wantPass:  c.WantPass,
 			stdioOnly: c.StdioOnly,
 		})
 	}

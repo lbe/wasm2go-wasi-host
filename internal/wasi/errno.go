@@ -33,6 +33,7 @@ const (
 	ENOTSUP
 	EPERM
 	EROFS
+	EXDEV
 )
 
 func (e Errno) Error() string {
@@ -79,6 +80,8 @@ func (e Errno) Error() string {
 		return "operation not permitted"
 	case EROFS:
 		return "read-only file system"
+	case EXDEV:
+		return "cross-device link"
 	default:
 		return "Errno(" + strconv.Itoa(int(e)) + ")"
 	}

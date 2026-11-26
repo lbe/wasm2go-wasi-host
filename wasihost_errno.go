@@ -1,10 +1,8 @@
 package wasihost
 
 import (
-	"errors"
 	"math"
 	"os"
-	"syscall"
 
 	"github.com/lbe/wasm2go-wasi-host/internal/wasi"
 )
@@ -71,62 +69,13 @@ func errnoForDirectoryFDOp(fe *wasi.FileEntry) int32 {
 	return 0
 }
 
-// mapOSError returns the closest WASI snapshot-preview1 errno for a host
-// error from os/syscall (including *os.PathError and wrapped errors).
-// Errors from [fs.FS] Open are supported as well: the standard library uses
-// the same sentinels for fs and os (e.g. [fs.ErrNotExist] == [os.ErrNotExist],
-// [fs.ErrPermission] == [os.ErrPermission]), so [errors.Is] matches both.
-//
-// Mappings use [errors.Is] against well-known errors:
-//
-//   - [os.ErrNotExist] → ENOENT (44)
-//   - [syscall.ENOTEMPTY] → ENOTEMPTY (55)
-//   - [os.ErrExist] → EEXIST (20)
-//   - [syscall.ENOTDIR] → ENOTDIR (54)
-//   - [syscall.EISDIR] → EISDIR (31)
-//   - [syscall.EACCES] → EACCES (2)
-//   - [syscall.EPERM] → EPERM (63)
-//   - [os.ErrPermission] → EACCES (2)
-//   - [syscall.EROFS] → EROFS (66)
-//   - [syscall.EXDEV] → EXDEV (75)
-//   - [syscall.EINVAL] → EINVAL (28)
-//
-// Any other error maps to EIO (29).
+// mapOSError returns the WASI snapshot-preview1 errno for a host error from
+// os/syscall (including *os.PathError, *os.LinkError and wrapped errors) or
+// from [fs.FS]. It delegates to [wasi.UnwrapOSError] so host-path helpers and
+// the VFS layer share one translation table, then converts the result with
+// [errnoFromWasi]. Unrecognized errors map to EIO (29).
 func mapOSError(err error) int32 {
-	if errors.Is(err, os.ErrNotExist) {
-		return wasiENoEnt
-	}
-	if errors.Is(err, syscall.ENOTEMPTY) {
-		return wasiENotEmpty
-	}
-	if errors.Is(err, os.ErrExist) {
-		return wasiEExist
-	}
-	if errors.Is(err, syscall.ENOTDIR) {
-		return wasiENotDir
-	}
-	if errors.Is(err, syscall.EISDIR) {
-		return wasiEIsdir
-	}
-	if errors.Is(err, syscall.EACCES) {
-		return wasiEAcces
-	}
-	if errors.Is(err, syscall.EPERM) {
-		return wasiEPerm
-	}
-	if errors.Is(err, os.ErrPermission) {
-		return wasiEAcces
-	}
-	if errors.Is(err, syscall.EROFS) {
-		return wasiEROFS
-	}
-	if errors.Is(err, syscall.EXDEV) {
-		return wasiEXdev
-	}
-	if errors.Is(err, syscall.EINVAL) {
-		return wasiEInval
-	}
-	return wasiEIo
+	return errnoFromWasi(wasi.UnwrapOSError(err))
 }
 
 // errnoFromWasi maps internal/wasi.Errno (sys.File, FSContext) to WASI
@@ -140,11 +89,15 @@ func errnoFromWasi(errno wasi.Errno) int32 {
 	case wasi.EACCES:
 		return wasiEAcces
 	case wasi.EAGAIN:
-		return 6 // __WASI_ERRNO_AGAIN (snapshot preview1)
+		return wasiEAgain
 	case wasi.EBADF:
 		return wasiEBadf
 	case wasi.EEXIST:
 		return wasiEExist
+	case wasi.EFAULT:
+		return wasiEFault
+	case wasi.EINTR:
+		return wasiEIntr
 	case wasi.EINVAL:
 		return wasiEInval
 	case wasi.EIO:
@@ -153,6 +106,8 @@ func errnoFromWasi(errno wasi.Errno) int32 {
 		return wasiEIsdir
 	case wasi.ELOOP:
 		return wasiELoop
+	case wasi.ENAMETOOLONG:
+		return wasiENameTooLong
 	case wasi.ENOENT:
 		return wasiENoEnt
 	case wasi.ENOSYS:
@@ -167,8 +122,12 @@ func errnoFromWasi(errno wasi.Errno) int32 {
 		return wasiENotSup
 	case wasi.EPERM:
 		return wasiEPerm
+	case wasi.ERANGE:
+		return wasiERange
 	case wasi.EROFS:
 		return wasiEROFS
+	case wasi.EXDEV:
+		return wasiEXdev
 	default:
 		return wasiEIo
 	}
