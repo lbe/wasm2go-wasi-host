@@ -192,6 +192,9 @@ func installPreopenAt(t *testing.T, s *State, fd int32, guestPath, hostDir strin
 	if errno != 0 {
 		t.Fatalf("OpenFile preopen: %v", errno)
 	}
+	// Close the handle before t.TempDir's cleanup removes hostDir; Windows
+	// cannot delete a directory that is still open.
+	t.Cleanup(func() { _ = wf.Close() })
 	rb := rightsReadOnlyDirPreopen
 	ri := rightsReadOnlyDirPreopen
 	if writable {
