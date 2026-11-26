@@ -1,3 +1,5 @@
+//go:build !windows
+
 // Copyright 2020-2023 The wazero Authors
 //
 // Portions of this file are adapted from wazero (Apache License 2.0):

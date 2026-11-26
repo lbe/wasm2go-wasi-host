@@ -15,11 +15,6 @@ import (
 	"github.com/lbe/wasm2go-wasi-host/internal/wasi"
 )
 
-const (
-	nonBlockingFileReadSupported  = true
-	nonBlockingFileWriteSupported = true
-)
-
 func newOsFile(path string, flag wasi.Oflag, perm fs.FileMode, f *os.File) wasi.File {
 	return &osFile{path: path, flag: flag, perm: perm, reopenDir: true, file: f, fd: f.Fd()}
 }

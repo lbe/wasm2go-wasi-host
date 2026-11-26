@@ -3,7 +3,6 @@ package wasihost
 import (
 	"encoding/binary"
 	"os"
-	"runtime"
 	"strings"
 
 	"github.com/lbe/wasm2go-wasi-host/internal/wasi/sysfs"
@@ -273,11 +272,9 @@ func (s *State) validateRename(oldP, newP *PreopenEntry, newRel, newGuest, oldVp
 	return wasiESuccess
 }
 
-// dirNotEmptyErr returns the appropriate error for a non-empty directory target.
+// dirNotEmptyErr returns the errno for a non-empty directory target. The host
+// reports Unix-style errnos on every platform, Windows included.
 func (s *State) dirNotEmptyErr() int32 {
-	if runtime.GOOS == "windows" {
-		return wasiEAcces
-	}
 	return wasiENotEmpty
 }
 

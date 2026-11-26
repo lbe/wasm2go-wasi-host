@@ -65,6 +65,9 @@ var mapSyscallErrno = []struct {
 func mapOSError(err error) Errno {
 	var sysErr syscall.Errno
 	if errors.As(err, &sysErr) {
+		if errno, ok := mapPlatformErrno(sysErr); ok {
+			return errno
+		}
 		for _, m := range mapSyscallErrno {
 			if sysErr == m.err {
 				return m.errno
