@@ -10,8 +10,6 @@ import (
 	"path/filepath"
 	"sort"
 	"strings"
-
-	"golang.org/x/sys/unix"
 )
 
 const (
@@ -160,12 +158,12 @@ func acquireExclusiveLock(lockPath string) (unlock func(), err error) {
 	if err != nil {
 		return nil, err
 	}
-	if err := unix.Flock(int(f.Fd()), unix.LOCK_EX); err != nil {
+	if err := lockFile(f); err != nil {
 		f.Close()
 		return nil, err
 	}
 	return func() {
-		unix.Flock(int(f.Fd()), unix.LOCK_UN)
+		unlockFile(f)
 		f.Close()
 	}, nil
 }
@@ -503,7 +501,9 @@ var (
 // artifacts. Resolution order:
 //  1. WASM2GO_RUN_CACHE_DIR environment variable
 //  2. XDG_CACHE_HOME/wasm2go-run
-//  3. $HOME/.cache/wasm2go-run
+//  3. $HOME/.cache/wasm2go-run when HOME is non-empty
+//  4. os.UserCacheDir()/wasm2go-run when HOME is empty
+//  5. os.TempDir()/wasm2go-run when no user cache directory is available
 func cacheDir() string {
 	if dir := os.Getenv("WASM2GO_RUN_CACHE_DIR"); dir != "" {
 		return dir
@@ -511,5 +511,11 @@ func cacheDir() string {
 	if dir := os.Getenv("XDG_CACHE_HOME"); dir != "" {
 		return filepath.Join(dir, "wasm2go-run")
 	}
-	return filepath.Join(os.Getenv("HOME"), ".cache", "wasm2go-run")
+	if home := os.Getenv("HOME"); home != "" {
+		return filepath.Join(home, ".cache", "wasm2go-run")
+	}
+	if dir, err := os.UserCacheDir(); err == nil {
+		return filepath.Join(dir, "wasm2go-run")
+	}
+	return filepath.Join(os.TempDir(), "wasm2go-run")
 }

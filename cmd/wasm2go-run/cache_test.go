@@ -169,6 +169,34 @@ func TestCacheDirResolution(t *testing.T) {
 	}
 }
 
+func TestCacheDirHomeFallback(t *testing.T) {
+	t.Run("HOME set uses HOME/.cache/wasm2go-run", func(t *testing.T) {
+		home := t.TempDir()
+		t.Setenv("WASM2GO_RUN_CACHE_DIR", "")
+		t.Setenv("XDG_CACHE_HOME", "")
+		t.Setenv("HOME", home)
+
+		want := filepath.Join(home, ".cache", "wasm2go-run")
+		if got := cacheDir(); got != want {
+			t.Errorf("cacheDir() = %q, want %q", got, want)
+		}
+	})
+
+	t.Run("HOME empty falls back to a wasm2go-run directory", func(t *testing.T) {
+		t.Setenv("WASM2GO_RUN_CACHE_DIR", "")
+		t.Setenv("XDG_CACHE_HOME", "")
+		t.Setenv("HOME", "")
+
+		got := cacheDir()
+		if filepath.Base(got) != "wasm2go-run" {
+			t.Errorf("cacheDir() = %q, want path ending in wasm2go-run", got)
+		}
+		if got == filepath.Join(".cache", "wasm2go-run") || !filepath.IsAbs(got) {
+			t.Errorf("cacheDir() = %q, must be absolute and not relative to an empty HOME", got)
+		}
+	})
+}
+
 func TestCacheTranspileStoreAndRetrieve(t *testing.T) {
 	tmpDir := t.TempDir()
 	t.Setenv("WASM2GO_RUN_CACHE_DIR", tmpDir)
