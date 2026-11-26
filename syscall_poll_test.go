@@ -2,6 +2,7 @@ package wasihost
 
 import (
 	"encoding/binary"
+	"runtime"
 	"strings"
 	"testing"
 	"time"
@@ -924,6 +925,9 @@ func pollOneoffFdRead(t *testing.T, s *State, buf []byte, fd uint32) uint32 {
 // TestPollOneoffFdReadNonblockHostPipe verifies poll_oneoff fd_read and fd_read
 // stay consistent with fd_fdstat_set_flags NONBLOCK on a host-backed pipe.
 func TestPollOneoffFdReadNonblockHostPipe(t *testing.T) {
+	if runtime.GOOS == "windows" {
+		t.Skip("/dev/fd is Unix-only")
+	}
 	const (
 		iovsOff  = 3000
 		dataOff  = 4000

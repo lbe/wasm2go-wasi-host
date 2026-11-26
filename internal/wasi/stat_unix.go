@@ -40,3 +40,9 @@ func statFromFileInfo(info fs.FileInfo) Stat_t {
 	}
 	return defaultStatFromFileInfo(info)
 }
+
+// hostInode is only needed where fs.FileInfo lacks an inode; on Unix
+// syscall.Stat_t already carries it.
+func hostInode(string) Inode {
+	return 0
+}

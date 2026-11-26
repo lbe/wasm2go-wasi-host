@@ -79,7 +79,8 @@ func (f *FileEntry) DirentCache() (*DirentCache, Errno) {
 	if f.IsPreopen || readPath == "" || readPath == "/" {
 		readPath = "."
 	}
-	f.direntCache = &DirentCache{f: f.File, fs: extractFS(f.FS), readPath: readPath, dotEntries: dotEntries[:]}
+	fsys, hostDir := extractFSAndHostDir(f.FS)
+	f.direntCache = &DirentCache{f: f.File, fs: fsys, hostDir: hostDir, readPath: readPath, dotEntries: dotEntries[:]}
 	return f.direntCache, 0
 }
 

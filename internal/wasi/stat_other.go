@@ -16,3 +16,8 @@ import "io/fs"
 func statFromFileInfo(info fs.FileInfo) Stat_t {
 	return defaultStatFromFileInfo(info)
 }
+
+// hostInode is not available on this platform.
+func hostInode(string) Inode {
+	return 0
+}

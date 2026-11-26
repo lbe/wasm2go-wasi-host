@@ -135,6 +135,9 @@ func (s *State) Xpath_symlink(oldPathPtr, oldPathLen, dirfd, newPathPtr, newPath
 
 	if strings.HasPrefix(oldPath, "/") {
 		hostPath := vfsHostPath(m.preopen, m.guestPath, m.vpath)
+		if _, err := os.Lstat(hostPath); err == nil {
+			return wasiEExist
+		}
 		if err := os.Symlink(oldPath, hostPath); err != nil {
 			return mapOSError(err)
 		}

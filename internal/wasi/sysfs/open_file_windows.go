@@ -12,6 +12,7 @@ package sysfs
 import (
 	"io/fs"
 	"os"
+	"path/filepath"
 	"strings"
 	"syscall"
 	"unsafe"
@@ -26,14 +27,14 @@ func openFile(path string, oflag wasi.Oflag, perm fs.FileMode) (*os.File, wasi.E
 	// TODO: document why we are opening twice
 	fd, err := open(path, flag|syscall.O_CLOEXEC, uint32(perm))
 	if err == nil {
-		return os.NewFile(uintptr(fd), path), 0
+		return requireDirectory(os.NewFile(uintptr(fd), path), isDir)
 	}
 
 	// TODO: Set FILE_SHARE_DELETE for directory as well.
 	f, err := os.OpenFile(path, flag, perm)
 	errno := wasi.UnwrapOSError(err)
 	if errno == 0 {
-		return f, 0
+		return requireDirectory(f, isDir)
 	}
 
 	switch errno {
@@ -42,10 +43,11 @@ func openFile(path string, oflag wasi.Oflag, perm fs.FileMode) (*os.File, wasi.E
 		if strings.HasSuffix(path, "/") {
 			errno = wasi.ENOTDIR
 		}
-	// To match expectations of WASI, e.g. TinyGo TestStatBadDir, return
-	// ENOENT, not ENOTDIR.
+	// Windows reports ERROR_PATH_NOT_FOUND (Go's syscall.ENOTDIR) both for a
+	// missing parent directory and for a parent that is a regular file. POSIX
+	// distinguishes them as ENOENT and ENOTDIR.
 	case wasi.ENOTDIR:
-		if !strings.HasSuffix(path, "/") {
+		if !strings.HasSuffix(path, "/") && !parentIsNonDirectory(path) {
 			errno = wasi.ENOENT
 		}
 	case wasi.ENOENT:
@@ -167,4 +169,37 @@ func open(path string, mode int, perm uint32) (fd syscall.Handle, err error) {
 
 	h, e := syscall.CreateFile(pathp, access, sharemode, sa, createmode, attrs, 0)
 	return h, e
+}
+
+// requireDirectory closes f and returns ENOTDIR when wantDir is set and f is
+// not a directory. Opening a symlink to a file with O_DIRECTORY succeeds on
+// Windows, while POSIX requires ENOTDIR.
+func requireDirectory(f *os.File, wantDir bool) (*os.File, wasi.Errno) {
+	if !wantDir {
+		return f, 0
+	}
+	st, err := f.Stat()
+	if err != nil {
+		_ = f.Close()
+		return nil, wasi.UnwrapOSError(err)
+	}
+	if !st.IsDir() {
+		_ = f.Close()
+		return nil, wasi.ENOTDIR
+	}
+	return f, 0
+}
+
+// parentIsNonDirectory reports whether the nearest existing ancestor of p is
+// something other than a directory, as when "file.txt/child" is opened.
+func parentIsNonDirectory(p string) bool {
+	for dir := filepath.Dir(p); ; dir = filepath.Dir(dir) {
+		st, err := os.Stat(dir)
+		if err == nil {
+			return !st.IsDir()
+		}
+		if parent := filepath.Dir(dir); parent == dir {
+			return false
+		}
+	}
 }

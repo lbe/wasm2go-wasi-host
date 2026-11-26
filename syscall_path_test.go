@@ -1114,7 +1114,7 @@ func TestPathRenameSyscall(t *testing.T) {
 		}
 	})
 
-	t.Run("empty directory rename: OS-specific behavior", func(t *testing.T) {
+	t.Run("empty directory rename over existing empty directory", func(t *testing.T) {
 		t.Parallel()
 		s, buf := newTestState(nil)
 		hostDir := setupWritableMount(t, s, buf)
@@ -1135,32 +1135,21 @@ func TestPathRenameSyscall(t *testing.T) {
 		srcOff, srcLen := writePath(buf, pathOff1, "empty_src")
 		targetOff, targetLen := writePath(buf, pathOff2, "empty_target")
 
-		// Xpath_rename should behave differently based on OS
+		// The host reports POSIX semantics on every OS: renaming an empty
+		// directory over an existing empty directory succeeds.
 		errno := s.Xpath_rename(dirfd, srcOff, srcLen, dirfd, targetOff, targetLen)
+		if errno != wasiESuccess {
+			t.Fatalf("Xpath_rename on empty directory (over existing) should succeed on darwin/linux, got %d", errno)
+		}
 
-		if runtime.GOOS == "windows" {
-			// On Windows, renaming a directory over an existing directory should fail
-			if errno == wasiESuccess {
-				t.Errorf("Xpath_rename on empty directory (over existing) should fail on Windows, got ESUCCESS")
-			} else {
-				// Cleanup would be tricky because we might not have permission; skip cleanup if error
-				return
-			}
-		} else {
-			// On darwin/linux, renaming a directory over an existing directory should succeed
-			if errno != wasiESuccess {
-				t.Fatalf("Xpath_rename on empty directory (over existing) should succeed on darwin/linux, got %d", errno)
-			}
+		// Verify source directory is gone
+		if _, err := os.Stat(srcDir); !os.IsNotExist(err) {
+			t.Errorf("Source directory still exists after rename")
+		}
 
-			// Verify source directory is gone
-			if _, err := os.Stat(srcDir); !os.IsNotExist(err) {
-				t.Errorf("Source directory still exists after rename")
-			}
-
-			// Verify target directory exists
-			if _, err := os.Stat(targetDir); os.IsNotExist(err) {
-				t.Errorf("Target directory does not exist after rename")
-			}
+		// Verify target directory exists
+		if _, err := os.Stat(targetDir); os.IsNotExist(err) {
+			t.Errorf("Target directory does not exist after rename")
 		}
 
 		// Cleanup only if successful (or on non-Windows)
