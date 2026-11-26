@@ -11,6 +11,7 @@ import (
 
 func TestExecute(t *testing.T) {
 	t.Run("returns 0 on success and cleans up buildDir", func(t *testing.T) {
+		skipWithoutPOSIXShell(t)
 		tempDir, err := os.MkdirTemp("", "wasm2go-test-*")
 		if err != nil {
 			t.Fatalf("failed to create temp dir: %v", err)
@@ -35,6 +36,7 @@ func TestExecute(t *testing.T) {
 	})
 
 	t.Run("returns non-zero exit code on failure and cleans up buildDir", func(t *testing.T) {
+		skipWithoutPOSIXShell(t)
 		tempDir, err := os.MkdirTemp("", "wasm2go-test-*")
 		if err != nil {
 			t.Fatalf("failed to create temp dir: %v", err)
@@ -85,6 +87,7 @@ func TestExecute(t *testing.T) {
 	})
 
 	t.Run("streams stdout and stderr", func(t *testing.T) {
+		skipWithoutPOSIXShell(t)
 		scriptDir := t.TempDir()
 		scriptPath := filepath.Join(scriptDir, "test-script.sh")
 		scriptContent := "#!/bin/sh\necho 'hello stdout'\necho 'hello stderr' >&2\n"
@@ -125,6 +128,7 @@ func TestExecute(t *testing.T) {
 	})
 
 	t.Run("wires stdin to child process", func(t *testing.T) {
+		skipWithoutPOSIXShell(t)
 		scriptDir := t.TempDir()
 		scriptPath := filepath.Join(scriptDir, "test-stdin.sh")
 		scriptContent := "#!/bin/sh\nread input\necho \"got $input\"\n"

@@ -3,8 +3,9 @@ package wasihost
 import (
 	"encoding/binary"
 	"os"
-	"runtime"
 	"strings"
+
+	"github.com/lbe/wasm2go-wasi-host/internal/wasi/sysfs"
 )
 
 // Xpath_create_directory implements path_create_directory. Creates a
@@ -134,6 +135,9 @@ func (s *State) Xpath_symlink(oldPathPtr, oldPathLen, dirfd, newPathPtr, newPath
 
 	if strings.HasPrefix(oldPath, "/") {
 		hostPath := vfsHostPath(m.preopen, m.guestPath, m.vpath)
+		if _, err := os.Lstat(hostPath); err == nil {
+			return wasiEExist
+		}
 		if err := os.Symlink(oldPath, hostPath); err != nil {
 			return mapOSError(err)
 		}
@@ -192,7 +196,7 @@ func (s *State) validateLinkParams(oldPath, newPath string, oldFlags, newPathPtr
 }
 
 // createHardLinkToSymlink creates a hard link to a symlink inode.
-// This uses platform-specific linkSymlinkInode to link the symlink itself,
+// This uses sysfs.LinkNoFollow to link the symlink itself,
 // not the target it points to.
 func (s *State) createHardLinkToSymlink(oldP, newP *PreopenEntry, oldGuest, newGuest, oldVpath, newVpath string) int32 {
 	if s.vfsPathExists(newP, newVpath) {
@@ -200,7 +204,7 @@ func (s *State) createHardLinkToSymlink(oldP, newP *PreopenEntry, oldGuest, newG
 	}
 	oldHost := vfsHostPath(oldP, oldGuest, oldVpath)
 	newHost := vfsHostPath(newP, newGuest, newVpath)
-	if err := linkSymlinkInode(oldHost, newHost); err != nil {
+	if err := sysfs.LinkNoFollow(oldHost, newHost); err != nil {
 		return mapOSError(err)
 	}
 	return wasiESuccess
@@ -271,11 +275,9 @@ func (s *State) validateRename(oldP, newP *PreopenEntry, newRel, newGuest, oldVp
 	return wasiESuccess
 }
 
-// dirNotEmptyErr returns the appropriate error for a non-empty directory target.
+// dirNotEmptyErr returns the errno for a non-empty directory target. The host
+// reports Unix-style errnos on every platform, Windows included.
 func (s *State) dirNotEmptyErr() int32 {
-	if runtime.GOOS == "windows" {
-		return wasiEAcces
-	}
 	return wasiENotEmpty
 }
 

@@ -11,6 +11,7 @@ import (
 	"io"
 	"io/fs"
 	"os"
+	"path/filepath"
 	"reflect"
 )
 
@@ -34,6 +35,11 @@ type DirentCache struct {
 	// the FS wraps an fs.FS (e.g., osDirFS in tests).
 	fs fs.FS
 
+	// hostDir is the host directory behind fs when fs was built from a
+	// host-path FS (sysfs.DirFS). It lets readFileDir look up inode numbers
+	// that fs.FileInfo does not carry on every platform (Windows).
+	hostDir string
+
 	// readPath is the path to read from when falling back to fs.ReadDir.
 	// It is derived from FileEntry.Name and normalized ("" or "/" becomes ".").
 	readPath string
@@ -56,10 +62,13 @@ type DirentCache struct {
 	fsDirentsLoaded bool
 }
 
-// extractFS attempts to extract an fs.FS from a wasi.FS using reflection.
+// extractFSAndHostDir extracts an fs.FS from a wasi.FS using reflection.
 // This handles the common case where the wasi.FS wraps an fs.FS (e.g.,
 // osDirFS in tests, or sysfs.DirFS).
-func extractFS(wfs FS) fs.FS {
+//
+// It also returns the host directory when the FS is backed by one (a string
+// Path field), or "" otherwise.
+func extractFSAndHostDir(wfs FS) (fs.FS, string) {
 	v := reflect.ValueOf(wfs)
 	// Dereference pointer to get the underlying struct.
 	//nolint:govet // reflect.Ptr is clearer than the literal 22
@@ -67,20 +76,20 @@ func extractFS(wfs FS) fs.FS {
 		v = v.Elem()
 	}
 	if v.Kind() != reflect.Struct {
-		return nil
+		return nil, ""
 	}
 	field := v.FieldByName("FS")
 	if field.IsValid() && field.CanInterface() {
 		if fsys, ok := field.Interface().(fs.FS); ok {
-			return fsys
+			return fsys, ""
 		}
 	}
 	if field := v.FieldByName("Path"); field.IsValid() && field.Kind() == reflect.String {
 		if path, ok := field.Interface().(string); ok && path != "" {
-			return os.DirFS(path)
+			return os.DirFS(path), path
 		}
 	}
-	return nil
+	return nil, ""
 }
 
 // SetDotDotIno sets the inode for the synthetic ".." entry when known (writable host mounts).
@@ -92,7 +101,7 @@ func (d *DirentCache) SetDotDotIno(ino Inode) {
 
 // readFileDir reads up to n directory entries from fsys at path,
 // returning them as wasi.Dirents. If n <= 0, all entries are read.
-func readFileDir(fsys fs.FS, path string, n int) ([]Dirent, error) {
+func readFileDir(fsys fs.FS, hostDir, path string, n int) ([]Dirent, error) {
 	entries, err := fs.ReadDir(fsys, path)
 	if err != nil {
 		return nil, err
@@ -105,6 +114,9 @@ func readFileDir(fsys fs.FS, path string, n int) ([]Dirent, error) {
 		d := Dirent{Name: e.Name(), Type: e.Type()}
 		if info, err := e.Info(); err == nil {
 			d.Ino = NewStat_t(info).Ino
+		}
+		if d.Ino == 0 && hostDir != "" {
+			d.Ino = hostInode(filepath.Join(hostDir, filepath.FromSlash(path), e.Name()))
 		}
 		dirents = append(dirents, d)
 	}
@@ -119,7 +131,7 @@ func (d *DirentCache) readFSFallbackDir(countToRead int) (newDirents []Dirent, e
 	}
 	if !d.fsDirentsLoaded {
 		var err error
-		d.fsDirents, err = readFileDir(d.fs, d.readPath, 0)
+		d.fsDirents, err = readFileDir(d.fs, d.hostDir, d.readPath, 0)
 		if err != nil {
 			return nil, UnwrapOSError(err)
 		}

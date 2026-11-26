@@ -28,6 +28,29 @@ jobs:
           version: v2.12.2
           args: --timeout=5m
 
+  cross-compile:
+    # Cheap portability check: build and vet for platforms without a test runner.
+    runs-on: ubuntu-latest
+    strategy:
+      fail-fast: false
+      matrix:
+        goos: [freebsd, windows]
+    env:
+      GOOS: ${{ matrix.goos }}
+      GOARCH: amd64
+    steps:
+      - uses: actions/checkout@v6
+      - name: Set up Go
+        uses: actions/setup-go@v6
+        with:
+          go-version-file: go.mod
+      - name: Build
+        run: go build ./...
+      - name: Vet
+        # wasi.File.Seek returns wasi.Errno (wazero's convention), which the
+        # stdmethods check flags because it is not io.Seeker's signature.
+        run: go vet -stdmethods=false ./...
+
   test:
     runs-on: ${{ matrix.runs-on }}
     strategy:
@@ -40,7 +63,13 @@ jobs:
             runs-on: macos-latest
           - id: linux-arm
             runs-on: ubuntu-24.04-arm
+          - id: windows
+            runs-on: windows-latest
     steps:
+      - name: Keep LF line endings on Windows
+        if: runner.os == 'Windows'
+        run: git config --global core.autocrlf false
+
       - uses: actions/checkout@v6
         with:
           submodules: recursive
@@ -52,6 +81,7 @@ jobs:
           cache: true
 
       - name: Install pytest
+        if: runner.os != 'Windows'
         run: python3 -m pip install --break-system-packages pytest
 
       - name: Install golangci-lint

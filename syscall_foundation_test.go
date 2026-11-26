@@ -213,6 +213,7 @@ func TestFoundationSyscalls(t *testing.T) {
 		if errno != 0 {
 			t.Fatal(errno)
 		}
+		t.Cleanup(func() { _ = wf.Close() }) // before subdir removal (Windows)
 		insertTestFileAt(s, 5, &wasi.FileEntry{
 			GuestPath: "/tmp/subdir",
 			File:      wf,

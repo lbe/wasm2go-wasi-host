@@ -500,6 +500,9 @@ func resolvedPathConfinementErrno(resolvedPath, root string) int32 {
 func (s *State) resolveDirfdPath(dirfd, pathPtr, pathLen int32) (*PreopenEntry, string) {
 	pathBytes := s.readBytes(pathPtr, pathLen)
 	guestPath := string(pathBytes)
+	if !sysfs.GuestPathOK(guestPath) {
+		return nil, ""
+	}
 	if strings.HasPrefix(guestPath, "/") {
 		if s.isNonPreopenDirfd(dirfd) {
 			return nil, ""

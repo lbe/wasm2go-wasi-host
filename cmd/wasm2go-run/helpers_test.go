@@ -11,10 +11,20 @@ import (
 
 const fakeFailGoScript = "#!/bin/sh\necho 'fake go should not be called' >&2\nexit 1\n"
 
+// skipWithoutPOSIXShell skips the test on Windows, where the tests that
+// exec "/usr/bin/..." binaries or fake *.sh scripts cannot run.
+func skipWithoutPOSIXShell(t *testing.T) {
+	t.Helper()
+	if runtime.GOOS == "windows" {
+		t.Skip("needs a POSIX shell and Unix executables")
+	}
+}
+
 // installFakeWasm2go writes a fake wasm2go executable into dir, prepends dir
 // to PATH, and marks the file executable.
 func installFakeWasm2go(t *testing.T, dir, script string) {
 	t.Helper()
+	skipWithoutPOSIXShell(t)
 	fakeWasm2go := filepath.Join(dir, "wasm2go")
 	if err := os.WriteFile(fakeWasm2go, []byte(script), 0o755); err != nil {
 		t.Fatal(err)
@@ -71,6 +81,7 @@ func tier2CachedRunnerPath(bkey string) string {
 // directory and prepends that directory to PATH.
 func installFakeFailGo(t *testing.T) {
 	t.Helper()
+	skipWithoutPOSIXShell(t)
 	dir := t.TempDir()
 	if err := os.WriteFile(filepath.Join(dir, "go"), []byte(fakeFailGoScript), 0o755); err != nil {
 		t.Fatal(err)

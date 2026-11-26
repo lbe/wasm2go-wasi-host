@@ -10,7 +10,6 @@ package testfixture
 import (
 	"embed"
 	"io/fs"
-	"path/filepath"
 
 	"github.com/lbe/wasm2go-wasi-host/internal/wasi"
 )
@@ -24,8 +23,9 @@ type MapFS struct{}
 
 // ReadFile reads a file from the embedded filesystem (helper for testing).
 func (m MapFS) ReadFile(name string) ([]byte, error) {
-	cleaned := filepath.FromSlash(name)
-	if len(cleaned) > 0 && cleaned[0] == filepath.Separator {
+	// fs.FS names always use '/', so no OS-specific conversion is needed.
+	cleaned := name
+	if len(cleaned) > 0 && cleaned[0] == '/' {
 		cleaned = cleaned[1:]
 	}
 	return embeddedFiles.ReadFile(cleaned)
@@ -33,8 +33,9 @@ func (m MapFS) ReadFile(name string) ([]byte, error) {
 
 // Open opens a file in the embedded filesystem (implements fs.FS).
 func (m MapFS) Open(name string) (fs.File, error) {
-	cleaned := filepath.FromSlash(name)
-	if len(cleaned) > 0 && cleaned[0] == filepath.Separator {
+	// fs.FS names always use '/', so no OS-specific conversion is needed.
+	cleaned := name
+	if len(cleaned) > 0 && cleaned[0] == '/' {
 		cleaned = cleaned[1:]
 	}
 	return embeddedFiles.Open(cleaned)
@@ -48,8 +49,8 @@ func (m MapFS) PathFor() string {
 // OpenFile opens a file in the embedded filesystem.
 func (m MapFS) OpenFile(path string, flag wasi.Oflag, perm fs.FileMode) (wasi.File, wasi.Errno) {
 	// Clean the path
-	cleaned := filepath.FromSlash(path)
-	if len(cleaned) > 0 && cleaned[0] == filepath.Separator {
+	cleaned := path
+	if len(cleaned) > 0 && cleaned[0] == '/' {
 		cleaned = cleaned[1:]
 	}
 

@@ -11,7 +11,7 @@ import (
 
 const (
 	compileModuleName = "tmprunner"
-	compileBinaryName = "runner"
+	compileBinaryName = "runner" + exeSuffix
 )
 
 var wasiHostPath = func() string {

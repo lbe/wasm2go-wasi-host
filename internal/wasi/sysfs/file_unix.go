@@ -15,6 +15,11 @@ import (
 	"github.com/lbe/wasm2go-wasi-host/internal/wasi"
 )
 
+const (
+	nonBlockingFileReadSupported  = true
+	nonBlockingFileWriteSupported = true
+)
+
 func rmdir(path string) wasi.Errno {
 	err := syscall.Rmdir(path)
 	return wasi.UnwrapOSError(err)

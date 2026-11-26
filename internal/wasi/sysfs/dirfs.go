@@ -120,6 +120,11 @@ func (d DirFS) Symlink(oldName, link string) wasi.Errno {
 	if errno != 0 {
 		return errno
 	}
+	// Windows reports ERROR_ACCESS_DENIED (not "exists") when the link name
+	// is an existing directory, so check first.
+	if _, err := os.Lstat(joined); err == nil {
+		return wasi.EEXIST
+	}
 	err := os.Symlink(oldName, joined)
 	return wasi.UnwrapOSError(err)
 }
@@ -133,7 +138,8 @@ func (d DirFS) Readlink(link string) (string, wasi.Errno) {
 	if err != nil {
 		return "", wasi.UnwrapOSError(err)
 	}
-	return dst, 0
+	// os.Symlink stores Windows targets with '\'; guests expect WASI '/'.
+	return filepath.ToSlash(dst), 0
 }
 
 func (d DirFS) Utimens(path string, atim, mtim int64) wasi.Errno {

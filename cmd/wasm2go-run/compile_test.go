@@ -142,6 +142,7 @@ func TestCompile(t *testing.T) {
 }
 
 func TestCompileCacheDisabledSkipsTier2Cache(t *testing.T) {
+	skipWithoutPOSIXShell(t)
 	requireWasm2go(t)
 
 	cacheDir := t.TempDir()

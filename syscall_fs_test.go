@@ -194,7 +194,7 @@ func TestFilesystemMutationSyscalls(t *testing.T) {
 		got, err := os.Readlink(filepath.Join(hostDir, "newsym"))
 		if err != nil {
 			t.Errorf("os.Readlink failed: %v", err)
-		} else if got != "/some/target" {
+		} else if got = filepath.ToSlash(got); got != "/some/target" {
 			t.Errorf("symlink target = %q, want %q", got, "/some/target")
 		}
 	})

@@ -283,11 +283,16 @@ func (c *ModuleConfig) WithNanotime(n wasi.Nanotime, res wasi.ClockResolution) *
 
 // WithSysNanotime returns a new ModuleConfig with monotonic time from time.Since.
 func (c *ModuleConfig) WithSysNanotime() *ModuleConfig {
-	start := time.Now()
 	return c.WithNanotime(func() int64 {
-		return time.Since(start).Nanoseconds()
+		return time.Since(nanotimeBase).Nanoseconds()
 	}, SysClockResolutionNanotime)
 }
+
+// nanotimeBase is the monotonic origin for WithSysNanotime. It is fixed at
+// package initialization rather than at config time, so the clock is already
+// positive when a guest first reads it, even on hosts with a coarse
+// monotonic clock such as Windows.
+var nanotimeBase = time.Now()
 
 // WithNanosleep returns a new ModuleConfig with the given nanosleep function.
 func (c *ModuleConfig) WithNanosleep(ns wasi.Nanosleep) *ModuleConfig {

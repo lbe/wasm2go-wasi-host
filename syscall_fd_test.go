@@ -2053,6 +2053,7 @@ func TestPositionedIOSyscalls(t *testing.T) {
 		if errno != 0 {
 			t.Fatalf("OpenFSFile: %v", errno)
 		}
+		t.Cleanup(func() { _ = wf.Close() }) // before dir removal (Windows)
 		insertStubFD(s, 5, wf, 0)
 		if errno := s.Xfd_datasync(5); errno != wasiESuccess {
 			t.Errorf("got %d, want ESUCCESS", errno)

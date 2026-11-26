@@ -125,9 +125,10 @@ func TestTranspileCacheKeyIsStableAndSensitive(t *testing.T) {
 
 func TestCacheDirResolution(t *testing.T) {
 	tests := []struct {
-		name string
-		env  map[string]string
-		want string
+		name    string
+		env     map[string]string
+		want    string
+		useHome bool // set HOME to a temp dir and derive the expected path from it
 	}{
 		{
 			name: "WASM2GO_RUN_CACHE_DIR takes precedence",
@@ -151,7 +152,7 @@ func TestCacheDirResolution(t *testing.T) {
 				"WASM2GO_RUN_CACHE_DIR": "",
 				"XDG_CACHE_HOME":        "",
 			},
-			want: filepath.Join(os.Getenv("HOME"), ".cache", "wasm2go-run"),
+			useHome: true,
 		},
 	}
 
@@ -160,13 +161,47 @@ func TestCacheDirResolution(t *testing.T) {
 			for k, v := range tt.env {
 				t.Setenv(k, v)
 			}
+			want := tt.want
+			if tt.useHome {
+				home := t.TempDir()
+				t.Setenv("HOME", home)
+				want = filepath.Join(home, ".cache", "wasm2go-run")
+			}
 
 			got := cacheDir()
-			if got != tt.want {
-				t.Errorf("cacheDir() = %q, want %q", got, tt.want)
+			if got != want {
+				t.Errorf("cacheDir() = %q, want %q", got, want)
 			}
 		})
 	}
+}
+
+func TestCacheDirHomeFallback(t *testing.T) {
+	t.Run("HOME set uses HOME/.cache/wasm2go-run", func(t *testing.T) {
+		home := t.TempDir()
+		t.Setenv("WASM2GO_RUN_CACHE_DIR", "")
+		t.Setenv("XDG_CACHE_HOME", "")
+		t.Setenv("HOME", home)
+
+		want := filepath.Join(home, ".cache", "wasm2go-run")
+		if got := cacheDir(); got != want {
+			t.Errorf("cacheDir() = %q, want %q", got, want)
+		}
+	})
+
+	t.Run("HOME empty falls back to a wasm2go-run directory", func(t *testing.T) {
+		t.Setenv("WASM2GO_RUN_CACHE_DIR", "")
+		t.Setenv("XDG_CACHE_HOME", "")
+		t.Setenv("HOME", "")
+
+		got := cacheDir()
+		if filepath.Base(got) != "wasm2go-run" {
+			t.Errorf("cacheDir() = %q, want path ending in wasm2go-run", got)
+		}
+		if got == filepath.Join(".cache", "wasm2go-run") || !filepath.IsAbs(got) {
+			t.Errorf("cacheDir() = %q, must be absolute and not relative to an empty HOME", got)
+		}
+	})
 }
 
 func TestCacheTranspileStoreAndRetrieve(t *testing.T) {
@@ -879,6 +914,7 @@ func TestConcurrentCachePutBuildSingleWriterSafeReaders(t *testing.T) {
 }
 
 func TestFailedBuildDoesNotPolluteTier2Cache(t *testing.T) {
+	skipWithoutPOSIXShell(t)
 	requireWasm2go(t)
 	if _, err := exec.LookPath("go"); err != nil {
 		t.Skip("go not on PATH")
