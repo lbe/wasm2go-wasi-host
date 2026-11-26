@@ -12,7 +12,7 @@ This document describes how tests are organized, when to run each tier, and how 
 | E2e full | `make test-e2e` / `go test -tags=e2e ./...` | ~25s | All 72 wasi-testsuite `wasm32-wasip1` cases + `TestQualityGate` |
 | Shell inventory | `./scripts/e2e-wasip1.sh` | ~11s | Same 72 cases through the Python adapter (backup / release check) |
 
-CI runs `go test -tags=e2e ./...` on Linux and macOS.
+CI runs `go test -tags=e2e ./...` on Linux, macOS and Windows, and cross-compiles and vets for FreeBSD and Windows.
 
 ## Layout
 

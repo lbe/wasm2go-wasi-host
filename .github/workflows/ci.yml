@@ -34,7 +34,7 @@ jobs:
     strategy:
       fail-fast: false
       matrix:
-        goos: [freebsd]
+        goos: [freebsd, windows]
     env:
       GOOS: ${{ matrix.goos }}
       GOARCH: amd64
@@ -63,7 +63,13 @@ jobs:
             runs-on: macos-latest
           - id: linux-arm
             runs-on: ubuntu-24.04-arm
+          - id: windows
+            runs-on: windows-latest
     steps:
+      - name: Keep LF line endings on Windows
+        if: runner.os == 'Windows'
+        run: git config --global core.autocrlf false
+
       - uses: actions/checkout@v6
         with:
           submodules: recursive
@@ -75,6 +81,7 @@ jobs:
           cache: true
 
       - name: Install pytest
+        if: runner.os != 'Windows'
         run: python3 -m pip install --break-system-packages pytest
 
       - name: Install golangci-lint

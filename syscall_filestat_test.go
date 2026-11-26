@@ -5,7 +5,6 @@ import (
 	"io/fs"
 	"os"
 	"path/filepath"
-	"syscall"
 	"testing"
 	"testing/fstest"
 	"time"
@@ -550,8 +549,8 @@ func TestPathAndFdFilestatDevIno(t *testing.T) {
 	if err != nil {
 		t.Fatalf("os.Stat(b.txt) failed: %v", err)
 	}
-	hostStatA := hostA.Sys().(*syscall.Stat_t)
-	hostStatB := hostB.Sys().(*syscall.Stat_t)
+	hostStatA := hostStatOf(hostA)
+	hostStatB := hostStatOf(hostB)
 	if hostStatA.Ino == 0 || hostStatB.Ino == 0 {
 		t.Skip("host filesystem reports st_ino == 0; cannot assert distinct non-zero ino")
 	}
@@ -1188,7 +1187,7 @@ func TestFdReaddirHostSyntheticDots(t *testing.T) {
 	if err != nil {
 		t.Fatalf("os.Stat(tempDir) failed: %v", err)
 	}
-	hostStat := hostInfo.Sys().(*syscall.Stat_t)
+	hostStat := hostStatOf(hostInfo)
 	wantIno := hostStat.Ino
 
 	if wantIno == 0 {
@@ -1595,7 +1594,7 @@ func TestFd_filestat_get_host_ino(t *testing.T) {
 		if err != nil {
 			t.Fatalf("os.Stat(tempDir) failed: %v", err)
 		}
-		hostStat := hostInfo.Sys().(*syscall.Stat_t)
+		hostStat := hostStatOf(hostInfo)
 		wantIno := hostStat.Ino
 		wantDev := uint64(hostStat.Dev)
 
@@ -1862,7 +1861,7 @@ func TestFdReaddirParentDino(t *testing.T) {
 	if err != nil {
 		t.Fatalf("os.Stat(sub) failed: %v", err)
 	}
-	subIno := subInfo.Sys().(*syscall.Stat_t).Ino
+	subIno := hostStatOf(subInfo).Ino
 
 	if subIno == 0 {
 		t.Skip("host reports st_ino == 0")
@@ -1935,7 +1934,7 @@ func TestFdReaddirParentDotDotInodeFromVFSStatLstat(t *testing.T) {
 	if err != nil {
 		t.Fatalf("os.Stat(parent) failed: %v", err)
 	}
-	hostParentIno := parentInfo.Sys().(*syscall.Stat_t).Ino
+	hostParentIno := hostStatOf(parentInfo).Ino
 	if hostParentIno == 0 {
 		t.Skip("host filesystem reports st_ino == 0")
 	}

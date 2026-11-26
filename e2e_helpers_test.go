@@ -63,10 +63,6 @@ var (
 func runWasiTestsuiteCases(t *testing.T, suiteDir string, cases []wasiTestsuiteCase) {
 	t.Helper()
 
-	if runtime.GOOS != "linux" && runtime.GOOS != "darwin" {
-		t.Skip("e2e test requires Unix-like environment")
-	}
-
 	repoRoot, err := os.Getwd()
 	if err != nil {
 		t.Fatalf("failed to get working directory: %v", err)
@@ -75,6 +71,10 @@ func runWasiTestsuiteCases(t *testing.T, suiteDir string, cases []wasiTestsuiteC
 	var binPath string
 	wasiTestsuiteOnce.Do(func() {
 		wasm2goRunPath = filepath.Join(repoRoot, "bin", "wasm2go-run")
+		if runtime.GOOS == "windows" {
+			// CreateProcess appends .exe to a name without an extension.
+			wasm2goRunPath += ".exe"
+		}
 		buildCmd := exec.Command("go", "build", "-o", wasm2goRunPath, "./cmd/wasm2go-run")
 		buildCmd.Dir = repoRoot
 		if out, err := buildCmd.CombinedOutput(); err != nil {
