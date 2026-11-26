@@ -1,4 +1,4 @@
-//go:build linux || darwin
+//go:build linux || darwin || freebsd
 
 // Copyright 2020-2023 The wazero Authors
 //

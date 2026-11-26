@@ -1910,7 +1910,7 @@ func setupOsFileFd(t *testing.T, s *State, fdIdx int32, content []byte) string {
 	}
 	t.Cleanup(func() { f.Close() })
 	insertTestFileAt(s, fdIdx, &wasi.FileEntry{
-		File:       wrapOSFile(f),
+		File:       wrapOSFile(t, f),
 		RightsBase: rightsRegularFile | rightFDAllocate,
 	})
 	return path

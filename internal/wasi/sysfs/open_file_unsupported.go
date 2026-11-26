@@ -1,4 +1,4 @@
-//go:build !linux && !darwin && !windows
+//go:build !linux && !darwin && !freebsd && !windows
 
 // Copyright 2020-2023 The wazero Authors
 //

@@ -53,3 +53,6 @@ wasi-testsuite/
 /.worktrees
 # Local planning notes (not package documentation)
 /docs/wazero-to-wasm2go-wasi-host-recommendations.md
+
+# CI caches synced into the FreeBSD VM job
+/.ci-cache/

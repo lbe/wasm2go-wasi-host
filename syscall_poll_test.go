@@ -925,8 +925,9 @@ func pollOneoffFdRead(t *testing.T, s *State, buf []byte, fd uint32) uint32 {
 // TestPollOneoffFdReadNonblockHostPipe verifies poll_oneoff fd_read and fd_read
 // stay consistent with fd_fdstat_set_flags NONBLOCK on a host-backed pipe.
 func TestPollOneoffFdReadNonblockHostPipe(t *testing.T) {
-	if runtime.GOOS == "windows" {
-		t.Skip("/dev/fd is Unix-only")
+	if runtime.GOOS != "linux" && runtime.GOOS != "darwin" {
+		// Windows has no /dev/fd; FreeBSD's exposes only fds 0-2 without fdescfs.
+		t.Skip("needs /dev/fd/N for arbitrary fds")
 	}
 	const (
 		iovsOff  = 3000

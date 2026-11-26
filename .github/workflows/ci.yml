@@ -11,13 +11,15 @@ on:
 permissions:
   contents: read
 
+env:
+  WASM2GO_VERSION: v0.4.2
+
 jobs:
   lint:
     runs-on: ubuntu-latest
     steps:
+      # The wasi-testsuite submodule has no Go files; skip fetching it.
       - uses: actions/checkout@v6
-        with:
-          submodules: recursive
       - name: Set up Go
         uses: actions/setup-go@v6
         with:
@@ -80,24 +82,105 @@ jobs:
           go-version-file: go.mod
           cache: true
 
-      - name: Install pytest
-        if: runner.os != 'Windows'
-        run: python3 -m pip install --break-system-packages pytest
+      - name: Configure caches
+        id: caches
+        shell: bash
+        run: |
+          echo "testsuite=$(git rev-parse HEAD:wasi-testsuite)" >> "$GITHUB_OUTPUT"
+          echo "GOBIN=$RUNNER_TEMP/gobin" >> "$GITHUB_ENV"
+          echo "$RUNNER_TEMP/gobin" >> "$GITHUB_PATH"
+          echo "WASM2GO_RUN_CACHE_DIR=$RUNNER_TEMP/wasm2go-run" >> "$GITHUB_ENV"
 
-      - name: Install golangci-lint
-        uses: golangci/golangci-lint-action@v9
+      - name: Cache wasm2go binary
+        id: wasm2go-bin
+        uses: actions/cache@v6
         with:
-          version: v2.12.2
-          install-only: true
+          path: ${{ runner.temp }}/gobin
+          key: wasm2go-bin-${{ runner.os }}-${{ runner.arch }}-${{ env.WASM2GO_VERSION }}-${{ hashFiles('go.mod') }}
+
+      # Tier-1 wasm2go-run cache: transpiled Go for each testsuite binary. Its
+      # entries are keyed by wasm content and wasm2go identity, so they only
+      # change with the submodule pin or the wasm2go version. The tier-2
+      # (compiled runner) cache depends on host source and is not kept.
+      - name: Cache transpiled testsuite modules
+        uses: actions/cache@v6
+        with:
+          path: ${{ runner.temp }}/wasm2go-run/transpile
+          key: wasm2go-transpile-${{ runner.os }}-${{ env.WASM2GO_VERSION }}-${{ steps.caches.outputs.testsuite }}
 
       - name: Install wasm2go
-        run: go install github.com/ncruces/wasm2go@v0.4.2
+        if: steps.wasm2go-bin.outputs.cache-hit != 'true'
+        run: go install github.com/ncruces/wasm2go@${{ env.WASM2GO_VERSION }}
 
       - name: Build
         run: go build -v ./...
 
       - name: Test
         run: go test -v -tags=e2e ./... -timeout 15m
+
+  # No GitHub-hosted FreeBSD runner exists, so the suite runs in a FreeBSD VM
+  # under QEMU on a Linux runner (vmactions/freebsd-vm). The Go toolchain,
+  # module cache, build cache, wasm2go and the transpile cache live in
+  # .ci-cache inside the workspace, which is synced into the VM, copied back
+  # afterwards, and saved with actions/cache.
+  test-freebsd:
+    runs-on: ubuntu-latest
+    timeout-minutes: 45
+    steps:
+      - uses: actions/checkout@v6
+        with:
+          submodules: recursive
+
+      - name: Resolve versions
+        id: ver
+        run: |
+          echo "go=$(awk '$1 == "go" { print $2 }' go.mod)" >> "$GITHUB_OUTPUT"
+          echo "testsuite=$(git rev-parse HEAD:wasi-testsuite)" >> "$GITHUB_OUTPUT"
+
+      - name: Cache FreeBSD toolchain and build caches
+        uses: actions/cache@v6
+        with:
+          path: .ci-cache
+          key: freebsd-go${{ steps.ver.outputs.go }}-${{ env.WASM2GO_VERSION }}-${{ hashFiles('go.sum') }}-${{ steps.ver.outputs.testsuite }}-${{ github.sha }}
+          restore-keys: |
+            freebsd-go${{ steps.ver.outputs.go }}-${{ env.WASM2GO_VERSION }}-${{ hashFiles('go.sum') }}-${{ steps.ver.outputs.testsuite }}-
+            freebsd-go${{ steps.ver.outputs.go }}-${{ env.WASM2GO_VERSION }}-
+
+      - name: Test in FreeBSD VM
+        uses: vmactions/freebsd-vm@v1.6.0
+        env:
+          GO_VERSION: ${{ steps.ver.outputs.go }}
+        with:
+          release: "15.1"
+          envs: GO_VERSION WASM2GO_VERSION
+          prepare: |
+            pkg install -y git
+            # The synced workspace keeps the runner's uid; let root's git use it.
+            git config --global --add safe.directory '*'
+          run: |
+            set -eu
+            # Work from a cache outside the repo so tools that walk the tree
+            # (gofmt in TestQualityGate) do not see the Go toolchain source;
+            # move it back at the end so it is copied out and saved.
+            CACHE=/var/tmp/ci-cache
+            rm -rf "$CACHE"
+            if [ -d .ci-cache ]; then mv .ci-cache "$CACHE"; else mkdir -p "$CACHE"; fi
+            if [ ! -x "$CACHE/go/bin/go" ] || ! "$CACHE/go/bin/go" version | grep -q "go$GO_VERSION "; then
+              rm -rf "$CACHE/go"
+              fetch -o - "https://go.dev/dl/go$GO_VERSION.freebsd-amd64.tar.gz" | tar -xzf - -C "$CACHE"
+            fi
+            export PATH="$CACHE/go/bin:$CACHE/gopath/bin:$PATH"
+            export GOPATH="$CACHE/gopath" GOCACHE="$CACHE/gocache" GOTOOLCHAIN=local
+            export WASM2GO_RUN_CACHE_DIR="$CACHE/wasm2go-run"
+            if [ ! -x "$CACHE/gopath/bin/wasm2go" ]; then
+              go install "github.com/ncruces/wasm2go@$WASM2GO_VERSION"
+            fi
+            go version
+            go build ./...
+            go test -tags=e2e ./... -timeout 30m
+            # Keep only the host-independent transpile cache.
+            rm -rf "$WASM2GO_RUN_CACHE_DIR/build"
+            mv "$CACHE" .ci-cache
 
   # Tier-2: ubuntu-24.04-{riscv,s390x,ppc64le-p10} need GitHub larger runners.
   # Default off so workflows do not queue forever. Enable: repo variable
@@ -124,17 +207,35 @@ jobs:
           go-version-file: go.mod
           cache: true
 
-      - name: Install pytest
-        run: python3 -m pip install --break-system-packages pytest
+      - name: Configure caches
+        id: caches
+        shell: bash
+        run: |
+          echo "testsuite=$(git rev-parse HEAD:wasi-testsuite)" >> "$GITHUB_OUTPUT"
+          echo "GOBIN=$RUNNER_TEMP/gobin" >> "$GITHUB_ENV"
+          echo "$RUNNER_TEMP/gobin" >> "$GITHUB_PATH"
+          echo "WASM2GO_RUN_CACHE_DIR=$RUNNER_TEMP/wasm2go-run" >> "$GITHUB_ENV"
 
-      - name: Install golangci-lint
-        uses: golangci/golangci-lint-action@v9
+      - name: Cache wasm2go binary
+        id: wasm2go-bin
+        uses: actions/cache@v6
         with:
-          version: v2.12.2
-          install-only: true
+          path: ${{ runner.temp }}/gobin
+          key: wasm2go-bin-${{ runner.os }}-${{ runner.arch }}-${{ env.WASM2GO_VERSION }}-${{ hashFiles('go.mod') }}
+
+      # Tier-1 wasm2go-run cache: transpiled Go for each testsuite binary. Its
+      # entries are keyed by wasm content and wasm2go identity, so they only
+      # change with the submodule pin or the wasm2go version. The tier-2
+      # (compiled runner) cache depends on host source and is not kept.
+      - name: Cache transpiled testsuite modules
+        uses: actions/cache@v6
+        with:
+          path: ${{ runner.temp }}/wasm2go-run/transpile
+          key: wasm2go-transpile-${{ runner.os }}-${{ env.WASM2GO_VERSION }}-${{ steps.caches.outputs.testsuite }}
 
       - name: Install wasm2go
-        run: go install github.com/ncruces/wasm2go@v0.4.2
+        if: steps.wasm2go-bin.outputs.cache-hit != 'true'
+        run: go install github.com/ncruces/wasm2go@${{ env.WASM2GO_VERSION }}
 
       - name: Build
         run: go build -v ./...

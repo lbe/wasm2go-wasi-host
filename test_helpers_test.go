@@ -164,11 +164,15 @@ func allocHostPipeReaderFD(t *testing.T, s *State) (fd int32, writeEnd *os.File)
 	return allocStubFD(s, wf, rights), w
 }
 
-func wrapOSFile(f *os.File) wasi.File {
+// wrapOSFile opens a second, wasi.File handle on f's path and closes it when
+// the test ends (before t.TempDir removal, which Windows needs).
+func wrapOSFile(t testing.TB, f *os.File) wasi.File {
+	t.Helper()
 	wf, errno := sysfs.OpenOSFile(f.Name(), wasi.O_RDWR, 0)
 	if errno != 0 {
-		panic(errno)
+		t.Fatalf("OpenOSFile(%q): errno %d", f.Name(), errno)
 	}
+	t.Cleanup(func() { _ = wf.Close() })
 	return wf
 }
 

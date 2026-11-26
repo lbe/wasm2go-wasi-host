@@ -262,6 +262,7 @@ func TestReadonlyPathReadlink(t *testing.T) {
 	if openErrno != 0 {
 		t.Fatalf("OpenFile preopen: errno %d", openErrno)
 	}
+	t.Cleanup(func() { _ = wf.Close() }) // before t.TempDir removal (Windows)
 	insertTestFileAt(s, 3, &wasi.FileEntry{
 		FS:               fsys,
 		Name:             "ro",

@@ -914,6 +914,7 @@ func TestFdFilestatSetSizeReturnsWazeroErrnoViaFileTruncate(t *testing.T) {
 		if wasiErrno != 0 {
 			t.Fatalf("OpenFile failed: %v", wasiErrno)
 		}
+		t.Cleanup(func() { _ = f.Close() }) // before t.TempDir removal (Windows)
 		insertStubFD(s, 5, f, rightFDFilestatSetSize)
 
 		errno := s.Xfd_filestat_set_size(5, 99)
@@ -945,6 +946,7 @@ func TestFdFilestatSetSizeReturnsWazeroErrnoViaFileTruncate(t *testing.T) {
 		if wasiErrno != 0 {
 			t.Fatalf("OpenFile failed: %v", wasiErrno)
 		}
+		t.Cleanup(func() { _ = f.Close() }) // before t.TempDir removal (Windows)
 		insertStubFD(s, 5, f, rightFDFilestatSetSize)
 
 		errno := s.Xfd_filestat_set_size(5, 99)
@@ -964,6 +966,7 @@ func TestFdFilestatSetSizeReturnsWazeroErrnoViaFileTruncate(t *testing.T) {
 		if wasiErrno != 0 {
 			t.Fatalf("OpenFile directory failed: %v", wasiErrno)
 		}
+		t.Cleanup(func() { _ = f.Close() }) // before t.TempDir removal (Windows)
 		insertStubFD(s, 5, f, rightFDFilestatSetSize)
 
 		errno := s.Xfd_filestat_set_size(5, 99)
@@ -1047,6 +1050,7 @@ func TestFdFilestatSetTimesReturnsWazeroErrnoViaFileUtimens(t *testing.T) {
 		if wasiErrno != 0 {
 			t.Fatalf("OpenFile failed: %v", wasiErrno)
 		}
+		t.Cleanup(func() { _ = f.Close() }) // before t.TempDir removal (Windows)
 		insertStubFD(s, 5, f, rightFDFilestatSetTimes)
 
 		errno := s.Xfd_filestat_set_times(5, 0, targetMtimNs, fstMtim)
@@ -1078,6 +1082,7 @@ func TestFdFilestatSetTimesReturnsWazeroErrnoViaFileUtimens(t *testing.T) {
 		if wasiErrno != 0 {
 			t.Fatalf("OpenFile failed: %v", wasiErrno)
 		}
+		t.Cleanup(func() { _ = f.Close() }) // before t.TempDir removal (Windows)
 		insertStubFD(s, 5, f, rightFDFilestatSetTimes)
 
 		errno := s.Xfd_filestat_set_times(5, 0, targetMtimNs, fstMtim)
@@ -1097,6 +1102,7 @@ func TestFdFilestatSetTimesReturnsWazeroErrnoViaFileUtimens(t *testing.T) {
 		if wasiErrno != 0 {
 			t.Fatalf("OpenFile directory failed: %v", wasiErrno)
 		}
+		t.Cleanup(func() { _ = f.Close() }) // before t.TempDir removal (Windows)
 		insertStubFD(s, 5, f, rightFDFilestatSetTimes)
 
 		errno := s.Xfd_filestat_set_times(5, 0, targetMtimNs, fstMtim)
@@ -1128,6 +1134,7 @@ func TestFdFilestatSetTimesReturnsWazeroErrnoViaFileUtimens(t *testing.T) {
 		if wasiErrno != 0 {
 			t.Fatalf("OpenFile failed: %v", wasiErrno)
 		}
+		t.Cleanup(func() { _ = f.Close() }) // before t.TempDir removal (Windows)
 		insertStubFD(s, 5, f, rightFDFilestatSetTimes)
 
 		errno := s.Xfd_filestat_set_times(5, 0, 0, fstAtimNow)
@@ -1688,6 +1695,7 @@ func TestReadonlyPathFilestatGetSymlinkFollow(t *testing.T) {
 	if errno != 0 {
 		t.Fatalf("OpenFile preopen: errno %d", errno)
 	}
+	t.Cleanup(func() { _ = wf.Close() }) // before t.TempDir removal (Windows)
 	insertTestFileAt(s, 3, &wasi.FileEntry{
 		FS:               fsys,
 		Name:             "ro",
@@ -1962,6 +1970,7 @@ func TestFdReaddirParentDotDotInodeFromVFSStatLstat(t *testing.T) {
 	if openErrno != 0 {
 		t.Fatalf("OpenFile preopen: %d", openErrno)
 	}
+	t.Cleanup(func() { _ = wf.Close() }) // before t.TempDir removal (Windows)
 	insertTestFileAt(s, 3, &wasi.FileEntry{
 		FS:               fsys,
 		Name:             "/data",
