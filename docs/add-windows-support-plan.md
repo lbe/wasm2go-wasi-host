@@ -102,6 +102,35 @@ Done when unit tests and all 72 wasip1 testsuite cases pass on `windows-latest`.
 - **No large reviews:** no multi-agent reviews, and one review of the confinement changes at the end.
 - **Biggest unknown:** runtime failures in phase 5. Phases 1–3 keep that small by making the code compile and pass vet before the first Windows run.
 
+## How it went
+
+Implemented on the `windows-support` branch, one or more commits per phase.
+
+- **Phase 1:**
+  - CI vet runs with `-stdmethods=false` instead of renaming `wasi.File.Seek`.
+  - The Windows cross-compile entry was added in phase 4, once the Windows build passed.
+- **Phase 2:**
+  - Smaller than estimated. The only Unix-only calls left in the root package were `linkSymlinkInode`, `setTimesAtPath` and `getAtimeFromStat`.
+  - They moved to `sysfs.LinkNoFollow` and `sysfs.UtimesNoFollow`, plus a portable `getAtimeFromStat`.
+  - These are package-level functions that take host paths, not `DirFS` methods, so the root preopen's existing path mapping is unchanged.
+  - The other `os.*` calls (`Symlink`, `Link`, `ReadDir`, `EvalSymlinks`) are already portable.
+- **Phase 3:**
+  - Containment needed less work than expected: `DirFS.join` already makes the host root absolute (`/` becomes the current drive root), and `filepath.Rel` compares case-insensitively on Windows.
+  - The real gap was guest paths containing `\` or `:`. `sysfs.GuestPathOK` now rejects them on Windows.
+  - Junction and 8.3 short-name handling was left to `filepath.EvalSymlinks`.
+- **Phase 5 host fixes:**
+  - O_DIRECTORY through a symlink to a file now returns ENOTDIR.
+  - ERROR_PATH_NOT_FOUND is reported as ENOTDIR or ENOENT depending on the parent.
+  - `path_symlink` onto an existing name returns EEXIST.
+  - `readlink` targets use `/`.
+  - `fd_readdir` reports real inode numbers.
+  - The monotonic clock is positive from the first read.
+- **Tests skipped on Windows:**
+  - CLI tests that need a POSIX shell or Unix executables.
+  - The `/dev/fd` poll test.
+  - The "atime unchanged" assertion, because NTFS updates access time itself.
+  - Tests that need host inode numbers from `os.Stat`.
+
 ## Out of scope
 
 - WASI preview 2 and 3.
