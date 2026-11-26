@@ -150,5 +150,6 @@ One `State` per guest instance, single goroutine. `State` is not safe for concur
 - [NOTICE](./NOTICE) — third-party attribution (wazero, Apache 2.0)
 - [licenses/APACHE-2.0.txt](./licenses/APACHE-2.0.txt) — Apache License 2.0 text for adapted wazero code
 - [docs/path-confinement.md](./docs/path-confinement.md) — preopen matching, lexical and symlink confinement
+- [docs/porting-guidance-from-wazero.md](./docs/porting-guidance-from-wazero.md) — moving a wazero WASI embedding to wasm2go-wasi-host
 - [cmd/wasm2go-run/README.md](./cmd/wasm2go-run/README.md) — CLI flags and cache
 - [pkg.go.dev](https://pkg.go.dev/github.com/lbe/wasm2go-wasi-host) — generated API reference

@@ -85,6 +85,10 @@ Package documentation: [pkg.go.dev](https://pkg.go.dev/github.com/lbe/wasm2go-wa
 
 See [`cmd/wasm2go-run/README.md`](./cmd/wasm2go-run/README.md).
 
+### Porting from wazero
+
+Moving an existing wazero WASI embedding to a wasm2go guest: [docs/porting-guidance-from-wazero.md](./docs/porting-guidance-from-wazero.md).
+
 ## File system support
 
 Configure mounts on [`NewModuleConfig`](https://pkg.go.dev/github.com/lbe/wasm2go-wasi-host#NewModuleConfig):
