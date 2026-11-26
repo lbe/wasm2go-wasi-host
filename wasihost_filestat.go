@@ -7,7 +7,7 @@ import (
 	"time"
 
 	"github.com/lbe/wasm2go-wasi-host/internal/wasi"
-	"golang.org/x/sys/unix"
+	"github.com/lbe/wasm2go-wasi-host/internal/wasi/sysfs"
 )
 
 // writeFdstat writes a 24-byte WASI fdstat struct at statPtr in mem.
@@ -128,16 +128,18 @@ func computeTargetTimes(fi fs.FileInfo, atim, mtim int64, fstFlags int32) (time.
 
 // setTimesAtPath sets the access and modification times on path. When follow
 // is true it follows symlinks (os.Chtimes); when false it sets times on the
-// symlink inode itself (unix.UtimesNanoAt with AT_SYMLINK_NOFOLLOW).
+// symlink inode itself (sysfs.UtimesNoFollow).
 func setTimesAtPath(path string, atim, mtim time.Time, follow bool) error {
 	if follow {
 		return os.Chtimes(path, atim, mtim)
 	}
-	ts := []unix.Timespec{
-		unix.NsecToTimespec(atim.UnixNano()),
-		unix.NsecToTimespec(mtim.UnixNano()),
-	}
-	return unix.UtimesNanoAt(unix.AT_FDCWD, path, ts, unix.AT_SYMLINK_NOFOLLOW)
+	return sysfs.UtimesNoFollow(path, atim, mtim)
+}
+
+// getAtimeFromStat returns the access time recorded in fi, using the same
+// platform stat mapping as the VFS.
+func getAtimeFromStat(fi fs.FileInfo) time.Time {
+	return time.Unix(0, int64(wasi.NewStat_t(fi).Atim))
 }
 
 // Xpath_filestat_set_times implements path_filestat_set_times.

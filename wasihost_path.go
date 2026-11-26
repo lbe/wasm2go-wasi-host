@@ -5,6 +5,8 @@ import (
 	"os"
 	"runtime"
 	"strings"
+
+	"github.com/lbe/wasm2go-wasi-host/internal/wasi/sysfs"
 )
 
 // Xpath_create_directory implements path_create_directory. Creates a
@@ -192,7 +194,7 @@ func (s *State) validateLinkParams(oldPath, newPath string, oldFlags, newPathPtr
 }
 
 // createHardLinkToSymlink creates a hard link to a symlink inode.
-// This uses platform-specific linkSymlinkInode to link the symlink itself,
+// This uses sysfs.LinkNoFollow to link the symlink itself,
 // not the target it points to.
 func (s *State) createHardLinkToSymlink(oldP, newP *PreopenEntry, oldGuest, newGuest, oldVpath, newVpath string) int32 {
 	if s.vfsPathExists(newP, newVpath) {
@@ -200,7 +202,7 @@ func (s *State) createHardLinkToSymlink(oldP, newP *PreopenEntry, oldGuest, newG
 	}
 	oldHost := vfsHostPath(oldP, oldGuest, oldVpath)
 	newHost := vfsHostPath(newP, newGuest, newVpath)
-	if err := linkSymlinkInode(oldHost, newHost); err != nil {
+	if err := sysfs.LinkNoFollow(oldHost, newHost); err != nil {
 		return mapOSError(err)
 	}
 	return wasiESuccess
