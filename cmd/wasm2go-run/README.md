@@ -1,9 +1,9 @@
 # wasm2go-run
 
 > [!WARNING]
-> **Status: Alpha.** Flags and orchestration may change as the project matures.
+> **Status: Alpha.** Flags and behavior may change.
 
-`wasm2go-run` transpiles a WASI Preview1 `.wasm` module with [wasm2go](https://github.com/ncruces/wasm2go), generates a small `main` wrapper linked to [`wasihost`](../../), builds a native binary, and runs it. It is the runner expected by the [WebAssembly/wasi-testsuite](https://github.com/WebAssembly/wasi-testsuite) wasm2go adapter.
+`wasm2go-run` transpiles a WASI Preview1 `.wasm` module with [wasm2go](https://github.com/ncruces/wasm2go), generates a `main` wrapper linked to [`wasihost`](../../), builds a native binary, and runs it. The [WebAssembly/wasi-testsuite](https://github.com/WebAssembly/wasi-testsuite) wasm2go adapter uses it as its runner. It runs on Linux, macOS, Windows and FreeBSD.
 
 ## Installation
 
@@ -19,20 +19,27 @@ wasm2go-run [options] <wasm-file> [-- <guest-args>]
 
 ### Options
 
-- `-dir <host-dir>[:<guest-dir>]`: Writable host directory preopen. Guest path defaults to the host path. Repeatable.
-- `-env <key=value>`: Guest environment entry (`KEY=VALUE`). Repeatable.
-- `-cache off`: Disable tier-1 transpile caching (enabled by default).
-- `-version`: Print version and exit 0.
+- `-dir <host-dir>::<guest-dir>` or `-dir <host-dir>:<guest-dir>` adds a writable host directory preopen. Both paths are required. Use `::` when the host path contains `:`, such as a Windows path with a drive letter: `-dir C:\data::/data`. Repeatable.
+- `-env <key=value>` adds a guest environment entry. Repeatable.
+- `-cache off` turns off the tier-1 transpile cache, which is on by default.
+- `-version` prints the version and exits with status 0.
 
 ### Environment variables
 
-Tier-1 cache stores transpiled `module.go` only; each run still compiles in a fresh temp directory.
+The tier-1 cache stores the transpiled `module.go` only. Each run still compiles in a new temporary directory.
 
 | Variable | Effect |
 |----------|--------|
-| `WASM2GO_RUN_CACHE` | `0`, `false`, or `off` disables caching |
-| `WASM2GO_RUN_CACHE_DIR` | Override cache root (default: `$XDG_CACHE_HOME/wasm2go-run` or `$HOME/.cache/wasm2go-run`) |
-| `WASM2GO_WASIHOST_PATH` | Repo root for `replace` in generated `go.mod` when not a release build |
+| `WASM2GO_RUN_CACHE` | `0`, `false` or `off` turns off the cache |
+| `WASM2GO_RUN_CACHE_DIR` | Sets the cache root |
+| `WASM2GO_WASIHOST_PATH` | Sets the repository root for the `replace` directive in the generated `go.mod`, in builds that are not releases |
+
+Without `WASM2GO_RUN_CACHE_DIR`, the cache root is the first of these that applies:
+
+1. `$XDG_CACHE_HOME/wasm2go-run`, when `XDG_CACHE_HOME` is set
+2. `$HOME/.cache/wasm2go-run`, when `HOME` is set
+3. `wasm2go-run` under `os.UserCacheDir()`, for example `%LocalAppData%\wasm2go-run` on Windows
+4. `wasm2go-run` under `os.TempDir()`
 
 ### Examples
 
@@ -42,19 +49,19 @@ wasm2go-run -dir ./data:/data -env KEY=VALUE my-app.wasm -- --app-arg1
 
 ## How it works
 
-1. **Transpile**: Run `wasm2go` on the `.wasm` file. With caching on, reuse cached `module.go` when the WASM bytes and toolchain identity match.
-2. **Post-process**: Deduplicate duplicate interface methods in generated Go (wasm2go quirk for repeated imports).
-3. **Compile**: Write `module/module.go`, generated `main.go`, and `go.mod`; `go mod tidy` and `go build` in a temp directory.
-4. **Execute**: Run the binary with process stdio; guest exit code becomes the process exit code.
-5. **Cleanup**: Remove the temp build directory.
+1. Transpile: run `wasm2go` on the `.wasm` file. With the cache on, reuse the cached `module.go` when the WASM bytes and toolchain identity match.
+2. Post-process: remove duplicate interface methods from the generated Go. wasm2go emits them for repeated imports.
+3. Compile: write `module/module.go`, the generated `main.go` and `go.mod` to a temporary directory, then run `go mod tidy` and `go build` there.
+4. Execute: run the binary with the process stdio. The guest exit code becomes the process exit code.
+5. Clean up: remove the temporary build directory.
 
 ## Development
 
 ### Prerequisites
 
-- Go 1.26.3+
+- Go 1.26.3 or later
 - `wasm2go` on `PATH`
-- Initialized `wasi-testsuite` submodule for adapter/e2e tests
+- The `wasi-testsuite` submodule, initialized, for the adapter and e2e tests
 
 ```bash
 git submodule update --init --recursive
@@ -63,17 +70,17 @@ git submodule update --init --recursive
 ### Running tests
 
 ```bash
-# wasm2go-run package only (~5s)
+# wasm2go-run package only, 5 s
 go test ./cmd/wasm2go-run/...
 
-# Root wasihost unit tests (~5s total repo with ./...)
+# All unit tests in the repository, 5 s
 go test ./...
 
-# Full wasihost + wasi-testsuite integration (from repo root)
+# Unit tests plus wasi-testsuite integration, from the repository root
 go test -tags=e2e ./...
 ```
 
-`runner_test.go` compiles selected wasi-testsuite WASM fixtures in-process. Submodule inventory e2e tests live in the root package as `e2e_*_test.go` and require `-tags=e2e`.
+`runner_test.go` compiles selected wasi-testsuite WASM fixtures in-process. The submodule inventory e2e tests are in the root package as `e2e_*_test.go` and need `-tags=e2e`. On Windows, tests that need a POSIX shell and Unix executables are skipped.
 
 ### Full Preview1 run
 
@@ -84,7 +91,7 @@ go build -o ./bin/wasm2go-run ./cmd/wasm2go-run
 ./scripts/e2e-wasip1.sh
 ```
 
-See the root [README.md](../../README.md) for `WASM2GO_RUN` / `WASM2GO_WASIHOST_PATH` defaults.
+See the root [README.md](../../README.md) for the `WASM2GO_RUN` and `WASM2GO_WASIHOST_PATH` defaults.
 
 ### Build
 

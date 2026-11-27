@@ -94,7 +94,7 @@ func TestStateNewConfigOnlyCtorPopulatesCtxAndArgs(t *testing.T) {
 
 func TestStateNewWithFSConfigPopulatesContextFSCAndMounts(t *testing.T) {
 	// This test verifies that when ModuleConfig has an FSConfig with mounts,
-	// the State is properly initialized with:
+	// New initializes the State with:
 	// - state.ctx.fsc non-nil (filesystem context in wasi.Context)
 	// - ctx.FS() has one writable preopen at "/"
 	// - args/env propagated on state.ctx only

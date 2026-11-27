@@ -10,7 +10,7 @@ import (
 
 // LinkNoFollow creates newPath as a hard link to oldPath without following a
 // symlink at oldPath, so the link refers to the symlink itself. linkat with no
-// flags does not dereference a symlink oldpath on Linux or Darwin.
+// flags does not dereference a symlink oldpath on Linux, macOS or FreeBSD.
 func LinkNoFollow(oldPath, newPath string) error {
 	return unix.Linkat(unix.AT_FDCWD, oldPath, unix.AT_FDCWD, newPath, 0)
 }

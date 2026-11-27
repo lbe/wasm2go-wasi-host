@@ -145,7 +145,7 @@ func TestFilestatMutations(t *testing.T) {
 		s, _ := newTestState(nil)
 		filePath := setupOsFileFd(t, s, 5, []byte("data"))
 
-		// Set to a past time first to ensure NOW change is visible
+		// Set a past time first, so the change to NOW is visible.
 		past := time.Now().Add(-1 * time.Hour)
 		if err := os.Chtimes(filePath, past, past); err != nil {
 			t.Fatal(err)
@@ -170,7 +170,7 @@ func TestFilestatMutations(t *testing.T) {
 		s, _ := newTestState(nil)
 		filePath := setupOsFileFd(t, s, 5, []byte("data"))
 
-		// Ensure we have a baseline and distinguish from "now"
+		// Record a baseline that differs from "now".
 		past := time.Now().Add(-1 * time.Hour).Truncate(time.Second)
 		if err := os.Chtimes(filePath, past, past); err != nil {
 			t.Fatal(err)
@@ -225,7 +225,7 @@ func TestFilestatMutations(t *testing.T) {
 			t.Fatal(err)
 		}
 
-		// Set to a past time first to ensure NOW change is visible
+		// Set a past time first, so the change to NOW is visible.
 		past := time.Now().Add(-1 * time.Hour)
 		if err := os.Chtimes(hostPath, past, past); err != nil {
 			t.Fatal(err)
@@ -257,7 +257,7 @@ func TestFilestatMutations(t *testing.T) {
 			t.Fatal(err)
 		}
 
-		// Set to a past time first to ensure change is visible
+		// Set a past time first, so the change is visible.
 		past := time.Date(2010, 1, 1, 0, 0, 0, 0, time.UTC)
 		if err := os.Chtimes(hostPath, past, past); err != nil {
 			t.Fatal(err)
@@ -305,7 +305,7 @@ func TestFilestatMutations(t *testing.T) {
 			t.Fatal(err)
 		}
 
-		// Set to a past time first to ensure change is visible
+		// Set a past time first, so the change is visible.
 		past := time.Now().Add(-1 * time.Hour).Truncate(time.Second)
 		if err := os.Chtimes(hostPath, past, past); err != nil {
 			t.Fatal(err)
@@ -441,7 +441,7 @@ func TestFdFilestatSetTimesAtimPreservesExistingTests(t *testing.T) {
 
 // TestPathFilestatOpenFdFlagsAndSetTimes verifies path_open records requested
 // fd_flags on a newly created file and path_filestat_set_times updates mtim
-// observable via path_filestat_get (mirrors path_filestat.rs lines 12–60).
+// observable through path_filestat_get. It mirrors path_filestat.rs lines 12 to 60.
 func TestPathFilestatOpenFdFlagsAndSetTimes(t *testing.T) {
 	const (
 		pathOff        int32 = 500
@@ -878,7 +878,7 @@ func TestFdFilestatSetSizeReturnsWazeroErrnoViaFileTruncate(t *testing.T) {
 			t.Errorf("got errno %d, want ESUCCESS", errno)
 		}
 
-		// Verify the file was actually truncated
+		// Verify that the file was truncated.
 		data, err := os.ReadFile(filePath)
 		if err != nil {
 			t.Fatal(err)
@@ -1010,7 +1010,7 @@ func TestFdFilestatSetTimesReturnsWazeroErrnoViaFileUtimens(t *testing.T) {
 			t.Errorf("got errno %d, want ESUCCESS", errno)
 		}
 
-		// Verify the mtime was actually set
+		// Verify that the mtime was set.
 		fi, err := os.Stat(filePath)
 		if err != nil {
 			t.Fatal(err)
@@ -1420,7 +1420,7 @@ func TestFdReaddirCachingAndPagination(t *testing.T) {
 		mem := func() []byte { return buf }
 		s := New(mem, NewModuleConfig().WithHostDirectoryPreopen("/data", tmpDir))
 
-		// First call: read just . and .. (buf fits exactly 2 dirents: 25+26=51)
+		// The first call reads only . and .., because the buffer fits 2 dirents: 25+26=51.
 		errno := s.Xfd_readdir(3, rdBufPtr, 51, 0, usedPtr)
 		if errno != wasiESuccess {
 			t.Fatalf("first Xfd_readdir = %d, want ESUCCESS", errno)
@@ -1442,7 +1442,7 @@ func TestFdReaddirCachingAndPagination(t *testing.T) {
 			t.Fatalf("os.Remove(f2) failed: %v", err)
 		}
 
-		// Continue reading with the cached cookie — should still return f1, f2, f3 from cache
+		// Continue reading with the cached cookie. It must still return f1, f2 and f3 from the cache.
 		errno = s.Xfd_readdir(3, rdBufPtr, rdBufLen, int64(dotDotCookie), usedPtr)
 		if errno != wasiESuccess {
 			t.Fatalf("second Xfd_readdir = %d, want ESUCCESS", errno)
@@ -1574,7 +1574,7 @@ func TestFdReaddirCachingAndPagination(t *testing.T) {
 		}
 
 		// A fresh cookie=0 call should re-read from host and return updated list:
-		// ., .., f1, f3 (4 entries) — NOT the cached 5 entries
+		// Expect 4 entries: ., .., f1 and f3. Not the 5 cached entries.
 		errno = s.Xfd_readdir(3, rdBufPtr, rdBufLen, 0, usedPtr)
 		if errno != wasiESuccess {
 			t.Fatalf("second Xfd_readdir = %d, want ESUCCESS", errno)
@@ -1884,7 +1884,7 @@ func TestFdReaddirParentDino(t *testing.T) {
 	mem := func() []byte { return buf }
 	s := New(mem, NewModuleConfig().WithHostDirectoryPreopen("/data", subDir))
 
-	// fd 3 is the preopen for /data → subDir.
+	// fd 3 is the preopen for /data, backed by subDir.
 	errno := s.Xfd_readdir(3, rdBufPtr, rdBufLen, 0, usedPtr)
 	if errno != wasiESuccess {
 		t.Fatalf("Xfd_readdir = %d, want ESUCCESS", errno)
@@ -1917,7 +1917,7 @@ func TestFdReaddirParentDino(t *testing.T) {
 		t.Errorf("entry[1].Ino = %d, want 0 without VFS Stat/Lstat on ..", dotDotIno)
 	}
 
-	// Ensure they're distinct (the bug was using the same ino for both)
+	// They must differ. The bug used the same ino for both.
 	if dotIno == dotDotIno {
 		t.Error(". and .. have the same dIno; expected distinct inodes")
 	}

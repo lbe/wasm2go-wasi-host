@@ -199,7 +199,7 @@ func TestCompileCacheDisabledSkipsTier2Cache(t *testing.T) {
 		t.Fatal("binaryPath is empty")
 	}
 
-	// Verify the go toolchain was actually invoked (cache was bypassed).
+	// Verify that the go toolchain ran, which means the cache was bypassed.
 	invocationData, readErr := os.ReadFile(goInvocationLog)
 	if readErr != nil {
 		t.Fatalf("go invocation log not found: %v", readErr)

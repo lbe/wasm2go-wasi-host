@@ -366,7 +366,7 @@ func TestModuleConfig_CloneByteLevelIndependence(t *testing.T) {
 		// Mutate the first byte of the first arg in the clone
 		clone.args[0][0] = 'X'
 
-		// Original must be unaffected — byte-level independence
+		// The original must be unchanged, byte for byte.
 		if string(orig.args[0]) != "hello" {
 			t.Errorf("original args[0] mutated after clone modification: got %q, want %q",
 				string(orig.args[0]), "hello")
@@ -380,7 +380,7 @@ func TestModuleConfig_CloneByteLevelIndependence(t *testing.T) {
 		// Mutate a byte in the first environ entry of the clone
 		clone.environ[0][0] = 'X'
 
-		// Original must be unaffected — byte-level independence
+		// The original must be unchanged, byte for byte.
 		if string(orig.environ[0]) != "KEY=value" {
 			t.Errorf("original environ[0] mutated after clone modification: got %q, want %q",
 				string(orig.environ[0]), "KEY=value")

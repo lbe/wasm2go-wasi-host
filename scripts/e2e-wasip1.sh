@@ -1,5 +1,5 @@
 #!/usr/bin/env bash
-# Run the wasi-testsuite submodule using its own authoritative test discovery.
+# Run the wasi-testsuite submodule with its own test discovery.
 # Defaults to this repository's local ./bin/wasm2go-run and source tree.
 # Set WASM2GO_RUN or WASM2GO_WASIHOST_PATH to override either path.
 set -euo pipefail

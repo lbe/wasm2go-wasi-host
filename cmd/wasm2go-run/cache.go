@@ -41,7 +41,7 @@ func cacheEnabled(cfg Config) bool {
 var cacheKeyVersion = 1
 
 // wasm2goIdentity returns a string that uniquely identifies the wasm2go
-// toolchain version (e.g. its module version or build stamp). It is a
+// toolchain version, such as its module version or build stamp. It is a
 // variable so tests can swap in a stub.
 var wasm2goIdentity = func() string {
 	return "dev"
@@ -331,7 +331,7 @@ func (m buildCacheMeta) computeSignature() string {
 }
 
 // matchesCurrent reports whether the stored build cache metadata matches
-// the current toolchain and host state.  Entries written without a
+// the current toolchain and host state. Entries written without a
 // signature (old cache format) are always accepted for backward
 // compatibility.
 func (m buildCacheMeta) matchesCurrent() bool {

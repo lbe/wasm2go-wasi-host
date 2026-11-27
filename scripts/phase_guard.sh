@@ -71,7 +71,7 @@ cleanup_artifacts() {
 
 # Main execution
 main() {
-    # Ensure git is clean before starting quality checks
+    # Require a clean git tree before the quality checks.
     if ! check_git_clean "before quality checks"; then
         echo "Error: Git must be clean before running phase guard."
         exit 1

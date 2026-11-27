@@ -10,9 +10,8 @@ import (
 
 // ModuleConfig holds configuration for a WASI module execution.
 //
-// The builder methods (WithArgs, WithEnv, WithWalltime, WithOsyield, etc.) follow an immutable
-// pattern: each returns a new deep copy with the change applied, leaving the
-// original unchanged.
+// The builder methods, such as WithArgs, WithEnv, WithWalltime and WithOsyield,
+// do not change the receiver. Each returns a deep copy with the change applied.
 type ModuleConfig struct {
 	name        string
 	args        [][]byte
@@ -306,7 +305,8 @@ func (c *ModuleConfig) WithSysNanosleep() *ModuleConfig {
 	return c.WithNanosleep(func(ns int64) { time.Sleep(time.Duration(ns)) })
 }
 
-// WithOsyield returns a copy with sched_yield hooked to fn (default runtime.Gosched).
+// WithOsyield returns a copy whose sched_yield calls fn. The default is
+// runtime.Gosched.
 func (c *ModuleConfig) WithOsyield(fn wasi.Osyield) *ModuleConfig {
 	clone := c.clone()
 	clone.osyield = fn

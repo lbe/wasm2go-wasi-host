@@ -381,7 +381,7 @@ func TestResolvePath(t *testing.T) {
 		}
 	}
 
-	// Path that matches no mount → nil.
+	// A path that matches no mount returns nil.
 	s2 := New(nil, NewModuleConfig().WithReadOnlyFS("/lib", fstest.MapFS{}))
 	m, _ := s2.resolvePath("/usr/bin")
 	if m != nil {
@@ -426,7 +426,7 @@ func parseReaddirDirents(buf []byte, bufUsed uint32, bufPtr int32) []ReaddirDire
 
 // errorFS is a test [fs.FS] used to assert errno propagation from path_open:
 // Open returns a [*fs.PathError] wrapping err for a matching path segment so
-// [mapOSError] can classify it (e.g. [fs.ErrPermission] → EACCES). Other
+// [mapOSError] can classify it, for example [fs.ErrPermission] as EACCES. Other
 // paths report not exist so resolution can reach the injected error.
 type errorFS struct {
 	name string

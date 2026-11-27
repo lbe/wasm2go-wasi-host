@@ -184,7 +184,7 @@ jobs:
 
   # Tier-2: ubuntu-24.04-{riscv,s390x,ppc64le-p10} need GitHub larger runners.
   # Default off so workflows do not queue forever. Enable: repo variable
-  # CI_LINUX_OTHER_ARCH=true (Settings → Secrets and variables → Actions).
+  # CI_LINUX_OTHER_ARCH=true, under Settings, then Secrets and variables, then Actions.
   test-linux-other:
     if: vars.CI_LINUX_OTHER_ARCH == 'true' && (github.ref == 'refs/heads/main' || github.event_name == 'workflow_dispatch')
     needs: test
@@ -262,7 +262,7 @@ jobs:
           cat /tmp/changelog.txt
 
       - name: Create Release
-        uses: softprops/action-gh-release@v1
+        uses: softprops/action-gh-release@v3
         with:
           tag_name: ${{ github.ref_name }}
           name: Release ${{ github.ref_name }}

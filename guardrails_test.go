@@ -291,7 +291,7 @@ func TestRemovalOfOldMountAPIsAndUnsafeSemantics(t *testing.T) {
 		}
 	}
 
-	// 4. Ensure root_writable_mount_fallback_test.go is gone or renamed/purged of old logic
+	// 4. root_writable_mount_fallback_test.go must not exist.
 	if _, statErr := os.Stat("root_writable_mount_fallback_test.go"); statErr == nil {
 		t.Errorf("root_writable_mount_fallback_test.go still exists; it should be removed as the behavior it tests is now invalid")
 	}
@@ -347,8 +347,8 @@ func TestAntiRegressionGuardrails_Wasm2goRunTemplateUsesModuleConfig(t *testing.
 	}
 }
 
-// TestGuardrails_E2EManifestUnitMirrorsValid ensures testdata/e2e_cases.json
-// unitMirror entries reference real test functions.
+// TestGuardrails_E2EManifestUnitMirrorsValid checks that every unitMirror entry
+// in testdata/e2e_cases.json names a real test function.
 func TestGuardrails_E2EManifestUnitMirrorsValid(t *testing.T) {
 	root := mustProjectRoot(t)
 
@@ -374,8 +374,8 @@ func TestGuardrails_E2EManifestUnitMirrorsValid(t *testing.T) {
 	}
 }
 
-// TestAntiRegressionGuardrails_CILinuxBuildGuardrail ensures the module cross-builds
-// for linux/amd64 (CI target) via GOOS=linux GOARCH=amd64 go build ./...
+// TestAntiRegressionGuardrails_CILinuxBuildGuardrail checks that the module
+// cross-builds for linux/amd64, the CI target, with GOOS=linux GOARCH=amd64 go build ./...
 func TestAntiRegressionGuardrails_CILinuxBuildGuardrail(t *testing.T) {
 	mustLinuxAmd64GoBuild(t, mustProjectRoot(t), "./...")
 }

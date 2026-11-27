@@ -64,7 +64,7 @@ func transpileCached(wasmPath string, cfg Config) (string, error) {
 }
 
 // deduplicateInterfaceMethods removes duplicate method signatures from generated
-// Go interface blocks. This is a tactical workaround for a wasm2go bug where a
+// Go interface blocks. It works around a wasm2go bug where a
 // WebAssembly module that imports the same host function more than once causes
 // wasm2go to emit duplicate interface method declarations, which are invalid Go.
 //

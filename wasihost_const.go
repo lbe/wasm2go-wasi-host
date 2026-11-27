@@ -1,7 +1,7 @@
 package wasihost
 
-// WASI snapshot-preview1 errno values. Names and numeric values follow
-// the specification exactly.
+// WASI snapshot-preview1 errno values. Names and numeric values match the
+// specification.
 const (
 	wasiESuccess     int32 = 0
 	wasiEAcces       int32 = 2
@@ -73,28 +73,28 @@ const (
 		rightFDFilestatGet | rightFDFilestatSetSize | rightFDFilestatSetTimes |
 		rightPathSymlink | rightPathRemoveDirectory | rightPathUnlinkFile
 	// WASI filestat_set_times flags.
-	// Note: the wasi-testsuite Rust tests were compiled with the wasi 0.11.0
-	// crate where ATIM_NOW is bit 1 and MTIM is bit 2 (swapped vs the final
-	// snapshot-preview1 spec). We match the guest layout so that e2e tests
+	// The wasi-testsuite Rust tests were compiled with the wasi 0.11.0 crate,
+	// where ATIM_NOW is bit 1 and MTIM is bit 2. The final snapshot-preview1
+	// spec swaps them. We match the guest layout so that e2e tests
 	// pass with the precompiled wasm binaries.
 	fstAtim    int32 = 1 << 0
 	fstAtimNow int32 = 1 << 1
 	fstMtim    int32 = 1 << 2
 	fstMtimNow int32 = 1 << 3
 
-	// __wasi_lookupflags_t bit: follow symlinks when resolving a path (e.g.
-	// path_open, path_filestat_get). Matches __WASI_LOOKUPFLAGS_SYMLINK_FOLLOW.
+	// __wasi_lookupflags_t bit that follows symlinks when resolving a path, for
+	// example in path_open and path_filestat_get. Matches __WASI_LOOKUPFLAGS_SYMLINK_FOLLOW.
 	wasiLookupSymlinkFollow int32 = 1 << 0
 )
 
-// Rights bundles for preopens, files, and character devices (composed from the
-// __wasi_rights_t constants above; values match snapshot-preview1).
+// Rights bundles for preopens, files and character devices, composed from the
+// __wasi_rights_t constants above. The values match snapshot-preview1.
 var (
 	// Writable host-directory preopen: FD read/seek/fdstat-set/write plus full
 	// directory path capability set for children (rightsDirectoryInherited).
 	rightsWritableDirPreopen = rightFDRead | rightFDSeek | rightFDFdstatSetFlags | rightFDWrite | rightsDirectoryInherited
 	// Writable directory preopen fdstat masks (path_open_preopen.rs directory_base_rights /
-	// directory_inheriting_rights). Base is path bits 9–26 except FD_FILESTAT_SET_SIZE (bit 22),
+	// directory_inheriting_rights). Base is path bits 9 to 26 except FD_FILESTAT_SET_SIZE (bit 22),
 	// including PATH_FILESTAT_SET_SIZE (bit 19). Inheriting adds fd_* superset for path_open clamping.
 	rightsWritableDirPreopenBase       = rightsDirectoryInherited&^rightFDFilestatSetSize | rightPathFilestatSetSize
 	rightsWritableDirPreopenInheriting = (rightsDirectoryInherited &^ rightPathFilestatSetSize) |

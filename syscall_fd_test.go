@@ -67,7 +67,7 @@ func TestAllocFD(t *testing.T) {
 
 	s, buf, tmpDir := newWMState(t)
 
-	// Open 3 files -> allocates fds 4, 5, 6 (0-2=stdio, 3=preopen).
+	// Opening 3 files allocates fds 4, 5 and 6. Fds 0 to 2 are stdio and fd 3 is the preopen.
 	var openedFDs []int32
 	for i := 0; i < 3; i++ {
 		name := fmt.Sprintf("alloc%d.txt", i)
@@ -87,7 +87,7 @@ func TestAllocFD(t *testing.T) {
 		t.Errorf("first allocFD = %d, want 4", openedFDs[0])
 	}
 
-	// Close fd 4 and re-open -> slot 4 must be reused.
+	// Close fd 4 and open again. Slot 4 must be reused.
 	if errno := s.Xfd_close(openedFDs[0]); errno != wasiESuccess {
 		t.Fatalf("Xfd_close = %d", errno)
 	}
@@ -152,7 +152,7 @@ func TestWriteFilestat(t *testing.T) {
 		t.Error("mtime = 0, want > 0")
 	}
 
-	// Preopen dir fd (3) -> fdDir.
+	// The preopen directory fd 3 reports fdDir.
 	if errno := s.Xfd_filestat_get(3, statPtr); errno != wasiESuccess {
 		t.Fatalf("Xfd_filestat_get(preopen) = %d", errno)
 	}
@@ -161,7 +161,7 @@ func TestWriteFilestat(t *testing.T) {
 		t.Errorf("preopen filetype = %d, want fdDir (%d)", ftype, fdDir)
 	}
 
-	// Invalid fd -> wasiEBadf.
+	// An invalid fd returns wasiEBadf.
 	if errno := s.Xfd_filestat_get(999, statPtr); errno != wasiEBadf {
 		t.Errorf("invalid fd filestat_get = %d, want EBADF", errno)
 	}
@@ -817,7 +817,7 @@ func TestFdReaddir(t *testing.T) {
 
 	t.Run("cookies honor stream position across calls", func(t *testing.T) {
 		s, buf, tmpDir := newWMState(t)
-		// Create 3 files to ensure we have enough entries to split across calls.
+		// Create 3 files, so there are enough entries to split across calls.
 		for _, name := range []string{"f1", "f2", "f3"} {
 			if err := os.WriteFile(filepath.Join(tmpDir, name), []byte("x"), 0644); err != nil {
 				t.Fatal(err)
@@ -832,7 +832,7 @@ func TestFdReaddir(t *testing.T) {
 		)
 
 		// First call: cookie=0, read some entries.
-		// We expect f1, f2, f3...
+		// Expect f1, f2 and f3.
 		// First, get all entries to know what to expect.
 		errno := s.Xfd_readdir(3, rdBufPtr, rdBufLen, 0, usedPtr)
 		if errno != wasiESuccess {
@@ -1419,7 +1419,7 @@ func TestFdAllocate(t *testing.T) {
 		t.Fatalf("initial file size = %d, want 0", size)
 	}
 
-	// 1. allocate(0, 100) on empty file -> size = 100
+	// 1. allocate(0, 100) on an empty file sets the size to 100.
 	t.Run("allocate from zero extends file", func(t *testing.T) {
 		errno := s.Xfd_allocate(fd, 0, 100)
 		if errno != wasiESuccess {
@@ -1430,7 +1430,7 @@ func TestFdAllocate(t *testing.T) {
 		}
 	})
 
-	// 2. allocate(10, 10) within existing size -> no growth, size stays 100
+	// 2. allocate(10, 10) inside the existing size does not grow the file. The size stays 100.
 	t.Run("allocate within existing size does not grow", func(t *testing.T) {
 		errno := s.Xfd_allocate(fd, 10, 10)
 		if errno != wasiESuccess {
@@ -1441,7 +1441,7 @@ func TestFdAllocate(t *testing.T) {
 		}
 	})
 
-	// 3. allocate(90, 20) -> offset+length=110 > 100, size=110
+	// 3. allocate(90, 20) ends at 110, past 100, so the size becomes 110.
 	t.Run("allocate beyond existing size grows file", func(t *testing.T) {
 		errno := s.Xfd_allocate(fd, 90, 20)
 		if errno != wasiESuccess {
@@ -1452,7 +1452,7 @@ func TestFdAllocate(t *testing.T) {
 		}
 	})
 
-	// 4. allocate(100, 100) -> offset+length=200 > 110, size=200
+	// 4. allocate(100, 100) ends at 200, past 110, so the size becomes 200.
 	t.Run("allocate far beyond existing size grows file further", func(t *testing.T) {
 		errno := s.Xfd_allocate(fd, 100, 100)
 		if errno != wasiESuccess {

@@ -28,7 +28,8 @@ var wasiHostPath = func() string {
 	// Fallback: compute from source file location (reliable in go test dev builds)
 	_, filename, _, ok2 := runtime.Caller(0)
 	if ok2 {
-		// filename is .../cmd/wasm2go-run/compile.go — go up two dirs to repo root
+		// filename ends in cmd/wasm2go-run/compile.go. The repository root is two
+		// directories up.
 		return filepath.Join(filepath.Dir(filename), "../..")
 	}
 	return os.Getenv("WASM2GO_WASIHOST_PATH")

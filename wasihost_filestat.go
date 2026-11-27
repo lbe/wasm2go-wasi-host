@@ -23,8 +23,8 @@ func writeFdstat(mem []byte, statPtr int32, fdType byte, fdFlags uint16, rightsB
 }
 
 // writeFilestat writes a 64-byte WASI filestat struct at bufPtr in mem.
-// fdType is a WASI snapshot-preview1 filetype tag (same values as fdstat.fs_filetype),
-// e.g. fdDir, fdFile, fdSymlink.
+// fdType is a WASI snapshot-preview1 filetype tag with the same values as
+// fdstat.fs_filetype, for example fdDir, fdFile or fdSymlink.
 func writeFilestat(mem []byte, bufPtr int32, fdType byte, size int64, atimNs, mtimeNs int64, dev uint64, ino uint64) {
 	var buf [filestatSize]byte
 	binary.LittleEndian.PutUint64(buf[filestatDevOff:], dev)
@@ -145,7 +145,7 @@ func getAtimeFromStat(fi fs.FileInfo) time.Time {
 // Xpath_filestat_set_times implements path_filestat_set_times.
 //
 // ATIM (bit 0), ATIM_NOW (bit 1), MTIM (bit 2), and MTIM_NOW (bit 3) flags
-// are acted upon. Rejects contradictory flag combinations (ATIM together with
+// are honored. Rejects contradictory flag combinations (ATIM together with
 // ATIM_NOW, or MTIM together with MTIM_NOW) with EINVAL. Resolves paths with
 // resolveWritable (including ENOTCAPABLE when a directory preopen path
 // lexically escapes the mount). When LOOKUPFLAGS_SYMLINK_FOLLOW is set in

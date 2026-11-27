@@ -80,7 +80,7 @@ func mapOSError(err error) int32 {
 
 // errnoFromWasi maps internal/wasi.Errno (sys.File, FSContext) to WASI
 // snapshot-preview1 errno values returned to the guest. Used by fd_read,
-// fd_write, fd_seek, and other methods that call fe.File after FSContext migration.
+// fd_write, fd_seek and other methods that call fe.File.
 func errnoFromWasi(errno wasi.Errno) int32 {
 	if errno == 0 {
 		return wasiESuccess

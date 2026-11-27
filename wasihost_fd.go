@@ -237,7 +237,7 @@ func readdirResumeBufUsed(bufUsed, bufLen uint32, wrotePartial bool) uint32 {
 }
 
 // mountRelParentVpath is the mount-relative VFS path for the parent of rel
-// (e.g. ".." at a preopen root, or path.Dir(rel) for nested directories).
+// For example, ".." at a preopen root, or path.Dir(rel) for nested directories.
 func mountRelParentVpath(rel string) string {
 	if rel == "" || rel == "." {
 		return ".."

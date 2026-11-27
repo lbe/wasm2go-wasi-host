@@ -46,14 +46,14 @@ func (mockFile) Utimens(atim, mtim int64) Errno               { return 0 }
 func (mockFile) Close() Errno                                 { return 0 }
 
 // Compile-time interface satisfaction checks.
-// These ensure FS and File interfaces exist with the correct method sets.
+// They fail to compile if FS or File lacks a method.
 var _ FS = mockFS{}
 var _ File = mockFile{}
 
 // TestFSInterfaceCompilesAndMethodsExist verifies the FS interface is
 // defined with all required methods and is satisfied by mockFS.
 func TestFSInterfaceCompilesAndMethodsExist(t *testing.T) {
-	// Use the interface to ensure it's fully populated.
+	// Call every interface method.
 	var fsVar FS = mockFS{}
 
 	// Exercises every FS method; if any are missing this won't compile.

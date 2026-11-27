@@ -41,9 +41,9 @@ type wasiTestsuiteJSON struct {
 // suiteGuestEnv holds extra guest environment variables per suite.
 //
 // The Rust suite reads ERRNO_MODE_* to choose which platform's errno it
-// asserts; with none set it accepts any listed platform's errno, which hides
-// wrong translations. This host reports Linux errnos on every Unix host
-// (including macOS), so the suite runs in strict Unix mode. Only the Rust
+// asserts. With none set it accepts any listed platform's errno, which hides
+// wrong translations. This host reports Linux errnos on every OS, Windows
+// included, so the suite runs in strict Unix mode. Only the Rust
 // suite reads these variables; the AssemblyScript environ tests count
 // variables, so the others get none.
 var suiteGuestEnv = map[string]map[string]string{
@@ -57,7 +57,7 @@ var (
 
 // runWasiTestsuiteCases builds wasm2go-run and executes each case as a
 // sub-test. Every case runs the wasm binary named <name>.wasm from the
-// wasi-testsuite testsuite identified by suiteDir (e.g. "rust" or "c")
+// wasi-testsuite testsuite identified by suiteDir, for example "rust" or "c"
 // against the JSON root directory preopened at guest "/" when the suite
 // config names one.
 func runWasiTestsuiteCases(t *testing.T, suiteDir string, cases []wasiTestsuiteCase) {

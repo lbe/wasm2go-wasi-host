@@ -28,7 +28,7 @@ func TestDanglingSymlinkPathOpenNoFollow(t *testing.T) {
 	s, buf := newTestState(nil)
 	hostDir := setupWritableMount(t, s, buf)
 
-	// Create a dangling symlink "symlink" -> "target" (target does not exist).
+	// Create a dangling symlink "symlink" that points to "target", which does not exist.
 	copy(buf[targetOff:], "target")
 	copy(buf[symlinkOff:], "symlink")
 	errno := s.Xpath_symlink(targetOff, 6, dirfd, symlinkOff, 7)
@@ -102,7 +102,7 @@ func TestPathSymlinkCreateAndFollowOpen(t *testing.T) {
 		targetFd := binary.LittleEndian.Uint32(buf[fdPtr : fdPtr+4])
 		s.Xfd_close(int32(targetFd))
 
-		// Create a relative symlink "symlink" -> "target".
+		// Create a relative symlink "symlink" pointing to "target".
 		copy(buf[targetOff:], "target")
 		copy(buf[symlinkOff:], "symlink")
 		errno = s.Xpath_symlink(targetOff, 6, dirfd, symlinkOff, 7)
@@ -162,7 +162,7 @@ func TestPathSymlinkCreateAndFollowOpen(t *testing.T) {
 			t.Fatalf("Xpath_create_directory(target) = %d, want ESUCCESS", errno)
 		}
 
-		// Create a relative symlink "symlink" -> "target".
+		// Create a relative symlink "symlink" pointing to "target".
 		copy(buf[targetOff:], "target")
 		copy(buf[symlinkOff:], "symlink")
 		errno = s.Xpath_symlink(targetOff, 6, dirfd, symlinkOff, 7)
@@ -272,7 +272,7 @@ func TestPathFilestatSymlinkFollowSemantics(t *testing.T) {
 	fd := binary.LittleEndian.Uint32(buf[fdPtr : fdPtr+4])
 	s.Xfd_close(int32(fd))
 
-	// Create symlink "symlink" -> "file".
+	// Create symlink "symlink" pointing to "file".
 	target := "file"
 	copy(buf[fileOff:], target)
 	copy(buf[symlinkOff:], "symlink")
@@ -536,7 +536,7 @@ func TestPathUnlinkFileTrailingSlashSemantics(t *testing.T) {
 		t.Fatalf("directory was removed unexpectedly: %v", err)
 	}
 
-	// Clean up the directory properly.
+	// Remove the directory.
 	copy(buf[pathOff:], "dir")
 	if rmErrno := s.Xpath_remove_directory(dirfd, pathOff, 3); rmErrno != wasiESuccess {
 		t.Fatalf("Xpath_remove_directory(dir) = %d, want ESUCCESS", rmErrno)
@@ -897,8 +897,8 @@ func TestPathFilestatGetWithoutSymlinkFollowReflectsSymlinkInodeNotEscapedTarget
 func TestPathCreateDirectoryRejectsSymlinkEscapePrefix(t *testing.T) {
 	// A path mutation through an in-root symlink that escapes the preopen must not
 	// create directories outside hostRoot. path_create_directory on "leak/evildir"
-	// when leak -> ../secret.txt must return ENOTCAPABLE or ENOENT; the outside
-	// tree must remain untouched.
+	// when leak points to ../secret.txt must return ENOTCAPABLE or ENOENT. The
+	// outside tree must remain untouched.
 
 	tmpDir := t.TempDir()
 	root := filepath.Join(tmpDir, "root")
@@ -951,7 +951,7 @@ func TestPathCreateDirectoryRejectsSymlinkEscapePrefix(t *testing.T) {
 
 func TestPathFilestatSetTimesRejectsSymlinkEscapeFollow(t *testing.T) {
 	// path_filestat_set_times with LOOKUP_SYMLINK_FOLLOW on a single-segment escape
-	// symlink must not touch the outside target. leak -> ../secret.txt must return
+	// symlink must not touch the outside target. With leak pointing to ../secret.txt, it must return
 	// ENOTCAPABLE or ENOENT; outside file content and mtimes stay unchanged.
 
 	tmpDir := t.TempDir()
@@ -1088,7 +1088,7 @@ func assertAcceptableSymlinkConfinementErr(t *testing.T, op, guestPath string, e
 }
 
 func TestPathMutationsRejectSymlinkEscapePrefix(t *testing.T) {
-	// Multi-segment guest paths through an in-root escape symlink (leak -> ../secret.txt)
+	// Multi-segment guest paths through an in-root escape symlink, leak pointing to ../secret.txt,
 	// must not mutate the host tree outside the preopen root.
 
 	guestPaths := []struct {

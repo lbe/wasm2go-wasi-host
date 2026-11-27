@@ -15,7 +15,7 @@ func TestQualityGate(t *testing.T) {
 		t.Skipf("skipping quality gate: working tree not clean\n%s", out)
 	}
 
-	// Cleanup artifacts to ensure idempotency and clean state.
+	// Remove artifacts so each run starts from a clean tree.
 	artifacts := []string{
 		".pytest_cache",
 		"wasi-testsuite/.pytest_cache",
@@ -42,14 +42,13 @@ func TestQualityGate(t *testing.T) {
 	cleanup()
 	t.Cleanup(cleanup)
 
-	// go test -tags=e2e ./... is intentionally verified by the outer test invocation;
-	// running it recursively inside this test would recursively invoke this
-	// quality gate.
+	// The outer test invocation runs go test -tags=e2e ./... itself. Running it
+	// inside this test would call this quality gate again.
 
 	// 1. Check git status is clean before running quality commands.
 	assertCleanGitStatus("before quality checks")
 
-	// 2. Ensure formatting is correct.
+	// 2. Check formatting.
 	cmd := exec.Command("gofmt", "-l", ".")
 	out, err := cmd.CombinedOutput()
 	if err != nil {
@@ -59,13 +58,13 @@ func TestQualityGate(t *testing.T) {
 		t.Errorf("Files not formatted:\n%s", string(out))
 	}
 
-	// 3. Ensure wasm2go-run builds.
+	// 3. Build wasm2go-run.
 	buildCmd := exec.Command("go", "build", "-o", "./bin/wasm2go-run", "./cmd/wasm2go-run")
 	if out, err := buildCmd.CombinedOutput(); err != nil {
 		t.Fatalf("Failed to build wasm2go-run: %v\nOutput: %s", err, string(out))
 	}
 
-	// 4. Ensure generated artifacts are removed and the tree is clean after cleanup.
+	// 4. Check that cleanup removed the generated artifacts and left the tree clean.
 	cleanup()
 	assertCleanGitStatus("after cleanup")
 }

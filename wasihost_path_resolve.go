@@ -12,7 +12,8 @@ import (
 	"github.com/lbe/wasm2go-wasi-host/internal/wasi/sysfs"
 )
 
-// PreopenEntry is one guest preopened directory (wasi.FS + guest path prefix).
+// PreopenEntry is one guest preopened directory: a wasi.FS and its guest path
+// prefix.
 type PreopenEntry struct {
 	fsys      wasi.FS
 	guestPath string
@@ -371,7 +372,7 @@ func (s *State) preopenEntryByFD(fd int32) (*wasi.FileEntry, bool) {
 // guestPathNeedsSymlinkTraversal reports whether the path argument passed to the
 // WASI syscall (not the mount-relative path after dirfd resolution) has more than
 // one segment. Nested directory fds lengthen mountRel for single-component guest
-// paths (for example "symlink" -> "scratch/symlink"); confinement must follow the
+// paths, for example from "symlink" to "scratch/symlink". Confinement must follow the
 // guest segment count so mutations that address the final component directly
 // (path_link on a symlink inode) do not run EvalSymlinks on symlink loops.
 func guestPathNeedsSymlinkTraversal(guestPath, mountRel string) bool {
@@ -384,8 +385,8 @@ func guestPathNeedsSymlinkTraversal(guestPath, mountRel string) bool {
 // joinWritableHostPathForLookup joins hostRoot with a mount-relative path for a
 // host directory preopen. When symlink following is not requested, it Lstats the
 // host path and returns ELOOP if the final component is a symlink (matching
-// O_NOFOLLOW-style behavior); other Lstat errors are ignored so the caller can
-// surface them. When symlink following is requested, it evaluates symlinks and
+// O_NOFOLLOW behavior). It ignores other Lstat errors so the caller can
+// report them. When symlink following is requested, it evaluates symlinks and
 // returns ENOTCAPABLE if resolution would escape hostRoot.
 func joinWritableHostPathForLookup(hostRoot, relPath string, lookupFlags int32) (hostPath string, errno int32) {
 	hostPath = filepath.Join(hostRoot, filepath.FromSlash(relPath))
@@ -421,8 +422,8 @@ func writableHostPathNeedsSymlinkTraversal(rel string) bool {
 	return strings.Contains(clean, "/")
 }
 
-// TODO(post-merge): inherent TOCTOU — symlink target may change between this
-// EvalSymlinks confinement check and a later open. Hardening needs per-component
+// TODO(post-merge): this check has a TOCTOU race. A symlink target can change
+// between this EvalSymlinks confinement check and a later open. Hardening needs per-component
 // openat(O_NOFOLLOW) or equivalent; path replay alone cannot close the race.
 //
 // writableHostSymlinkFollowConfinementErrno checks that resolving hostPath with
@@ -494,8 +495,8 @@ func resolvedPathConfinementErrno(resolvedPath, root string) int32 {
 // Absolute guest paths bypass dirfd and are resolved via resolvePath.
 // For relative paths, preopen fds resolve directly against their preopen.
 // Non-preopen directory fds join the relative path against the absolute
-// guest path stored in the fd entry, enabling correct nested path_open
-// resolution during directory recursion.
+// guest path stored in the fd entry, so nested path_open calls resolve
+// correctly during directory recursion.
 // Non-directory fds (including regular files) yield a nil preopen.
 func (s *State) resolveDirfdPath(dirfd, pathPtr, pathLen int32) (*PreopenEntry, string) {
 	pathBytes := s.readBytes(pathPtr, pathLen)
@@ -661,7 +662,7 @@ func wasiStatIsSymlink(st wasi.Stat_t) bool {
 }
 
 // vfsHostPath maps a VFS mutation path to an absolute host path for platform
-// syscalls that are not exposed on wasi.FS (e.g. linkat on symlink inodes).
+// syscalls that wasi.FS does not expose, such as linkat on symlink inodes.
 func vfsHostPath(p *PreopenEntry, guestPath, vpath string) string {
 	if isRootPreopen(p) && strings.HasPrefix(guestPath, "/") {
 		return vpath

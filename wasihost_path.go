@@ -186,8 +186,8 @@ func (s *State) validateLinkParams(oldPath, newPath string, oldFlags, newPathPtr
 		return wasiENoEnt
 	}
 
-	// Check for self-link (oldPath == newPath). This is a simple check that catches
-	// obvious self-reference before we do more expensive operations.
+	// Reject a self-link, where oldPath equals newPath, before the more
+	// expensive checks.
 	if oldPath == newPath {
 		return wasiEExist
 	}
@@ -242,7 +242,8 @@ func (s *State) vfsPathExists(p *PreopenEntry, vpath string) bool {
 }
 
 // vfsPathIsDir checks if a path exists and is a directory via preopen.fsys.Stat
-// (follows symlinks, per spec directories should not be hard linked even if they are symlinks).
+// It follows symlinks, because the spec forbids hard links to directories,
+// including through a symlink.
 func (s *State) vfsPathIsDir(p *PreopenEntry, vpath string) bool {
 	st, werrno := p.fsys.Stat(vpath)
 	if werrno != 0 {
@@ -291,7 +292,8 @@ func (s *State) hasDirectoryContents(p *PreopenEntry, rel, vpath, guestPath stri
 	return len(entries) > 0
 }
 
-// renameAcrossMounts renames via wasi.FS when both paths share a mount, else os rename.
+// renameAcrossMounts renames through wasi.FS when both paths are on one mount,
+// and through renamePath otherwise.
 func renameAcrossMounts(oldP, newP *PreopenEntry, oldGuest, newGuest, oldVpath, newVpath string) int32 {
 	if oldP.fsys == newP.fsys {
 		return errnoFromWasi(oldP.fsys.Rename(oldVpath, newVpath))

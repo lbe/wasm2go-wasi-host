@@ -23,7 +23,7 @@ func TestGenerateMain(t *testing.T) {
 			t.Fatalf("generateMain failed: %v", err)
 		}
 
-		// Ensure generated code is valid Go syntax
+		// The generated code must be valid Go.
 		fset := token.NewFileSet()
 		_, err = parser.ParseFile(fset, "main.go", got, 0)
 		if err != nil {
@@ -59,7 +59,7 @@ func TestGenerateMain(t *testing.T) {
 			}
 		}
 
-		// Verify no WithEnvRaw remains — all env must use WithEnv(key, value)
+		// No WithEnvRaw may remain. Every environment entry must use WithEnv(key, value).
 		if strings.Contains(got, "WithEnvRaw") {
 			t.Error("generated code still uses WithEnvRaw; expected WithEnv(key, value) builder only")
 		}

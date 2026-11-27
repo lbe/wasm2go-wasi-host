@@ -12,9 +12,8 @@ func (s *State) readBytes(ptr, length int32) []byte {
 }
 
 // pathHasTrailingSlash reports whether the guest path at (ptr, len) ends
-// with '/'. This checks the raw guest bytes before any host resolution so
-// that trailing-slash semantics are preserved exactly as the guest expressed
-// them.
+// with '/'. It checks the raw guest bytes before any host resolution, so
+// the trailing slash the guest wrote is not lost.
 func (s *State) pathHasTrailingSlash(ptr, length int32) bool {
 	b := s.readBytes(ptr, length)
 	return len(b) > 0 && b[len(b)-1] == '/'
@@ -51,6 +50,6 @@ func writeStringTable(mem []byte, ptrBase, bufBase int32, items []string) {
 // Xfd_pread implements fd_pread. Reads from fd at the given offset
 // without updating the fd's WASI-level offset (entry.offset). Requires
 // the underlying file to implement ReadAt; if it does not, no bytes are
-// read and ENOTSUP is returned. Returns EINVAL for fds 0-2 (positioned
-// reads on stdio are not defined by WASI). Returns EISDIR for directory
+// read and ENOTSUP is returned. Returns EINVAL for fds 0 to 2, because WASI
+// does not define positioned reads on stdio. Returns EISDIR for directory
 // fds, ENOTCAPABLE when FD_READ is not set in the fd's rights_base.

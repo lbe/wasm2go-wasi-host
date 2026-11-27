@@ -1099,8 +1099,8 @@ func TestWasiIOAndPathOpenRejectRightsBeyondFdAndParent(t *testing.T) {
 
 // TestPathOpenClampsRightsAbsentFromPreopenInheriting verifies path_open clamps
 // requested rights to the preopen's inheriting superset (path_open_preopen.rs
-// directory_inheriting_rights). Bits inside the superset (e.g. FD_DATASYNC) are
-// retained; bits outside it (e.g. SOCK_SHUTDOWN) are stripped.
+// directory_inheriting_rights). Bits inside the superset, such as FD_DATASYNC, are
+// kept. Bits outside it, such as SOCK_SHUTDOWN, are removed.
 func TestPathOpenClampsRightsAbsentFromPreopenInheriting(t *testing.T) {
 	t.Parallel()
 
@@ -1320,7 +1320,7 @@ func TestHostDirectoryPreopenConfinement(t *testing.T) {
 		path := "../secret.txt"
 		copy(buf[pathPtr:], path)
 
-		// fd 3 is the preopen for /data -> root
+		// fd 3 is the preopen for /data, backed by root.
 		errno := s.Xpath_open(3, 0, pathPtr, int32(len(path)), 0, int64(rightsRegular), 0, 0, fdPtr)
 
 		if errno != wasiENotCap {

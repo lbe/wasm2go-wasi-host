@@ -2,5 +2,5 @@
 
 package main
 
-// exeSuffix is the executable file extension on non-Windows platforms (none).
+// exeSuffix is the executable file extension outside Windows, which is empty.
 const exeSuffix = ""

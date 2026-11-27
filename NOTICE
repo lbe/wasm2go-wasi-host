@@ -7,7 +7,7 @@ license terms.
 ---
 
 wazero
-Copyright 2020-2023 The wazero Authors
+Copyright 2020-2023 wazero authors
 
 Portions of this repository are adapted from wazero:
   https://github.com/tetratelabs/wazero

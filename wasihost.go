@@ -2,16 +2,19 @@
 // produced by [wasm2go]. It implements all 40 WASI Preview1 imports plus
 // the env.call_host_function stub used by some wasm2go modules.
 //
-// Filesystem access is capability-oriented: guests see only preopened
-// directories, either read-only [fs.FS] mounts or writable host directories
-// (one backend per preopen; use separate preopens for embedded plus host data).
-// See ARCHITECTURE.md for the source layout and syscall flow.
+// The guest sees only preopened directories. Each preopen is a read-only
+// [fs.FS] mount or a writable host directory, with one backend. To give a
+// guest both embedded and host data, use separate preopens. See
+// ARCHITECTURE.md for the source layout and syscall flow.
+//
+// The package runs on Linux, macOS, Windows and FreeBSD. README.md lists the
+// limitations on each OS.
 //
 // # Usage
 //
 // Construct a [State] with [New], passing a callback that returns the guest's
-// linear memory slice. The callback is re-invoked on every syscall so memory
-// growth is handled transparently:
+// linear memory slice. The host calls it on every syscall, so it sees memory
+// after the guest grows it:
 //
 //	cfg := wasihost.NewModuleConfig().
 //	    WithArgs("app").
@@ -188,8 +191,7 @@ func (s *State) assertSingleOwner() {
 
 // currentGID returns the numeric ID of the calling goroutine by parsing
 // the output of runtime.Stack. There is no public Go API for goroutine IDs;
-// this approach is intentionally fragile by design - it is only used for
-// debugging assertions, not for correctness logic.
+// this approach is fragile. Only debugging assertions use it.
 func currentGID() uint64 {
 	var b [64]byte
 	n := runtime.Stack(b[:], false)

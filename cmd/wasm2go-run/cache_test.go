@@ -868,7 +868,7 @@ func TestConcurrentCachePutBuildSingleWriterSafeReaders(t *testing.T) {
 
 	meta := currentBuildCacheMeta(wasmPath)
 
-	// Use a barrier to ensure both goroutines enter cachePutBuild simultaneously.
+	// A barrier makes both goroutines enter cachePutBuild at the same time.
 	start := make(chan struct{})
 	const workers = 2
 	var wg sync.WaitGroup
@@ -932,8 +932,8 @@ func TestFailedBuildDoesNotPolluteTier2Cache(t *testing.T) {
 	}
 
 	// Install a fake go that fails only on "build" subcommand but delegates
-	// "mod tidy" to the real go. This ensures buildCompileBinary gets past
-	// tidy but fails at the actual build step.
+	// "mod tidy" to the real go. buildCompileBinary then gets past tidy and
+	// fails at the build step.
 	fakeGoDir := t.TempDir()
 	realGo, err := exec.LookPath("go")
 	if err != nil {

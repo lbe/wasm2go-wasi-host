@@ -379,7 +379,7 @@ func TestPollOneoffClock(t *testing.T) {
 			t.Errorf("event userdata = 0x%x, want 0x%x", outUserdata, userdata0)
 		}
 
-		// CRITICAL CHECK: Verify that the function actually slept for at least the minimum timeout
+		// Verify that the call slept for at least the minimum timeout.
 		minTimeout := 1 * time.Millisecond
 		if elapsed < minTimeout {
 			t.Errorf("Xpoll_oneoff returned too early: elapsed = %v, want at least %v", elapsed, minTimeout)
@@ -786,8 +786,8 @@ func TestPollOneoffFdReadConsultsPollableBeforeEmitting(t *testing.T) {
 
 func TestPollOneoffFdReadStdin(t *testing.T) {
 	// Acceptance criteria:
-	// - fd_read on fd=0 alone — nevents==1, errno SUCCESS, type FD_READ, userdata preserved.
-	// - Clock 1ns + fd_read fd=0 — nevents==2, one FD_READ and one CLOCK with respective userdata.
+	// - fd_read on fd 0 alone: nevents==1, errno SUCCESS, type FD_READ, userdata preserved.
+	// - A 1 ns clock plus fd_read on fd 0: nevents==2, one FD_READ and one CLOCK, each with its userdata.
 	// - go test -run TestPollOneoffFdReadStdin -count=1 should pass.
 
 	const (

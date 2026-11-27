@@ -12,7 +12,7 @@ import (
 const fakeFailGoScript = "#!/bin/sh\necho 'fake go should not be called' >&2\nexit 1\n"
 
 // skipWithoutPOSIXShell skips the test on Windows, where the tests that
-// exec "/usr/bin/..." binaries or fake *.sh scripts cannot run.
+// run binaries under /usr/bin or fake *.sh scripts cannot work.
 func skipWithoutPOSIXShell(t *testing.T) {
 	t.Helper()
 	if runtime.GOOS == "windows" {

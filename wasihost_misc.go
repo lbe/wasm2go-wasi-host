@@ -190,7 +190,7 @@ func (s *State) Xargs_get(argvPtr, argvBufPtr int32) int32 {
 //	Output Event (32 bytes):
 //	  - 0:   userdata (uint64)
 //	  - 8:   error (uint16)
-//	  - 10:  event_type (uint8) - stored as single byte per WASI spec
+//	  - 10:  event_type (uint8), one byte per the WASI spec
 //	  - 11:  padding (uint8)
 //	  - 12:  event-specific data:
 //	    * For clock: timeout (uint64)
@@ -199,13 +199,14 @@ func (s *State) Xargs_get(argvPtr, argvBufPtr int32) int32 {
 //	  - 16:  padding (uint64 for clock events to fill 32 bytes)
 //	  - 24:  padding (uint64)
 //
-// Note: The event_type is stored as a uint8 at offset +10, not as a uint32
-// at offset +12. This is a common pitfall and was a source of bugs.
+// The event_type is a uint8 at offset +10, not a uint32 at offset +12.
+// Getting this wrong caused bugs here before.
 //
 // Clock subscriptions sleep for the shortest requested timeout. fd_read and
-// fd_write subscriptions call Poll on PollableFile or Pollable fds (zero
-// timeout); when Poll reports not ready, no event is emitted. Other fds emit
-// immediately if open. fd_write suppresses positive clock timeouts when emitted.
+// fd_write subscriptions call Poll with a zero timeout on PollableFile or
+// Pollable fds. When Poll reports not ready, no event is emitted. Other open
+// fds emit an event at once. When an fd_write event is emitted, clocks with a
+// positive timeout are skipped.
 func (s *State) Xpoll_oneoff(inPtr int32, outPtr int32, nsubscriptions int32, neventsPtr int32) int32 {
 	const (
 		subOffsetUserdata = 0
@@ -224,7 +225,7 @@ func (s *State) Xpoll_oneoff(inPtr int32, outPtr int32, nsubscriptions int32, ne
 	s.assertSingleOwner()
 	mem := s.mem()
 
-	// ---- Pass 1: emit all ready fd_read / fd_write events immediately (no sleep) ----
+	// Pass 1: emit every ready fd_read and fd_write event without sleeping.
 	// Also collect clock subscription data for a second pass.
 
 	eventCount := 0
@@ -275,13 +276,14 @@ func (s *State) Xpoll_oneoff(inPtr int32, outPtr int32, nsubscriptions int32, ne
 		}
 	}
 
-	// ---- Pass 2: handle clock subscriptions ----
-	// Rule: if FD_WRITE was emitted, skip clocks with timeout > 0 (guest drains writable in a loop;
-	// clock fires on a later poll_oneoff). FD_READ does NOT suppress clocks.
+	// Pass 2: handle clock subscriptions.
+	// If an FD_WRITE event was emitted, skip clocks with a timeout above 0. The
+	// guest writes in a loop, and the clock fires on a later poll_oneoff.
+	// FD_READ events do not suppress clocks.
 
 	if fdWriteEmitted {
 		// Emit only clocks with timeout == 0 (poll without blocking).
-		// Skip clocks with timeout > 0 — they will fire on a later call.
+		// Skip clocks with a timeout above 0. They fire on a later call.
 		for _, cs := range clockSubs {
 			if cs.timeout == 0 {
 				writePollOneoffEvent(mem, currentOutPtr, cs.userdata, 0, uint8(evtTypeClock), int32(cs.timeout))
@@ -298,7 +300,8 @@ func (s *State) Xpoll_oneoff(inPtr int32, outPtr int32, nsubscriptions int32, ne
 			}
 		}
 		// Emit clocks whose timeout equals minClockTimeout.
-		// (If minClockTimeout == 0 or < 0, no sleep is needed; 0-timeout clocks are always ready.)
+		// When minClockTimeout is 0 or less, no sleep is needed. Clocks with a
+		// 0 timeout are always ready.
 		for _, cs := range clockSubs {
 			if minClockTimeout >= 0 && cs.timeout == minClockTimeout {
 				writePollOneoffEvent(mem, currentOutPtr, cs.userdata, 0, uint8(evtTypeClock), int32(cs.timeout))
@@ -308,7 +311,7 @@ func (s *State) Xpoll_oneoff(inPtr int32, outPtr int32, nsubscriptions int32, ne
 		}
 	}
 
-	// Write the number of events that actually fired.
+	// Write the number of events that fired.
 	binary.LittleEndian.PutUint32(mem[neventsPtr:], uint32(eventCount))
 	return wasiESuccess
 }
@@ -370,7 +373,7 @@ func writePollOneoffEvent(mem []byte, evtOffset int32, userdata uint64, errno ui
 		binary.LittleEndian.PutUint16(mem[evtOffset+evtOffsetEventData:], uint16(fdOrTimeout))
 		binary.LittleEndian.PutUint16(mem[evtOffset+evtOffsetPadding2:], 0)
 	}
-	// Zero out the remaining bytes (from +24 to +32)
+	// Zero bytes +24 to +32.
 	binary.LittleEndian.PutUint64(mem[evtOffset+evtOffsetPadding3:], 0)
 }
 
@@ -379,8 +382,8 @@ func writePollOneoffEvent(mem []byte, evtOffset int32, userdata uint64, errno ui
 // does not support guest-initiated host callbacks; it always returns 0.
 func (s *State) Xcall_host_function(v0, v1, v2 int32) int32 { return 0 }
 
-// Xsched_yield implements sched_yield. This host is synchronous;
-// yielding calls ctx.Osyield (default runtime.Gosched) and returns ESUCCESS.
+// Xsched_yield implements sched_yield. This host is synchronous. It calls
+// ctx.Osyield, which defaults to runtime.Gosched, and returns ESUCCESS.
 func (s *State) Xsched_yield() int32 {
 	if s.ctx == nil {
 		return wasiESuccess
@@ -390,13 +393,13 @@ func (s *State) Xsched_yield() int32 {
 }
 
 // Xproc_raise implements proc_raise. Always returns ENOSYS. Raising a
-// signal inside a WASM guest has no meaningful host mapping.
+// signal inside a WASM guest has no host equivalent.
 func (s *State) Xproc_raise(signal int32) int32 { return wasiENoSys }
 
 // Xsock_accept, Xsock_recv, Xsock_send, and Xsock_shutdown implement the
-// WASI socket functions. Sockets are not supported in this host: accept,
-// recv, and send return ENOSYS; shutdown returns EBADF for invalid/unused
-// fds and ENOTSOCK for valid non-socket fds.
+// WASI socket functions. This host does not support sockets. accept, recv
+// and send return ENOSYS. shutdown returns EBADF for an fd that is not open
+// and ENOTSOCK for any open fd.
 func (s *State) Xsock_accept(fd, flags, resultPtr int32) int32 { return wasiENoSys }
 
 func (s *State) Xsock_recv(fd, iovsPtr, iovsLen, riFlags, nreadPtr, roFlagsPtr int32) int32 {

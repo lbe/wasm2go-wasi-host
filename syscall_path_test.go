@@ -76,7 +76,7 @@ func assertESuccess(t *testing.T, errno int32) {
 }
 
 // setupEscapeSiblingTree creates escape_sibling under the preopen with
-// dir/nested/file — the host target reachable via nestedDirfdEscapePath.
+// dir/nested/file, the host target that nestedDirfdEscapePath reaches.
 func setupEscapeSiblingTree(t *testing.T, s *State, buf []byte, tmpDir string) (escapeFile string) {
 	t.Helper()
 
@@ -98,7 +98,7 @@ func setupEscapeSiblingTree(t *testing.T, s *State, buf []byte, tmpDir string) (
 }
 
 // setupNestedDirfdWithEscapeTarget extends setupNestedDirfd with an escape_sibling
-// tree containing dir/nested/file — the target reachable via nestedDirfdEscapePath.
+// tree containing dir/nested/file, the target that nestedDirfdEscapePath reaches.
 func setupNestedDirfdWithEscapeTarget(t *testing.T) (setup nestedDirfdSetup, escapePath, escapeFile string) {
 	t.Helper()
 
@@ -576,7 +576,7 @@ func TestPathOpenTrailingSlashSemantics(t *testing.T) {
 		t.Fatalf("Xpath_open(nested_fd, %q) = %d; want ENOTDIR (%d) or ENOENT (%d)", trailingSlashFile, errno, wasiENotDir, wasiENoEnt)
 	}
 
-	// Verify the directory was actually opened on the host at the normalized path.
+	// Verify that the host opened the directory at the normalized path.
 	hostDir := filepath.Join(tmpDir, "interesting_paths_dir", "dir", "nested")
 	if _, err := os.Stat(hostDir); err != nil {
 		if os.IsNotExist(err) {
@@ -1152,7 +1152,7 @@ func TestPathRenameSyscall(t *testing.T) {
 			t.Errorf("Target directory does not exist after rename")
 		}
 
-		// Cleanup only if successful (or on non-Windows)
+		// Clean up on Unix, and on Windows when the rename succeeded.
 		if runtime.GOOS != "windows" || errno == wasiESuccess {
 			if err := os.RemoveAll(targetDir); err != nil {
 				t.Fatal(err)
@@ -1189,7 +1189,7 @@ func TestPathRenameSyscall(t *testing.T) {
 		errno := s.Xpath_rename(dirfd, srcOff, srcLen, dirfd, targetOff, targetLen)
 
 		if runtime.GOOS == "windows" {
-			// On Windows, renaming a directory over a non-empty directory should fail with EACCES
+			// On Windows, renaming a directory over a non-empty directory must fail. The errno is not checked.
 			if errno == wasiESuccess {
 				t.Errorf("Xpath_rename on non-empty directory should fail on Windows, got ESUCCESS")
 			}
@@ -1226,7 +1226,7 @@ func TestPathRenameSyscall(t *testing.T) {
 		errno := s.Xpath_rename(dirfd, srcOff, srcLen, dirfd, targetOff, targetLen)
 
 		if runtime.GOOS == "windows" {
-			// On Windows, renaming a file into a directory should fail with EACCES
+			// On Windows, renaming a file over a directory must fail. The errno is not checked.
 			if errno == wasiESuccess {
 				t.Errorf("Xpath_rename(file into dir) should fail on Windows, got ESUCCESS")
 			}
